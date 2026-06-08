@@ -1,0 +1,5 @@
+trading_bot.log
+*.pyc
+__pycache__/
+.env
+.DS_Store
