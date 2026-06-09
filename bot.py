@@ -51,11 +51,21 @@ DAILY_LOSS_LIMIT = -15.0  # stop trading if session P&L drops below this ($)
 
 rh_user = os.environ.get("ROBINHOOD_USER", "")
 rh_pass = os.environ.get("ROBINHOOD_PASS", "")
+rh_session_b64 = os.environ.get("ROBINHOOD_SESSION", "")
+
 if not rh_user or not rh_pass:
     log.error("ROBINHOOD_USER and ROBINHOOD_PASS environment variables must be set. Exiting.")
     sys.exit(1)
 
-# Authenticate once at startup; robin_stocks caches the token in /tmp/.tokens
+# If a pre-saved session is provided, write it to disk so robin_stocks reuses it (no MFA)
+if rh_session_b64:
+    import base64, pathlib
+    token_dir = pathlib.Path.home() / ".tokens"
+    token_dir.mkdir(exist_ok=True)
+    token_path = token_dir / "robinhood.pickle"
+    token_path.write_bytes(base64.b64decode(rh_session_b64))
+    log.info("Loaded Robinhood session from ROBINHOOD_SESSION env var.")
+
 try:
     rh.login(username=rh_user, password=rh_pass,
              store_session=True, mfa_code=os.environ.get("ROBINHOOD_MFA", ""))
@@ -468,12 +478,6 @@ def scan_all() -> None:
 
 
 def main() -> None:
-    # ── FORCE TEST TRADE (remove after confirming) ──
-    log.info("=== FORCE TEST: placing NVDL BUY $125 ===")
-    result = place_trade("NVDL", "BUY", 0.0, "force-test")
-    log.info("=== FORCE TEST result: %s ===", result)
-    # ─────────────────────────────────────────────────
-
     log.info("Multi-stock trading bot starting up")
     log.info("Fixed stocks: %s  |  trending pick fetched daily  |  $%d per stock  |  scan every %dmin",
              FIXED_STOCKS, PER_STOCK, SCAN_MINUTES)
