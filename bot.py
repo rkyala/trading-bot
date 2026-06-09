@@ -8,7 +8,7 @@ Railway deployment — reads ANTHROPIC_API_KEY from environment variable.
 Logs stream directly to Railway's log console.
 """
 
-import robin_stocks.robinhood as rh
+import anthropic
 import yfinance as yf
 import requests
 import schedule
@@ -49,30 +49,16 @@ SCAN_MINUTES    = 5
 ORB_MINUTES     = 15   # opening range window (first N minutes after open)
 DAILY_LOSS_LIMIT = -15.0  # stop trading if session P&L drops below this ($)
 
-rh_user = os.environ.get("ROBINHOOD_USER", "")
-rh_pass = os.environ.get("ROBINHOOD_PASS", "")
-rh_session_b64 = os.environ.get("ROBINHOOD_SESSION", "")
-
-if not rh_user or not rh_pass:
-    log.error("ROBINHOOD_USER and ROBINHOOD_PASS environment variables must be set. Exiting.")
+api_key = os.environ.get("ANTHROPIC_API_KEY")
+if not api_key:
+    log.error("ANTHROPIC_API_KEY environment variable not set. Exiting.")
     sys.exit(1)
 
-# If a pre-saved session is provided, write it to disk so robin_stocks reuses it (no MFA)
-if rh_session_b64:
-    import base64, pathlib
-    token_dir = pathlib.Path.home() / ".tokens"
-    token_dir.mkdir(exist_ok=True)
-    token_path = token_dir / "robinhood.pickle"
-    token_path.write_bytes(base64.b64decode(rh_session_b64))
-    log.info("Loaded Robinhood session from ROBINHOOD_SESSION env var.")
+rh_token = os.environ.get("ROBINHOOD_TOKEN", "")
+if not rh_token:
+    log.warning("ROBINHOOD_TOKEN not set — trades will fail auth with Robinhood MCP.")
 
-try:
-    rh.login(username=rh_user, password=rh_pass,
-             store_session=True, mfa_code=os.environ.get("ROBINHOOD_MFA", ""))
-    log.info("Robinhood login successful.")
-except Exception as _rh_err:
-    log.error("Robinhood login failed: %s", _rh_err)
-    sys.exit(1)
+client = anthropic.Anthropic(api_key=api_key)
 
 def _empty_state():
     return {"buy_at": None, "trades": 0, "pnl": 0.0}
@@ -245,27 +231,36 @@ def calc_bollinger(prices: list, period: int = 20, std_dev: float = 2.0):
 
 
 def place_trade(symbol: str, side: str, price: float, reason: str) -> bool:
-    log.info("%s: placing %s $%d via robin_stocks...", symbol, side, PER_STOCK)
+    log.info("%s: requesting %s $%d via Claude + Robinhood MCP...", symbol, side, PER_STOCK)
     try:
-        if side.upper() == "BUY":
-            result = rh.orders.order_buy_fractional_by_price(
-                symbol,
-                amountInDollars=PER_STOCK,
-                account_number=ACCT,
-                timeInForce="gfd",
-                extendedHours=False,
-            )
-        else:
-            result = rh.orders.order_sell_fractional_by_price(
-                symbol,
-                amountInDollars=PER_STOCK,
-                account_number=ACCT,
-                timeInForce="gfd",
-                extendedHours=False,
-            )
-        order_id = result.get("id", "unknown") if result else "no-result"
-        log.info("%s %s order placed — id=%s  reason=%s", symbol, side, order_id, reason)
-        return bool(result and result.get("id"))
+        resp = client.beta.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            betas=["mcp-client-2025-04-04"],
+            mcp_servers=[
+                {
+                    "type": "url",
+                    "url":  "https://agent.robinhood.com/mcp/trading",
+                    "name": "Rh",
+                    "authorization_token": rh_token,
+                }
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Place a market {side} order for {symbol} on Robinhood account "
+                        f"{ACCT} for ${PER_STOCK} USD. "
+                        f"First call review_equity_order to preview, then place_equity_order "
+                        f"to execute. Signal reason: {reason}. "
+                        f"Reply with the order ID and filled price."
+                    ),
+                }
+            ],
+        )
+        reply = " ".join(b.text for b in resp.content if hasattr(b, "text"))
+        log.info("%s %s response: %s", symbol, side, reply[:200])
+        return True
     except Exception as exc:
         log.error("%s: trade error — %s", symbol, exc)
         return False

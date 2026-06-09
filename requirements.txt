@@ -1,4 +1,4 @@
-robin_stocks
+anthropic>=0.40.0
 yfinance
 schedule
 pytz
