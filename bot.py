@@ -28,15 +28,20 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-FIXED_STOCKS  = ["SOXL", "MUU"]   # always traded
+FIXED_STOCKS  = ["SOXL", "MUU", "NDX"]  # always traded
 TOTAL_BUDGET  = 500
-ACCT_STOCKS   = 3                  # total slots (fixed + 1 trending)
+ACCT_STOCKS   = 4                        # total slots (fixed + 1 trending)
 PER_STOCK     = TOTAL_BUDGET // ACCT_STOCKS
 ACCT          = "432591949"
 ET            = ZoneInfo("America/New_York")
 
+# NDX uses ^NDX on Yahoo Finance for price data, but "NDX" for order placement
+NDX_YF_TICKER = "^NDX"
+# Stocks that use RSI-only signal logic (no MACD/VWAP/ORB)
+RSI_ONLY_STOCKS = {"NDX"}
+
 # Excluded from trending pick (already in fixed list or unsuitable)
-TRENDING_EXCLUDE = set(FIXED_STOCKS) | {"MUU"}
+TRENDING_EXCLUDE = set(FIXED_STOCKS) | {"MUU", "NDX"}
 
 RSI_BUY         = 30
 RSI_SELL        = 70
@@ -138,7 +143,8 @@ def calc_vwap(prices: list, volumes: list) -> float:
 
 def fetch_market_data(symbol: str) -> "dict | None":
     try:
-        ticker = yf.Ticker(symbol)
+        yf_symbol = NDX_YF_TICKER if symbol == "NDX" else symbol
+        ticker = yf.Ticker(yf_symbol)
 
         # Daily data for RSI/MACD/EMA (needs 30+ bars)
         daily = ticker.history(period="60d", interval="1d")
@@ -237,100 +243,125 @@ def scan_symbol(symbol: str) -> None:
     today_bars  = data["today_bars"]
 
     rsi  = calc_rsi(prices)
-    macd = calc_macd(prices)
-    vwap = calc_vwap(prices, volumes)
-    e9   = calc_ema(prices, 9)
-    e20  = calc_ema(prices, 20)
+    st   = state[symbol]
+    buy_at  = st["buy_at"]
+    reasons = []
+    signal  = "HOLD"
 
-    # ── Opening Range Breakout ──────────────────────────────────────────
-    st       = state[symbol]
-    today    = datetime.now(ET).date()
-    orb_high = st["orb_high"]
-    orb_low  = st["orb_low"]
+    if symbol in RSI_ONLY_STOCKS:
+        # ── RSI-only strategy (NDX) ──────────────────────────────────────
+        log.info("%s  $%.2f  RSI=%.1f  [RSI-only mode]", symbol, price, rsi)
 
-    if st["orb_date"] != today:
-        orb_high, orb_low = calc_orb(symbol, today_bars)
-        st["orb_high"] = orb_high
-        st["orb_low"]  = orb_low
-        st["orb_date"] = today
-        if orb_high and orb_low:
-            log.info("%s  ORB set for today: high=$%.2f  low=$%.2f", symbol, orb_high, orb_low)
+        if rsi < RSI_BUY:
+            reasons.append(f"RSI {rsi:.1f} oversold")
+            if not buy_at:
+                signal = "BUY"
+        elif rsi > RSI_SELL:
+            reasons.append(f"RSI {rsi:.1f} overbought")
+            if buy_at:
+                signal = "SELL"
+        else:
+            reasons.append(f"RSI {rsi:.1f} neutral")
 
-    orb_breakout_up   = orb_high and price > orb_high
-    orb_breakout_down = orb_low  and price < orb_low
+        # Still honour stop-loss / take-profit for open NDX positions
+        if buy_at:
+            chg_pct = (price - buy_at) / buy_at * 100
+            if chg_pct <= -STOP_LOSS:
+                signal = "SELL"
+                reasons.append(f"stop-loss {chg_pct:.1f}%")
+            elif chg_pct >= TAKE_PROFIT:
+                signal = "SELL"
+                reasons.append(f"take-profit +{chg_pct:.1f}%")
 
-    log.info(
-        "%s  $%.2f  RSI=%.1f  MACD=%+.3f  VWAP=$%.2f  EMA9=$%.2f  EMA20=$%.2f  "
-        "vol=%.1fx  ORB=[%.2f/%.2f]  brk=%s",
-        symbol, price, rsi, macd, vwap, e9, e20, vol_ratio,
-        orb_high or 0, orb_low or 0,
-        "UP" if orb_breakout_up else ("DN" if orb_breakout_down else "-"),
-    )
-
-    buy_at    = st["buy_at"]
-    reasons   = []
-    buy_score = sell_score = 0
-
-    # ── RSI ─────────────────────────────────────────────────────────────
-    if rsi < RSI_BUY:
-        buy_score += 1
-        reasons.append(f"RSI {rsi:.1f} oversold")
-    elif rsi > RSI_SELL:
-        sell_score += 1
-        reasons.append(f"RSI {rsi:.1f} overbought")
     else:
-        reasons.append(f"RSI {rsi:.1f}")
+        # ── Full strategy (SOXL, MUU, trending) ─────────────────────────
+        macd = calc_macd(prices)
+        vwap = calc_vwap(prices, volumes)
+        e9   = calc_ema(prices, 9)
+        e20  = calc_ema(prices, 20)
 
-    # ── MACD ─────────────────────────────────────────────────────────────
-    if macd > 0:
-        buy_score += 1
-        reasons.append("MACD bullish")
-    else:
-        sell_score += 1
-        reasons.append("MACD bearish")
+        # ── Opening Range Breakout ─────────────────────────────────────
+        today    = datetime.now(ET).date()
+        orb_high = st["orb_high"]
+        orb_low  = st["orb_low"]
 
-    # ── VWAP ─────────────────────────────────────────────────────────────
-    if price > vwap:
-        buy_score += 1
-        reasons.append("above VWAP")
-    else:
-        sell_score += 1
-        reasons.append("below VWAP")
+        if st["orb_date"] != today:
+            orb_high, orb_low = calc_orb(symbol, today_bars)
+            st["orb_high"] = orb_high
+            st["orb_low"]  = orb_low
+            st["orb_date"] = today
+            if orb_high and orb_low:
+                log.info("%s  ORB set for today: high=$%.2f  low=$%.2f", symbol, orb_high, orb_low)
 
-    # ── Volume ───────────────────────────────────────────────────────────
-    if vol_ratio >= 2:
-        buy_score += 1
-        reasons.append(f"vol {vol_ratio:.1f}x")
+        orb_breakout_up   = orb_high and price > orb_high
+        orb_breakout_down = orb_low  and price < orb_low
 
-    # ── Opening Range Breakout ───────────────────────────────────────────
-    # ORB breakout counts as a strong buy/sell signal (weight 2)
-    if orb_breakout_up and vol_ratio >= 1.5:
-        buy_score += 2
-        reasons.append(f"ORB breakout above ${orb_high:.2f}")
-    elif orb_breakout_down and vol_ratio >= 1.5:
-        sell_score += 2
-        reasons.append(f"ORB breakdown below ${orb_low:.2f}")
+        log.info(
+            "%s  $%.2f  RSI=%.1f  MACD=%+.3f  VWAP=$%.2f  EMA9=$%.2f  EMA20=$%.2f  "
+            "vol=%.1fx  ORB=[%.2f/%.2f]  brk=%s",
+            symbol, price, rsi, macd, vwap, e9, e20, vol_ratio,
+            orb_high or 0, orb_low or 0,
+            "UP" if orb_breakout_up else ("DN" if orb_breakout_down else "-"),
+        )
 
-    # ── Stop-loss / Take-profit ──────────────────────────────────────────
-    if buy_at:
-        chg_pct = (price - buy_at) / buy_at * 100
-        if chg_pct <= -STOP_LOSS:
-            sell_score += 3
-            reasons.append(f"stop-loss {chg_pct:.1f}%")
-        elif chg_pct >= TAKE_PROFIT:
-            sell_score += 3
-            reasons.append(f"take-profit +{chg_pct:.1f}%")
+        buy_score = sell_score = 0
 
-    # ── Signal logic ─────────────────────────────────────────────────────
-    # ORB-driven entry: breakout up with volume confirmation is sufficient alone
-    orb_buy_signal  = orb_breakout_up  and vol_ratio >= 1.5
-    orb_sell_signal = orb_breakout_down and vol_ratio >= 1.5
+        # RSI
+        if rsi < RSI_BUY:
+            buy_score += 1
+            reasons.append(f"RSI {rsi:.1f} oversold")
+        elif rsi > RSI_SELL:
+            sell_score += 1
+            reasons.append(f"RSI {rsi:.1f} overbought")
+        else:
+            reasons.append(f"RSI {rsi:.1f}")
 
-    signal = "HOLD"
-    if (buy_score >= 3 and rsi < RSI_BUY) or (orb_buy_signal and buy_score >= 2):
-        signal = "BUY"
-    elif (sell_score >= 2 and (rsi > RSI_SELL or buy_at)) or (orb_sell_signal and buy_at):
-        signal = "SELL"
+        # MACD
+        if macd > 0:
+            buy_score += 1
+            reasons.append("MACD bullish")
+        else:
+            sell_score += 1
+            reasons.append("MACD bearish")
+
+        # VWAP
+        if price > vwap:
+            buy_score += 1
+            reasons.append("above VWAP")
+        else:
+            sell_score += 1
+            reasons.append("below VWAP")
+
+        # Volume
+        if vol_ratio >= 2:
+            buy_score += 1
+            reasons.append(f"vol {vol_ratio:.1f}x")
+
+        # ORB (weight 2)
+        if orb_breakout_up and vol_ratio >= 1.5:
+            buy_score += 2
+            reasons.append(f"ORB breakout above ${orb_high:.2f}")
+        elif orb_breakout_down and vol_ratio >= 1.5:
+            sell_score += 2
+            reasons.append(f"ORB breakdown below ${orb_low:.2f}")
+
+        # Stop-loss / Take-profit
+        if buy_at:
+            chg_pct = (price - buy_at) / buy_at * 100
+            if chg_pct <= -STOP_LOSS:
+                sell_score += 3
+                reasons.append(f"stop-loss {chg_pct:.1f}%")
+            elif chg_pct >= TAKE_PROFIT:
+                sell_score += 3
+                reasons.append(f"take-profit +{chg_pct:.1f}%")
+
+        orb_buy_signal  = orb_breakout_up  and vol_ratio >= 1.5
+        orb_sell_signal = orb_breakout_down and vol_ratio >= 1.5
+
+        if (buy_score >= 3 and rsi < RSI_BUY) or (orb_buy_signal and buy_score >= 2):
+            signal = "BUY"
+        elif (sell_score >= 2 and (rsi > RSI_SELL or buy_at)) or (orb_sell_signal and buy_at):
+            signal = "SELL"
 
     log.info("%s → %s  (%s)", symbol, signal, ", ".join(reasons))
 
