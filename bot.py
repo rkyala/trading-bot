@@ -251,6 +251,7 @@ def place_trade(symbol: str, side: str, price: float, reason: str) -> bool:
             result = rh.orders.order_buy_fractional_by_price(
                 symbol,
                 amountInDollars=PER_STOCK,
+                account_number=ACCT,
                 timeInForce="gfd",
                 extendedHours=False,
             )
@@ -258,6 +259,7 @@ def place_trade(symbol: str, side: str, price: float, reason: str) -> bool:
             result = rh.orders.order_sell_fractional_by_price(
                 symbol,
                 amountInDollars=PER_STOCK,
+                account_number=ACCT,
                 timeInForce="gfd",
                 extendedHours=False,
             )
