@@ -117,7 +117,7 @@ def calc_vwap(prices: list, volumes: list) -> float:
     return round(tpv / tv, 4)
 
 
-def fetch_market_data(symbol: str) -> dict | None:
+def fetch_market_data(symbol: str) -> "dict | None":
     try:
         ticker = yf.Ticker(symbol)
 
@@ -153,7 +153,7 @@ def fetch_market_data(symbol: str) -> dict | None:
         return None
 
 
-def calc_orb(symbol: str, today_bars) -> tuple[float | None, float | None]:
+def calc_orb(symbol: str, today_bars) -> "tuple[float | None, float | None]":
     """Return (orb_high, orb_low) from first ORB_MINUTES of today's session."""
     if today_bars is None or today_bars.empty:
         return None, None
@@ -340,7 +340,7 @@ def scan_symbol(symbol: str) -> None:
                 )
 
 
-_last_scan_date: datetime.date | None = None
+_last_scan_date = None  # type: datetime.date | None
 
 def scan_all() -> None:
     global session_trades, session_pnl, trading_halted, _last_scan_date
