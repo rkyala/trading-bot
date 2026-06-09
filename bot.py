@@ -54,6 +54,10 @@ if not api_key:
     log.error("ANTHROPIC_API_KEY environment variable not set. Exiting.")
     sys.exit(1)
 
+rh_token = os.environ.get("ROBINHOOD_TOKEN", "")
+if not rh_token:
+    log.warning("ROBINHOOD_TOKEN not set — trades will fail auth with Robinhood MCP.")
+
 client = anthropic.Anthropic(api_key=api_key)
 
 def _empty_state():
@@ -238,6 +242,7 @@ def place_trade(symbol: str, side: str, price: float, reason: str) -> bool:
                     "type": "url",
                     "url":  "https://agent.robinhood.com/mcp/trading",
                     "name": "Rh",
+                    "authorization_token": rh_token,
                 }
             ],
             messages=[
