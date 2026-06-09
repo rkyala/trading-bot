@@ -468,6 +468,12 @@ def scan_all() -> None:
 
 
 def main() -> None:
+    # ── FORCE TEST TRADE (remove after confirming) ──
+    log.info("=== FORCE TEST: placing NVDL BUY $125 ===")
+    result = place_trade("NVDL", "BUY", 0.0, "force-test")
+    log.info("=== FORCE TEST result: %s ===", result)
+    # ─────────────────────────────────────────────────
+
     log.info("Multi-stock trading bot starting up")
     log.info("Fixed stocks: %s  |  trending pick fetched daily  |  $%d per stock  |  scan every %dmin",
              FIXED_STOCKS, PER_STOCK, SCAN_MINUTES)
