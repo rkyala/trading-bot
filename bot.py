@@ -41,8 +41,8 @@ RSI_ONLY_STOCKS = {"SPXL"}
 # Excluded from trending pick (already in fixed list or unsuitable)
 TRENDING_EXCLUDE = set(FIXED_STOCKS) | {"MUU"}
 
-RSI_BUY         = 30
-RSI_SELL        = 70
+RSI_BUY         = 35    # more reachable on 5-min intraday data
+RSI_SELL        = 65    # more reachable on 5-min intraday data
 STOP_LOSS       = 3.0
 TAKE_PROFIT     = 5.0
 SCAN_MINUTES    = 5
@@ -142,33 +142,45 @@ def calc_vwap(prices: list, volumes: list) -> float:
 def fetch_market_data(symbol: str) -> "dict | None":
     try:
         ticker = yf.Ticker(symbol)
+        info   = ticker.fast_info
 
-        # Daily data for RSI/MACD/EMA (needs 30+ bars)
-        daily = ticker.history(period="60d", interval="1d")
-        if daily.empty or len(daily) < 30:
-            log.warning("%s: insufficient daily history", symbol)
+        # ── Intraday 5-min bars (primary data source for all signals) ──
+        intraday = ticker.history(period="5d", interval="5m")
+        if intraday.empty or len(intraday) < 15:
+            log.warning("%s: insufficient intraday data", symbol)
             return None
-        prices  = daily["Close"].tolist()
-        volumes = daily["Volume"].tolist()
-        info    = ticker.fast_info
+        intraday.index = intraday.index.tz_convert(ET)
+        today          = datetime.now(ET).date()
+        today_bars     = intraday[intraday.index.date == today]
 
-        # Intraday 5-min data for ORB and current price
-        intraday = ticker.history(period="2d", interval="5m")
-        today    = datetime.now(ET).date()
-        if not intraday.empty:
-            intraday.index = intraday.index.tz_convert(ET)
-            today_bars = intraday[intraday.index.date == today]
+        # Use last 78 5-min bars (~1 full session) for RSI/MACD/EMA
+        prices  = intraday["Close"].tolist()[-100:]
+        volumes = intraday["Volume"].tolist()[-100:]
+
+        # Current price = latest 5-min close
+        price = round(prices[-1], 4)
+
+        # Intraday VWAP = today only (resets each day)
+        if not today_bars.empty:
+            tp  = ((today_bars["High"] + today_bars["Low"] + today_bars["Close"]) / 3)
+            vwap_today = round((tp * today_bars["Volume"]).sum() / today_bars["Volume"].sum(), 4)
         else:
-            today_bars = intraday  # empty fallback
+            vwap_today = price
+
+        # Volume ratio: today's total vs avg daily volume
+        today_vol  = int(today_bars["Volume"].sum()) if not today_bars.empty else 0
+        avg_vol    = info.three_month_average_volume or 1
+        vol_ratio  = today_vol / avg_vol
 
         return {
-            "price":       round(prices[-1], 4),
-            "prev_close":  round(prices[-2], 4),
-            "prices_30d":  prices[-30:],
-            "volumes":     volumes[-30:],
-            "volume":      volumes[-1],
-            "avg_volume":  info.three_month_average_volume or 1,
-            "today_bars":  today_bars,  # 5-min bars for today
+            "price":       price,
+            "prices":      prices,   # 5-min closes for RSI/MACD/EMA
+            "volumes":     volumes,
+            "volume":      today_vol,
+            "avg_volume":  avg_vol,
+            "vol_ratio":   vol_ratio,
+            "vwap":        vwap_today,
+            "today_bars":  today_bars,
         }
     except Exception as exc:
         log.error("%s: fetch error — %s", symbol, exc)
@@ -233,13 +245,13 @@ def scan_symbol(symbol: str) -> None:
     if not data:
         return
 
-    prices      = data["prices_30d"]
+    prices      = data["prices"]
     volumes     = data["volumes"]
     price       = data["price"]
-    vol_ratio   = data["volume"] / (data["avg_volume"] or 1)
+    vol_ratio   = data["vol_ratio"]
     today_bars  = data["today_bars"]
 
-    rsi  = calc_rsi(prices)
+    rsi  = calc_rsi(prices, period=14)
     st   = state[symbol]
     buy_at  = st["buy_at"]
     reasons = []
@@ -249,14 +261,12 @@ def scan_symbol(symbol: str) -> None:
         # ── RSI-only strategy (NDX) ──────────────────────────────────────
         log.info("%s  $%.2f  RSI=%.1f  [RSI-only mode]", symbol, price, rsi)
 
-        if rsi < RSI_BUY:
-            reasons.append(f"RSI {rsi:.1f} oversold")
-            if not buy_at:
-                signal = "BUY"
-        elif rsi > RSI_SELL:
-            reasons.append(f"RSI {rsi:.1f} overbought")
-            if buy_at:
-                signal = "SELL"
+        if rsi < RSI_BUY and not buy_at:
+            reasons.append(f"RSI {rsi:.1f} oversold — BUY")
+            signal = "BUY"
+        elif rsi > RSI_SELL and buy_at:
+            reasons.append(f"RSI {rsi:.1f} overbought — SELL")
+            signal = "SELL"
         else:
             reasons.append(f"RSI {rsi:.1f} neutral")
 
@@ -273,7 +283,7 @@ def scan_symbol(symbol: str) -> None:
     else:
         # ── Full strategy (SOXL, MUU, trending) ─────────────────────────
         macd = calc_macd(prices)
-        vwap = calc_vwap(prices, volumes)
+        vwap = data["vwap"]          # true intraday VWAP (resets daily)
         e9   = calc_ema(prices, 9)
         e20  = calc_ema(prices, 20)
 
@@ -355,9 +365,11 @@ def scan_symbol(symbol: str) -> None:
         orb_buy_signal  = orb_breakout_up  and vol_ratio >= 1.5
         orb_sell_signal = orb_breakout_down and vol_ratio >= 1.5
 
-        if (buy_score >= 3 and rsi < RSI_BUY) or (orb_buy_signal and buy_score >= 2):
+        # BUY: RSI oversold + 1 more confirm, OR ORB breakout alone with volume
+        # SELL: RSI overbought OR 2 bearish signals with open position, OR ORB breakdown
+        if (rsi < RSI_BUY and buy_score >= 2) or (orb_buy_signal and buy_score >= 1):
             signal = "BUY"
-        elif (sell_score >= 2 and (rsi > RSI_SELL or buy_at)) or (orb_sell_signal and buy_at):
+        elif (rsi > RSI_SELL and buy_at) or (sell_score >= 2 and buy_at) or (orb_sell_signal and buy_at):
             signal = "SELL"
 
     log.info("%s → %s  (%s)", symbol, signal, ", ".join(reasons))
