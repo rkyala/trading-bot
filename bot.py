@@ -57,8 +57,7 @@ if not api_key:
 client = anthropic.Anthropic(api_key=api_key)
 
 def _empty_state():
-    return {"buy_at": None, "trades": 0, "pnl": 0.0,
-            "orb_high": None, "orb_low": None, "orb_date": None}
+    return {"buy_at": None, "trades": 0, "pnl": 0.0}
 
 state          = {sym: _empty_state() for sym in FIXED_STOCKS}
 STOCKS         = list(FIXED_STOCKS)   # will be extended with trending pick
@@ -216,16 +215,15 @@ def fetch_market_data(symbol: str) -> "dict | None":
         return None
 
 
-def calc_orb(symbol: str, today_bars) -> "tuple[float | None, float | None]":
-    """Return (orb_high, orb_low) from first ORB_MINUTES of today's session."""
-    if today_bars is None or today_bars.empty:
-        return None, None
-    market_open = datetime.now(ET).replace(hour=9, minute=30, second=0, microsecond=0)
-    orb_end     = market_open + timedelta(minutes=ORB_MINUTES)
-    orb_bars    = today_bars[today_bars.index <= orb_end]
-    if orb_bars.empty:
-        return None, None
-    return round(orb_bars["High"].max(), 4), round(orb_bars["Low"].min(), 4)
+def calc_bollinger(prices: list, period: int = 20, std_dev: float = 2.0):
+    """Return (upper, middle, lower) Bollinger Bands."""
+    if len(prices) < period:
+        return None, None, None
+    import statistics
+    window = prices[-period:]
+    mid    = sum(window) / period
+    sd     = statistics.stdev(window)
+    return round(mid + std_dev * sd, 4), round(mid, 4), round(mid - std_dev * sd, 4)
 
 
 def place_trade(symbol: str, side: str, price: float, reason: str) -> bool:
@@ -310,39 +308,72 @@ def scan_symbol(symbol: str) -> None:
                 reasons.append(f"take-profit +{chg_pct:.1f}%")
 
     else:
-        # ── Full strategy (SOXL, MUU, trending) ─────────────────────────
-        macd = calc_macd(prices)
-        vwap = data["vwap"]          # true intraday VWAP (resets daily)
-        e9   = calc_ema(prices, 9)
-        e20  = calc_ema(prices, 20)
+        # ── Full strategy: EMA Cross + VWAP Bounce + Bollinger ──────────
+        vwap  = data["vwap"]
+        e9    = calc_ema(prices, 9)
+        e21   = calc_ema(prices, 21)
+        macd  = calc_macd(prices)
+        bb_up, bb_mid, bb_lo = calc_bollinger(prices, period=20)
 
-        # ── Opening Range Breakout ─────────────────────────────────────
-        today    = datetime.now(ET).date()
-        orb_high = st["orb_high"]
-        orb_low  = st["orb_low"]
+        # Previous bar EMAs to detect crossover
+        e9_prev  = calc_ema(prices[:-1], 9)  if len(prices) > 1 else e9
+        e21_prev = calc_ema(prices[:-1], 21) if len(prices) > 1 else e21
 
-        if st["orb_date"] != today:
-            orb_high, orb_low = calc_orb(symbol, today_bars)
-            st["orb_high"] = orb_high
-            st["orb_low"]  = orb_low
-            st["orb_date"] = today
-            if orb_high and orb_low:
-                log.info("%s  ORB set for today: high=$%.2f  low=$%.2f", symbol, orb_high, orb_low)
-
-        orb_breakout_up   = orb_high and price > orb_high
-        orb_breakout_down = orb_low  and price < orb_low
+        ema_cross_up   = e9_prev <= e21_prev and e9 > e21   # 9 crossed above 21
+        ema_cross_down = e9_prev >= e21_prev and e9 < e21   # 9 crossed below 21
+        above_vwap     = price > vwap
+        near_vwap      = bb_lo and abs(price - vwap) / vwap < 0.005  # within 0.5% of VWAP
+        bb_squeeze_up  = bb_up  and price > bb_up   # breakout above upper band
+        bb_squeeze_dn  = bb_lo  and price < bb_lo   # breakdown below lower band
 
         log.info(
-            "%s  $%.2f  RSI=%.1f  MACD=%+.3f  VWAP=$%.2f  EMA9=$%.2f  EMA20=$%.2f  "
-            "vol=%.1fx  ORB=[%.2f/%.2f]  brk=%s",
-            symbol, price, rsi, macd, vwap, e9, e20, vol_ratio,
-            orb_high or 0, orb_low or 0,
-            "UP" if orb_breakout_up else ("DN" if orb_breakout_down else "-"),
+            "%s  $%.2f  RSI=%.1f  MACD=%+.4f  VWAP=$%.2f  "
+            "EMA9=$%.2f  EMA21=$%.2f  BB=[%.2f/%.2f]  vol=%.2fx  "
+            "cross=%s  vwap=%s  bb=%s",
+            symbol, price, rsi, macd, vwap, e9, e21,
+            bb_up or 0, bb_lo or 0, vol_ratio,
+            "↑" if ema_cross_up else ("↓" if ema_cross_down else "-"),
+            "above" if above_vwap else "below",
+            "breakout" if bb_squeeze_up else ("breakdown" if bb_squeeze_dn else "-"),
         )
 
         buy_score = sell_score = 0
 
-        # RSI
+        # ── Strategy 1: EMA 9/21 Crossover ─────────────────────────────
+        if ema_cross_up:
+            buy_score += 2
+            reasons.append("EMA9 crossed above EMA21")
+        elif ema_cross_down:
+            sell_score += 2
+            reasons.append("EMA9 crossed below EMA21")
+        elif e9 > e21:
+            buy_score += 1
+            reasons.append(f"EMA9 > EMA21 (uptrend)")
+        else:
+            sell_score += 1
+            reasons.append(f"EMA9 < EMA21 (downtrend)")
+
+        # ── Strategy 2: VWAP Bounce ─────────────────────────────────────
+        # Buy when price is at/near VWAP and trending up (RSI recovering)
+        if above_vwap and near_vwap and rsi > 45:
+            buy_score += 2
+            reasons.append("VWAP bounce (price near+above VWAP)")
+        elif above_vwap:
+            buy_score += 1
+            reasons.append("above VWAP")
+        else:
+            sell_score += 1
+            reasons.append("below VWAP")
+
+        # ── Strategy 3: Bollinger Band Breakout ─────────────────────────
+        if bb_squeeze_up and vol_ratio >= 0.3:
+            buy_score += 2
+            reasons.append(f"BB breakout above ${bb_up:.2f}")
+        elif bb_squeeze_dn and vol_ratio >= 0.3:
+            sell_score += 2
+            reasons.append(f"BB breakdown below ${bb_lo:.2f}")
+
+        # ── RSI confirmation ─────────────────────────────────────────────
         if rsi < RSI_BUY:
             buy_score += 1
             reasons.append(f"RSI {rsi:.1f} oversold")
@@ -352,7 +383,7 @@ def scan_symbol(symbol: str) -> None:
         else:
             reasons.append(f"RSI {rsi:.1f}")
 
-        # MACD
+        # ── MACD confirmation ────────────────────────────────────────────
         if macd > 0:
             buy_score += 1
             reasons.append("MACD bullish")
@@ -360,28 +391,7 @@ def scan_symbol(symbol: str) -> None:
             sell_score += 1
             reasons.append("MACD bearish")
 
-        # VWAP
-        if price > vwap:
-            buy_score += 1
-            reasons.append("above VWAP")
-        else:
-            sell_score += 1
-            reasons.append("below VWAP")
-
-        # Volume
-        if vol_ratio >= 2:
-            buy_score += 1
-            reasons.append(f"vol {vol_ratio:.1f}x")
-
-        # ORB (weight 2)
-        if orb_breakout_up and vol_ratio >= 1.5:
-            buy_score += 2
-            reasons.append(f"ORB breakout above ${orb_high:.2f}")
-        elif orb_breakout_down and vol_ratio >= 1.5:
-            sell_score += 2
-            reasons.append(f"ORB breakdown below ${orb_low:.2f}")
-
-        # Stop-loss / Take-profit
+        # ── Stop-loss / Take-profit ──────────────────────────────────────
         if buy_at:
             chg_pct = (price - buy_at) / buy_at * 100
             if chg_pct <= -STOP_LOSS:
@@ -391,14 +401,10 @@ def scan_symbol(symbol: str) -> None:
                 sell_score += 3
                 reasons.append(f"take-profit +{chg_pct:.1f}%")
 
-        orb_buy_signal  = orb_breakout_up  and vol_ratio >= 1.5
-        orb_sell_signal = orb_breakout_down and vol_ratio >= 1.5
-
-        # BUY: RSI oversold + 1 more confirm, OR ORB breakout alone with volume
-        # SELL: RSI overbought OR 2 bearish signals with open position, OR ORB breakdown
-        if (rsi < RSI_BUY and buy_score >= 2) or (orb_buy_signal and buy_score >= 1):
+        # ── Signal: need score >= 3 to trade ────────────────────────────
+        if buy_score >= 3 and not buy_at:
             signal = "BUY"
-        elif (rsi > RSI_SELL and buy_at) or (sell_score >= 2 and buy_at) or (orb_sell_signal and buy_at):
+        elif sell_score >= 3 and buy_at:
             signal = "SELL"
 
     log.info("%s → %s  (%s)", symbol, signal, ", ".join(reasons))
