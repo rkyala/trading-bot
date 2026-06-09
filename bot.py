@@ -340,7 +340,7 @@ def scan_symbol(symbol: str) -> None:
                 )
 
 
-_last_scan_date = None  # type: datetime.date | None
+_last_scan_date = None
 
 def scan_all() -> None:
     global session_trades, session_pnl, trading_halted, _last_scan_date
