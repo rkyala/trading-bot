@@ -1,6 +1,6 @@
 """
 Multi-stock RSI + MACD + VWAP + Opening Range Breakout Trading Bot
-Stocks: META, MUU, TSLA
+Stocks: SOXL, MUU, + daily trending pick
 Account: Robinhood Agentic ••••1949
 Budget: $500 split equally (~$166 per stock)
 
@@ -10,6 +10,7 @@ Logs stream directly to Railway's log console.
 
 import anthropic
 import yfinance as yf
+import requests
 import schedule
 import time
 import logging
@@ -27,11 +28,15 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-STOCKS        = ["META", "MUU", "TSLA"]
+FIXED_STOCKS  = ["SOXL", "MUU"]   # always traded
 TOTAL_BUDGET  = 500
-PER_STOCK     = TOTAL_BUDGET // len(STOCKS)
+ACCT_STOCKS   = 3                  # total slots (fixed + 1 trending)
+PER_STOCK     = TOTAL_BUDGET // ACCT_STOCKS
 ACCT          = "432591949"
 ET            = ZoneInfo("America/New_York")
+
+# Excluded from trending pick (already in fixed list or unsuitable)
+TRENDING_EXCLUDE = set(FIXED_STOCKS) | {"MUU"}
 
 RSI_BUY         = 30
 RSI_SELL        = 70
@@ -48,20 +53,34 @@ if not api_key:
 
 client = anthropic.Anthropic(api_key=api_key)
 
-state = {
-    sym: {
-        "buy_at":    None,
-        "trades":    0,
-        "pnl":       0.0,
-        "orb_high":  None,  # opening range high
-        "orb_low":   None,  # opening range low
-        "orb_date":  None,  # date ORB was calculated for
-    }
-    for sym in STOCKS
-}
-session_trades   = 0
-session_pnl      = 0.0
-trading_halted   = False  # set True when daily loss limit hit
+def _empty_state():
+    return {"buy_at": None, "trades": 0, "pnl": 0.0,
+            "orb_high": None, "orb_low": None, "orb_date": None}
+
+state          = {sym: _empty_state() for sym in FIXED_STOCKS}
+STOCKS         = list(FIXED_STOCKS)   # will be extended with trending pick
+session_trades = 0
+session_pnl    = 0.0
+trading_halted = False  # set True when daily loss limit hit
+
+
+def fetch_trending_stock() -> str:
+    """Return the top US trending ticker from Yahoo Finance, excluding fixed stocks."""
+    try:
+        url  = "https://query1.finance.yahoo.com/v1/finance/trending/US"
+        resp = requests.get(url, timeout=10,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        quotes = resp.json()["finance"]["result"][0]["quotes"]
+        for q in quotes:
+            sym = q.get("symbol", "").upper()
+            # Skip non-equity symbols (^INDEX, BTC-USD, etc.) and excluded list
+            if sym and sym not in TRENDING_EXCLUDE and sym.isalpha():
+                log.info("Trending pick: %s", sym)
+                return sym
+    except Exception as exc:
+        log.warning("Could not fetch trending stock: %s", exc)
+    return "NVDA"   # safe fallback
 
 
 def is_market_hours() -> bool:
@@ -343,7 +362,7 @@ def scan_symbol(symbol: str) -> None:
 _last_scan_date = None
 
 def scan_all() -> None:
-    global session_trades, session_pnl, trading_halted, _last_scan_date
+    global session_trades, session_pnl, trading_halted, _last_scan_date, STOCKS, state
 
     if not is_market_hours():
         now = datetime.now(ET).strftime("%H:%M ET")
@@ -352,12 +371,20 @@ def scan_all() -> None:
 
     today = datetime.now(ET).date()
     if _last_scan_date != today:
-        # New trading day — reset session state
+        # New trading day — reset session state and refresh trending pick
         session_trades = 0
         session_pnl    = 0.0
         trading_halted = False
         _last_scan_date = today
-        log.info("New trading day %s — session state reset.", today)
+
+        trending = fetch_trending_stock()
+        STOCKS = list(FIXED_STOCKS) + [trending]
+        # Add state entry for trending pick if not already present
+        for sym in STOCKS:
+            if sym not in state:
+                state[sym] = _empty_state()
+
+        log.info("New trading day %s — stocks: %s", today, STOCKS)
 
     now = datetime.now(ET).strftime("%H:%M ET")
     log.info("══════ scan at %s ══════", now)
@@ -368,7 +395,8 @@ def scan_all() -> None:
 
 def main() -> None:
     log.info("Multi-stock trading bot starting up")
-    log.info("Stocks: %s  |  $%d per stock  |  scan every %dmin", STOCKS, PER_STOCK, SCAN_MINUTES)
+    log.info("Fixed stocks: %s  |  trending pick fetched daily  |  $%d per stock  |  scan every %dmin",
+             FIXED_STOCKS, PER_STOCK, SCAN_MINUTES)
     log.info("Market hours: 9:45-15:45 ET Mon-Fri")
 
     schedule.every(SCAN_MINUTES).minutes.do(scan_all)
