@@ -67,23 +67,87 @@ session_pnl    = 0.0
 trading_halted = False  # set True when daily loss limit hit
 
 
+MIN_MARKET_CAP  = 10_000_000_000   # $10B minimum market cap
+MAX_PE_RATIO    = 150              # skip bubble/loss-making stocks above this P/E
+MIN_PE_RATIO    = 5                # skip stocks with suspiciously low or negative P/E
+MIN_AVG_VOLUME  = 1_000_000        # at least 1M avg daily volume (liquidity)
+MIN_WEEK_CHANGE = 2.0              # must be up at least 2% over past 5 days (sustained trend)
+
+
 def fetch_trending_stock() -> str:
-    """Return the top US trending ticker from Yahoo Finance, excluding fixed stocks."""
+    """
+    Pick the best trending US stock by:
+    1. Pull Yahoo Finance trending list
+    2. Skip indexes, crypto, penny stocks, excluded symbols
+    3. Filter by market cap >= $10B, P/E 5–150, volume >= 1M
+    4. Require >= 2% gain over past 5 days (not just a one-day spike)
+    5. Return highest 5-day momentum among qualifiers
+    """
     try:
-        url  = "https://query1.finance.yahoo.com/v1/finance/trending/US"
-        resp = requests.get(url, timeout=10,
-                            headers={"User-Agent": "Mozilla/5.0"})
+        url    = "https://query1.finance.yahoo.com/v1/finance/trending/US"
+        resp   = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
         quotes = resp.json()["finance"]["result"][0]["quotes"]
+
+        candidates = []
         for q in quotes:
             sym = q.get("symbol", "").upper()
-            # Skip non-equity symbols (^INDEX, BTC-USD, etc.) and excluded list
-            if sym and sym not in TRENDING_EXCLUDE and sym.isalpha():
-                log.info("Trending pick: %s", sym)
-                return sym
+            if not sym or sym in TRENDING_EXCLUDE or not sym.isalpha():
+                continue
+            try:
+                ticker = yf.Ticker(sym)
+                info   = ticker.fast_info
+
+                mkt_cap    = getattr(info, "market_cap", None) or 0
+                pe_ratio   = getattr(info, "pe_ratio", None)
+                avg_vol    = getattr(info, "three_month_average_volume", None) or 0
+
+                # ── Market cap filter ────────────────────────────────
+                if mkt_cap < MIN_MARKET_CAP:
+                    log.info("  %s skipped: market cap $%.1fB < $10B", sym, mkt_cap / 1e9)
+                    continue
+
+                # ── P/E ratio filter ─────────────────────────────────
+                if pe_ratio is None or pe_ratio <= MIN_PE_RATIO or pe_ratio > MAX_PE_RATIO:
+                    log.info("  %s skipped: P/E %.1f out of range %d–%d",
+                             sym, pe_ratio or 0, MIN_PE_RATIO, MAX_PE_RATIO)
+                    continue
+
+                # ── Liquidity filter ─────────────────────────────────
+                if avg_vol < MIN_AVG_VOLUME:
+                    log.info("  %s skipped: avg volume %d < 1M", sym, avg_vol)
+                    continue
+
+                # ── Sustained trend: need 5-day price change >= 2% ──
+                hist = ticker.history(period="6d", interval="1d")
+                if len(hist) < 5:
+                    continue
+                week_chg = (hist["Close"].iloc[-1] - hist["Close"].iloc[-5]) / hist["Close"].iloc[-5] * 100
+                if week_chg < MIN_WEEK_CHANGE:
+                    log.info("  %s skipped: 5-day change %.1f%% < %.1f%%",
+                             sym, week_chg, MIN_WEEK_CHANGE)
+                    continue
+
+                candidates.append((sym, week_chg, pe_ratio, mkt_cap))
+                log.info("  %s qualified: P/E=%.1f  mktcap=$%.1fB  5d=+%.1f%%",
+                         sym, pe_ratio, mkt_cap / 1e9, week_chg)
+
+            except Exception as exc:
+                log.debug("  %s info error: %s", sym, exc)
+                continue
+
+        if candidates:
+            # Pick highest 5-day momentum among qualifiers
+            best = sorted(candidates, key=lambda x: x[1], reverse=True)[0]
+            log.info("Trending pick: %s  (P/E=%.1f  mktcap=$%.1fB  5d=+%.1f%%)",
+                     best[0], best[2], best[3] / 1e9, best[1])
+            return best[0]
+
     except Exception as exc:
         log.warning("Could not fetch trending stock: %s", exc)
-    return "NVDA"   # safe fallback
+
+    log.info("No trending stock passed filters — using fallback NVDA")
+    return "NVDA"
 
 
 def is_market_hours() -> bool:
