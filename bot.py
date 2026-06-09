@@ -1,6 +1,6 @@
 """
 Multi-stock RSI + MACD + VWAP + Opening Range Breakout Trading Bot
-Stocks: SOXL, MUU, + daily trending pick
+Stocks: SOXL, MUU, SPXL + daily trending pick
 Account: Robinhood Agentic ••••1949
 Budget: $500 split equally (~$166 per stock)
 
@@ -28,20 +28,18 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-FIXED_STOCKS  = ["SOXL", "MUU", "NDX"]  # always traded
+FIXED_STOCKS  = ["SOXL", "MUU", "SPXL"]  # always traded
 TOTAL_BUDGET  = 500
-ACCT_STOCKS   = 4                        # total slots (fixed + 1 trending)
+ACCT_STOCKS   = 4                         # total slots (fixed + 1 trending)
 PER_STOCK     = TOTAL_BUDGET // ACCT_STOCKS
 ACCT          = "432591949"
 ET            = ZoneInfo("America/New_York")
 
-# NDX uses ^NDX on Yahoo Finance for price data, but "NDX" for order placement
-NDX_YF_TICKER = "^NDX"
 # Stocks that use RSI-only signal logic (no MACD/VWAP/ORB)
-RSI_ONLY_STOCKS = {"NDX"}
+RSI_ONLY_STOCKS = {"SPXL"}
 
 # Excluded from trending pick (already in fixed list or unsuitable)
-TRENDING_EXCLUDE = set(FIXED_STOCKS) | {"MUU", "NDX"}
+TRENDING_EXCLUDE = set(FIXED_STOCKS) | {"MUU"}
 
 RSI_BUY         = 30
 RSI_SELL        = 70
@@ -143,8 +141,7 @@ def calc_vwap(prices: list, volumes: list) -> float:
 
 def fetch_market_data(symbol: str) -> "dict | None":
     try:
-        yf_symbol = NDX_YF_TICKER if symbol == "NDX" else symbol
-        ticker = yf.Ticker(yf_symbol)
+        ticker = yf.Ticker(symbol)
 
         # Daily data for RSI/MACD/EMA (needs 30+ bars)
         daily = ticker.history(period="60d", interval="1d")
