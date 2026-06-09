@@ -427,13 +427,28 @@ def main() -> None:
              FIXED_STOCKS, PER_STOCK, SCAN_MINUTES)
     log.info("Market hours: 9:45-15:45 ET Mon-Fri")
 
-    schedule.every(SCAN_MINUTES).minutes.do(scan_all)
+    TURBO_MINUTES   = 1    # scan interval during turbo window
+    TURBO_DURATION  = 30   # minutes to run at turbo interval on startup
+
+    turbo_end = datetime.now(ET) + timedelta(minutes=TURBO_DURATION)
+    log.info("⚡ Turbo mode: scanning every %dmin for the next %dmin (until %s ET)",
+             TURBO_MINUTES, TURBO_DURATION, turbo_end.strftime("%H:%M"))
+
+    schedule.every(TURBO_MINUTES).minutes.do(scan_all)
 
     log.info("Running initial scan...")
     scan_all()
 
+    normal_schedule_set = False
     while True:
         schedule.run_pending()
+
+        if not normal_schedule_set and datetime.now(ET) >= turbo_end:
+            schedule.clear()
+            schedule.every(SCAN_MINUTES).minutes.do(scan_all)
+            normal_schedule_set = True
+            log.info("⏱ Turbo window ended — switching to normal %dmin interval", SCAN_MINUTES)
+
         time.sleep(30)
 
 
