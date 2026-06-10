@@ -2,6 +2,11 @@ trading_bot.log
 positions.json
 rh_token.json
 rh_oauth.json
+earnings_cal.json
+earnings_dates.json
+backtest_pead_results.json
+backtest_n100_results.json
+n100_tickers.json
 backtest_results.json
 backtest_v2_results.json
 *.pyc

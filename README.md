@@ -110,6 +110,13 @@ this rule returned +43.2% vs +54.5% for always-momentum — switching is a
 hedge against momentum decaying, not a return enhancer. Set
 `META_SWITCH = False` to pin the strategy to `STRATEGY`.
 
+**PEAD overlay** (`PEAD_ENABLED = True`): when a universe stock gaps up ≥5%
+at the open on its post-earnings reaction day, the bot buys at the morning
+scan and rides a trailing stop (post-earnings announcement drift). Backtested
+in `backtest_pead.py` over 1,168 earnings reactions (3y): +15.7%/yr,
+−11.6% max DD, ~60% of gap-ups kept drifting higher over the next 2 weeks.
+The earnings calendar is cached once per trading day in `DATA_DIR`.
+
 Two strategies:
 
 | Strategy | Entry | Exit |

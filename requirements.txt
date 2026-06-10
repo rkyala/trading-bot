@@ -3,3 +3,4 @@ yfinance
 schedule
 pytz
 requests
+lxml

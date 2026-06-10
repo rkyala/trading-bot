@@ -61,6 +61,12 @@ META_SWITCH     = True
 SWITCH_EVERY    = 2     # trading days between evaluations
 SWITCH_LOOKBACK = 10    # trading days of results to compare
 META_WARMUP     = 90    # trading days of simulation warmup before the window
+
+# PEAD overlay: if a universe stock gaps up >= PEAD_GAP at the open on its
+# post-earnings reaction day, buy and ride a trailing stop (backtest_pead.py:
+# +15.7%/yr, -11.6% max DD, 195 trades over 3y). Shares the same budget.
+PEAD_ENABLED = True
+PEAD_GAP     = 0.05
 STOP_LOSS    = 0.03         # initial stop, fraction below entry
 TRAIL_PCT    = 0.05         # momentum: trail this far below peak since entry
 RSI_BUY      = 30           # meanrev entry threshold
@@ -82,6 +88,7 @@ SYMBOLS = [
     "REGN", "ROP", "ROST", "SBUX", "SHOP", "SNDK", "SNPS", "STX", "TMUS", "TRI",
     "TSLA", "TTWO", "TXN", "VRSK", "VRTX", "WBD", "WDAY", "WDC", "WMT", "XEL",
     "ZS",
+    "ORCL",  # NYSE mega-cap added 2026-06-10 (earnings-reaction coverage)
 ]
 
 DAILY_LOSS_LIMIT_PCT = 3.0  # halt new entries if day P&L < -3% of TOTAL_BUDGET
@@ -249,6 +256,7 @@ def _indicators_from_df(df):
         return None
     prices  = df["Close"].tolist()
     volumes = df["Volume"].tolist()
+    opens   = df["Open"].tolist()
     n       = min(len(prices), len(volumes))
     vwap    = sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1)
     avg_vol = sum(volumes[-10:]) / 10
@@ -258,6 +266,9 @@ def _indicators_from_df(df):
         "macd":         calc_ema(prices, 12) - calc_ema(prices, 26),
         "vwap":         round(vwap, 4),
         "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1.0,
+        "open_gap":     opens[-1] / prices[-2] - 1,   # today's open vs prev close
+        "prev_trading_date": str(df.index[-2].date()),
+        "last_trading_date": str(df.index[-1].date()),
     }
 
 
@@ -295,7 +306,7 @@ def exit_signal(ind, pos):
     """Returns a reason string if the position should be closed, else None.
     Uses the rules of the strategy that opened the position."""
     price = ind["price"]
-    if pos.get("strategy", STRATEGY) == "momentum":
+    if pos.get("strategy", STRATEGY) in ("momentum", "pead"):
         stop = max(pos["entry"] * (1 - STOP_LOSS), pos["peak"] * (1 - TRAIL_PCT))
         if price <= stop:
             return f"trailing stop hit (price {price:.2f} <= stop {stop:.2f})"
@@ -553,6 +564,56 @@ def daily_pnl(state, positions):
     return d["realized"] + unrealized
 
 
+# ── PEAD earnings overlay ─────────────────────────────────────────────────────
+
+EARNINGS_CAL_FILE = os.path.join(DATA_DIR, "earnings_cal.json")
+
+
+def refresh_earnings_calendar(today):
+    """Once per trading day, cache each symbol's recent/upcoming earnings
+    timestamps. Returns {symbol: [timestamp strings]}."""
+    try:
+        with open(EARNINGS_CAL_FILE) as f:
+            saved = json.load(f)
+        if saved.get("date") == today:
+            return saved.get("data", {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    log.info("Refreshing earnings calendar for %d symbols (once per day)...",
+             len(SYMBOLS))
+    data = {}
+    for sym in SYMBOLS:
+        try:
+            ed = yf.Ticker(sym).get_earnings_dates(limit=4)
+            if ed is not None and len(ed):
+                data[sym] = [str(ts) for ts in ed.index]
+        except Exception:
+            continue
+        time.sleep(0.1)
+    log.info("Earnings calendar: %d/%d symbols", len(data), len(SYMBOLS))
+    try:
+        with open(EARNINGS_CAL_FILE, "w") as f:
+            json.dump({"date": today, "data": data}, f)
+    except OSError as exc:
+        log.warning("Could not persist earnings calendar: %s", exc)
+    return data
+
+
+def pead_signal(sym, ind, cal):
+    """True if today is sym's post-earnings reaction day and it gapped up
+    at least PEAD_GAP at the open."""
+    if ind["open_gap"] < PEAD_GAP:
+        return False
+    today, prev = ind["last_trading_date"], ind["prev_trading_date"]
+    for ts in cal.get(sym, []):
+        day  = ts[:10]
+        hour = int(ts[11:13]) if len(ts) >= 13 else 16
+        # AMC report on the previous trading day, or BMO report this morning
+        if (day == prev and hour >= 12) or (day == today and hour < 12):
+            return True
+    return False
+
+
 # ── Strategy meta-switching ───────────────────────────────────────────────────
 
 def evaluate_strategies():
@@ -698,6 +759,47 @@ def run_trading_loop():
     if daily["halted"]:
         log.info("Entries blocked for today (daily loss limit). Day P&L: $%+.2f", pnl_today)
     else:
+        # 3a. PEAD overlay — post-earnings gap-ups take priority (time-sensitive)
+        if PEAD_ENABLED:
+            cal    = refresh_earnings_calendar(today)
+            traded = daily.setdefault("pead_traded", [])
+            for symbol in SYMBOLS:
+                if symbol in positions or symbol in traded:
+                    continue
+                available = TOTAL_BUDGET - budget_used
+                if available < 1:
+                    break
+                ind = market.get(symbol)
+                if ind is None or not pead_signal(symbol, ind, cal):
+                    continue
+                dollars = min(MAX_POSITION, available)
+                detail  = (f"post-earnings gap {100 * ind['open_gap']:+.1f}%, "
+                           f"price={ind['price']:.2f}")
+                log.info("%s PEAD BUY signal: %s", symbol, detail)
+                status = execute_order("BUY", symbol, dollars, f"pead entry: {detail}")
+                if status == "auth":
+                    set_halt(state, f"Robinhood auth failed buying {symbol}")
+                    return
+                if status == "ok":
+                    positions[symbol] = {
+                        "entry":         ind["price"],
+                        "peak":          ind["price"],
+                        "dollars":       dollars,
+                        "entry_date":    now,
+                        "strategy":      "pead",
+                        "day_mark":      ind["price"],
+                        "day_mark_date": today,
+                        "last_price":    ind["price"],
+                    }
+                    budget_used += dollars
+                    traded.append(symbol)
+                    notify(f"BUY {symbol} ${dollars:.0f} (PEAD)",
+                           f"Earnings reaction entry.\n{detail}\n"
+                           "Exit: trailing stop 5% below peak (initial -3%).")
+                else:
+                    notify(f"PEAD BUY {symbol} FAILED",
+                           f"Signal fired but the order did not confirm.\n{detail}")
+
         scanned = 0
         for symbol in SYMBOLS:
             if symbol in positions:
