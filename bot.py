@@ -48,8 +48,19 @@ log = logging.getLogger(__name__)
 ET           = ZoneInfo("America/New_York")
 ACCT         = "432591949"
 SCAN_MINUTES = 5
-MAX_POSITION = 125    # max $ per stock
-TOTAL_BUDGET = 500
+
+# BOT_MODE selects which bot this process is:
+#   "core" — momentum/meanrev with meta-switching (default)
+#   "pead" — earnings gap-up overlay only
+# Run them as separate services, each with its own DATA_DIR volume, its own
+# RH_REFRESH_TOKEN (tokens rotate — sharing one kills the other's auth), and
+# its own budget slice.
+BOT_MODE     = os.environ.get("BOT_MODE", "core").lower()
+if BOT_MODE not in ("core", "pead"):
+    print(f"Invalid BOT_MODE {BOT_MODE!r} — use 'core' or 'pead'")
+    sys.exit(1)
+MAX_POSITION = float(os.environ.get("MAX_POSITION", "125"))   # max $ per stock
+TOTAL_BUDGET = float(os.environ.get("TOTAL_BUDGET", "500"))
 
 STRATEGY     = "momentum"   # initial strategy: "momentum" or "meanrev"
 
@@ -62,11 +73,11 @@ SWITCH_EVERY    = 2     # trading days between evaluations
 SWITCH_LOOKBACK = 10    # trading days of results to compare
 META_WARMUP     = 90    # trading days of simulation warmup before the window
 
-# PEAD overlay: if a universe stock gaps up >= PEAD_GAP at the open on its
-# post-earnings reaction day, buy and ride a trailing stop (backtest_pead.py:
-# +15.7%/yr, -11.6% max DD, 195 trades over 3y). Shares the same budget.
-PEAD_ENABLED = True
-PEAD_GAP     = 0.05
+# PEAD (BOT_MODE="pead"): if a universe stock gaps up >= PEAD_GAP at the open
+# on its post-earnings reaction day, buy and ride a trailing stop
+# (backtest_pead.py: +15.7%/yr, -11.6% max DD, 195 trades over 3y).
+PEAD_GAP          = 0.05
+PEAD_CUTOFF_HOUR  = 11   # ET; don't chase reaction-day gaps after this hour
 STOP_LOSS    = 0.03         # initial stop, fraction below entry
 TRAIL_PCT    = 0.05         # momentum: trail this far below peak since entry
 RSI_BUY      = 30           # meanrev entry threshold
@@ -100,10 +111,12 @@ SMTP_USER    = os.environ.get("SMTP_USER", "")
 SMTP_PASS    = os.environ.get("SMTP_PASS", "")
 
 # Persistent storage — point DATA_DIR at a mounted volume in cloud deploys so
-# positions and rotated OAuth tokens survive restarts/redeploys.
+# positions and rotated OAuth tokens survive restarts/redeploys. Files are
+# suffixed per BOT_MODE so modes never share state ("core" keeps legacy names).
 DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(DATA_DIR, exist_ok=True)
-STATE_FILE = os.path.join(DATA_DIR, "positions.json")
+_SFX       = "" if BOT_MODE == "core" else f"_{BOT_MODE}"
+STATE_FILE = os.path.join(DATA_DIR, f"positions{_SFX}.json")
 
 # Pre-create yfinance's tz cache to avoid a mkdir race with threaded downloads
 _yf_cache = os.path.join(DATA_DIR, "yf_cache")
@@ -126,7 +139,7 @@ RH_CLIENT_ID     = os.environ.get("RH_CLIENT_ID", "")
 RH_REFRESH_TOKEN = os.environ.get("RH_REFRESH_TOKEN", "")
 rh_token         = os.environ.get("ROBINHOOD_TOKEN", "")
 RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
-TOKEN_FILE       = os.path.join(DATA_DIR, "rh_token.json")
+TOKEN_FILE       = os.path.join(DATA_DIR, f"rh_token{_SFX}.json")
 
 if RH_CLIENT_ID and RH_REFRESH_TOKEN:
     log.info("Robinhood auth: OAuth refresh mode")
@@ -205,7 +218,7 @@ def notify(subject, body):
         return
     try:
         msg = EmailMessage()
-        msg["Subject"] = f"[trading-bot] {subject}"
+        msg["Subject"] = f"[trading-bot:{BOT_MODE}] {subject}"
         msg["From"]    = SMTP_USER
         msg["To"]      = NOTIFY_EMAIL
         msg.set_content(body)
@@ -511,11 +524,19 @@ def reconcile(state):
                            "(closed externally?)")
             del positions[sym]
 
+    # With multiple bots on one account, unknown holdings may belong to the
+    # other bot — adopting them would double-manage (and double-sell) them.
+    # Adoption is therefore opt-in via ADOPT_UNKNOWN=true; default is to warn.
+    adopt = os.environ.get("ADOPT_UNKNOWN", "false").lower() == "true"
+    unmanaged = []
     for sym, p in rh_by_sym.items():
         if sym in positions:
             continue
         if sym not in SYMBOLS:
             log.info("Ignoring %s held in account — not in bot universe", sym)
+            continue
+        if not adopt:
+            unmanaged.append(f"{sym}: {p['quantity']} sh @ ${p['avg_price']:.2f}")
             continue
         positions[sym] = {
             "entry":      p["avg_price"],
@@ -525,6 +546,11 @@ def reconcile(state):
         }
         changes.append(f"ADOPTED {sym}: {p['quantity']} sh @ ${p['avg_price']:.2f} "
                        f"(${positions[sym]['dollars']:.2f}) — stop set from avg cost")
+    if unmanaged:
+        notify("Holdings this bot is NOT managing",
+               "These account positions are not in this bot's local state and "
+               "ADOPT_UNKNOWN is off (they may belong to the other bot):\n"
+               + "\n".join(unmanaged))
 
     save_state(state)
     if changes:
@@ -705,7 +731,7 @@ def run_trading_loop():
     daily     = roll_daily(state)
     today     = daily["date"]
     loss_limit = TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100
-    active    = maybe_switch_strategy(state, today)
+    active    = "pead" if BOT_MODE == "pead" else maybe_switch_strategy(state, today)
     log.info("═══ %s scan at %s ═══", active, now)
 
     market = fetch_all_indicators(sorted(set(SYMBOLS) | set(positions)))
@@ -759,8 +785,9 @@ def run_trading_loop():
     if daily["halted"]:
         log.info("Entries blocked for today (daily loss limit). Day P&L: $%+.2f", pnl_today)
     else:
-        # 3a. PEAD overlay — post-earnings gap-ups take priority (time-sensitive)
-        if PEAD_ENABLED:
+        # 3a. PEAD entries (pead mode only, mornings only — late entries chase
+        # a gap the backtest bought at the open)
+        if BOT_MODE == "pead" and datetime.now(ET).hour < PEAD_CUTOFF_HOUR:
             cal    = refresh_earnings_calendar(today)
             traded = daily.setdefault("pead_traded", [])
             for symbol in SYMBOLS:
@@ -800,8 +827,9 @@ def run_trading_loop():
                     notify(f"PEAD BUY {symbol} FAILED",
                            f"Signal fired but the order did not confirm.\n{detail}")
 
+        # 3b. core momentum/meanrev entries
         scanned = 0
-        for symbol in SYMBOLS:
+        for symbol in SYMBOLS if BOT_MODE == "core" else []:
             if symbol in positions:
                 continue
             available = TOTAL_BUDGET - budget_used
@@ -846,12 +874,15 @@ def run_trading_loop():
 
 
 def main():
-    if META_SWITCH:
-        log.info("Rule-based trading bot starting — meta-switching every %d trading "
-                 "days on trailing %dd results (initial: %s)",
+    if BOT_MODE == "pead":
+        log.info("PEAD earnings bot starting — gap>=%.0f%% reaction-day entries "
+                 "before %d:00 ET, trailing-stop exits", 100 * PEAD_GAP, PEAD_CUTOFF_HOUR)
+    elif META_SWITCH:
+        log.info("Core bot starting — meta-switching every %d trading days on "
+                 "trailing %dd results (initial: %s)",
                  SWITCH_EVERY, SWITCH_LOOKBACK, STRATEGY)
     else:
-        log.info("Rule-based trading bot starting — strategy=%s", STRATEGY)
+        log.info("Core bot starting — strategy=%s", STRATEGY)
     log.info("Scan: %d min | Account: %s | Budget: $%d | Max/position: $%d | "
              "Daily loss limit: %.1f%% | Notify: %s",
              SCAN_MINUTES, ACCT, TOTAL_BUDGET, MAX_POSITION,
@@ -861,8 +892,8 @@ def main():
     if not is_halted(state):
         reconcile(state)
         notify("Bot started",
-               f"Strategy: {STRATEGY} | Universe: {len(SYMBOLS)} symbols | "
-               f"Budget: ${TOTAL_BUDGET} | Open positions: "
+               f"Mode: {BOT_MODE} | Universe: {len(SYMBOLS)} symbols | "
+               f"Budget: ${TOTAL_BUDGET:.0f} | Open positions: "
                f"{len(state.get('positions', {}))}\n"
                "If you received this, email notifications are working.")
     else:

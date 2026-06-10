@@ -110,12 +110,25 @@ this rule returned +43.2% vs +54.5% for always-momentum — switching is a
 hedge against momentum decaying, not a return enhancer. Set
 `META_SWITCH = False` to pin the strategy to `STRATEGY`.
 
-**PEAD overlay** (`PEAD_ENABLED = True`): when a universe stock gaps up ≥5%
-at the open on its post-earnings reaction day, the bot buys at the morning
-scan and rides a trailing stop (post-earnings announcement drift). Backtested
-in `backtest_pead.py` over 1,168 earnings reactions (3y): +15.7%/yr,
-−11.6% max DD, ~60% of gap-ups kept drifting higher over the next 2 weeks.
-The earnings calendar is cached once per trading day in `DATA_DIR`.
+## Two bots, one codebase
+
+`BOT_MODE` selects which bot a process is — deploy each as its own service:
+
+- **`core`** (default) — momentum/meanrev with meta-switching.
+- **`pead`** — earnings bot: when a universe stock gaps up ≥5% at the open on
+  its post-earnings reaction day, buy at the morning scan (before 11 AM ET
+  only) and ride a trailing stop. Backtested in `backtest_pead.py` over
+  1,168 earnings reactions (3y): +15.7%/yr, −11.6% max DD. The earnings
+  calendar is cached once per trading day in `DATA_DIR`.
+
+Each service needs its OWN: volume + `DATA_DIR`, `RH_REFRESH_TOKEN` (run
+`get_token.py` once per service — refresh tokens rotate, so sharing one
+breaks the other bot's auth), and `TOTAL_BUDGET` slice (env var, default
+500 — e.g. core 300 / pead 200 for a $500 account). State files are
+suffixed per mode (`positions_pead.json` etc.), and reconciliation no
+longer adopts unknown holdings by default (`ADOPT_UNKNOWN=true` restores
+the old behavior for single-bot setups) — it emails a warning instead, so
+two bots on one account can't double-manage each other's positions.
 
 Two strategies:
 
