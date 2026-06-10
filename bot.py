@@ -83,7 +83,11 @@ SMTP_PORT    = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER    = os.environ.get("SMTP_USER", "")
 SMTP_PASS    = os.environ.get("SMTP_PASS", "")
 
-STATE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "positions.json")
+# Persistent storage — point DATA_DIR at a mounted volume in cloud deploys so
+# positions and rotated OAuth tokens survive restarts/redeploys.
+DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(DATA_DIR, exist_ok=True)
+STATE_FILE = os.path.join(DATA_DIR, "positions.json")
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -98,7 +102,7 @@ RH_CLIENT_ID     = os.environ.get("RH_CLIENT_ID", "")
 RH_REFRESH_TOKEN = os.environ.get("RH_REFRESH_TOKEN", "")
 rh_token         = os.environ.get("ROBINHOOD_TOKEN", "")
 RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
-TOKEN_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rh_token.json")
+TOKEN_FILE       = os.path.join(DATA_DIR, "rh_token.json")
 
 if RH_CLIENT_ID and RH_REFRESH_TOKEN:
     log.info("Robinhood auth: OAuth refresh mode")
