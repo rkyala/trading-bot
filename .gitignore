@@ -1,4 +1,7 @@
 trading_bot.log
+positions.json
+backtest_results.json
+backtest_v2_results.json
 *.pyc
 __pycache__/
 .env
