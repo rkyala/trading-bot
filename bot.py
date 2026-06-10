@@ -51,7 +51,16 @@ SCAN_MINUTES = 5
 MAX_POSITION = 125    # max $ per stock
 TOTAL_BUDGET = 500
 
-STRATEGY     = "momentum"   # "momentum" or "meanrev"
+STRATEGY     = "momentum"   # initial strategy: "momentum" or "meanrev"
+
+# Meta-switching: every SWITCH_EVERY trading days, re-simulate both strategies
+# over recent history (backtest_v2 engine, META_WARMUP-day warmup) and adopt
+# the one with the better trailing SWITCH_LOOKBACK-day return. Open positions
+# keep the exit rules of the strategy that opened them.
+META_SWITCH     = True
+SWITCH_EVERY    = 2     # trading days between evaluations
+SWITCH_LOOKBACK = 10    # trading days of results to compare
+META_WARMUP     = 90    # trading days of simulation warmup before the window
 STOP_LOSS    = 0.03         # initial stop, fraction below entry
 TRAIL_PCT    = 0.05         # momentum: trail this far below peak since entry
 RSI_BUY      = 30           # meanrev entry threshold
@@ -275,16 +284,18 @@ def fetch_all_indicators(symbols):
 
 # ── Signals ───────────────────────────────────────────────────────────────────
 
-def entry_signal(ind):
-    if STRATEGY == "momentum":
+def entry_signal(ind, strategy=None):
+    strategy = strategy or STRATEGY
+    if strategy == "momentum":
         return ind["price"] > ind["vwap"] and ind["macd"] > 0 and ind["volume_ratio"] >= VOL_RATIO
     return ind["rsi"] < RSI_BUY and ind["price"] < ind["vwap"]
 
 
 def exit_signal(ind, pos):
-    """Returns a reason string if the position should be closed, else None."""
+    """Returns a reason string if the position should be closed, else None.
+    Uses the rules of the strategy that opened the position."""
     price = ind["price"]
-    if STRATEGY == "momentum":
+    if pos.get("strategy", STRATEGY) == "momentum":
         stop = max(pos["entry"] * (1 - STOP_LOSS), pos["peak"] * (1 - TRAIL_PCT))
         if price <= stop:
             return f"trailing stop hit (price {price:.2f} <= stop {stop:.2f})"
@@ -542,6 +553,78 @@ def daily_pnl(state, positions):
     return d["realized"] + unrealized
 
 
+# ── Strategy meta-switching ───────────────────────────────────────────────────
+
+def evaluate_strategies():
+    """Simulate both strategies over recent history (same engine as the
+    backtests) and return ({strategy: trailing return}, winner) or None."""
+    import backtest_v2 as bv
+    try:
+        raw = yf.download(SYMBOLS, period="1y", interval="1d", auto_adjust=True,
+                          progress=False, group_by="ticker", threads=True)
+    except Exception as exc:
+        log.error("Meta-eval download failed: %s", exc)
+        return None
+    data = {}
+    for sym in SYMBOLS:
+        try:
+            df = raw[sym].dropna()
+        except (KeyError, IndexError):
+            continue
+        if len(df) >= bv.LOOKBACK + 10:
+            data[sym] = df
+    if len(data) < 50:
+        log.warning("Meta-eval: only %d symbols with data — skipping", len(data))
+        return None
+
+    all_dates = sorted(set().union(*[set(df.index) for df in data.values()]))
+    dates = all_dates[-(META_WARMUP + SWITCH_LOOKBACK):]
+    bv.SYMBOLS = sorted(data)
+
+    results = {}
+    for strat in ("momentum", "meanrev"):
+        equity, _ = bv.simulate(data, dates, {}, strat, False)
+        if len(equity) <= SWITCH_LOOKBACK:
+            return None
+        results[strat] = equity[-1][1] / equity[-(SWITCH_LOOKBACK + 1)][1] - 1
+    winner = max(results, key=results.get)
+    return results, winner
+
+
+def maybe_switch_strategy(state, today):
+    """Every SWITCH_EVERY trading days, adopt the better-performing strategy.
+    Returns the currently active strategy."""
+    meta = state.setdefault("meta", {
+        "active": STRATEGY, "days_since_eval": SWITCH_EVERY, "last_date": None,
+    })
+    if not META_SWITCH:
+        return meta["active"]
+
+    if meta["last_date"] != today:
+        meta["days_since_eval"] += 1
+        meta["last_date"] = today
+
+    if meta["days_since_eval"] >= SWITCH_EVERY:
+        out = evaluate_strategies()
+        if out is None:
+            return meta["active"]  # keep current; retry next scan
+        results, winner = out
+        meta["days_since_eval"] = 0
+        detail = " vs ".join(f"{s} {100 * r:+.2f}%" for s, r in results.items())
+        if winner != meta["active"]:
+            log.info("Strategy switch: %s -> %s (trailing %dd: %s)",
+                     meta["active"], winner, SWITCH_LOOKBACK, detail)
+            notify(f"Strategy switched to {winner}",
+                   f"Trailing {SWITCH_LOOKBACK} trading-day simulated returns: {detail}\n"
+                   "Open positions keep their original exit rules; new entries "
+                   f"use {winner}.")
+            meta["active"] = winner
+        else:
+            log.info("Strategy check: keeping %s (trailing %dd: %s)",
+                     meta["active"], SWITCH_LOOKBACK, detail)
+    return meta["active"]
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def run_trading_loop():
@@ -557,11 +640,12 @@ def run_trading_loop():
                     state["halt"]["reason"])
         return
 
-    log.info("═══ %s scan at %s ═══", STRATEGY, now)
     positions = state.setdefault("positions", {})
     daily     = roll_daily(state)
     today     = daily["date"]
     loss_limit = TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100
+    active    = maybe_switch_strategy(state, today)
+    log.info("═══ %s scan at %s ═══", active, now)
 
     market = fetch_all_indicators(sorted(set(SYMBOLS) | set(positions)))
     if not market:
@@ -625,13 +709,13 @@ def run_trading_loop():
             if ind is None:
                 continue
             scanned += 1
-            if entry_signal(ind):
+            if entry_signal(ind, active):
                 dollars = min(MAX_POSITION, available)
                 detail  = (f"price={ind['price']:.2f} vwap={ind['vwap']:.2f} "
                            f"macd={ind['macd']:.3f} rsi={ind['rsi']:.1f} "
                            f"vol={ind['volume_ratio']:.1f}x")
-                log.info("%s BUY signal (%s): %s", symbol, STRATEGY, detail)
-                status = execute_order("BUY", symbol, dollars, f"{STRATEGY} entry: {detail}")
+                log.info("%s BUY signal (%s): %s", symbol, active, detail)
+                status = execute_order("BUY", symbol, dollars, f"{active} entry: {detail}")
                 if status == "auth":
                     set_halt(state, f"Robinhood auth failed buying {symbol}")
                     return
@@ -641,13 +725,14 @@ def run_trading_loop():
                         "peak":          ind["price"],
                         "dollars":       dollars,
                         "entry_date":    now,
+                        "strategy":      active,
                         "day_mark":      ind["price"],
                         "day_mark_date": today,
                         "last_price":    ind["price"],
                     }
                     budget_used += dollars
                     notify(f"BUY {symbol} ${dollars:.0f}",
-                           f"{STRATEGY} entry at ~${ind['price']:.2f}\n{detail}")
+                           f"{active} entry at ~${ind['price']:.2f}\n{detail}")
                 else:
                     notify(f"BUY {symbol} FAILED",
                            f"Entry signal fired but the order did not confirm.\n{detail}")
@@ -659,7 +744,12 @@ def run_trading_loop():
 
 
 def main():
-    log.info("Rule-based trading bot starting — strategy=%s", STRATEGY)
+    if META_SWITCH:
+        log.info("Rule-based trading bot starting — meta-switching every %d trading "
+                 "days on trailing %dd results (initial: %s)",
+                 SWITCH_EVERY, SWITCH_LOOKBACK, STRATEGY)
+    else:
+        log.info("Rule-based trading bot starting — strategy=%s", STRATEGY)
     log.info("Scan: %d min | Account: %s | Budget: $%d | Max/position: $%d | "
              "Daily loss limit: %.1f%% | Notify: %s",
              SCAN_MINUTES, ACCT, TOTAL_BUDGET, MAX_POSITION,

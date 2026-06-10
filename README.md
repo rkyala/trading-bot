@@ -99,7 +99,18 @@ The bot will:
 
 Signals are computed deterministically in `bot.py` (same math as `backtest_v2.py`,
 so live behavior matches the backtest). Claude is only used to execute orders
-via the Robinhood MCP. Two strategies, selected by `STRATEGY` in `bot.py`:
+via the Robinhood MCP.
+
+**Meta-switching** (`META_SWITCH = True`): every 2 trading days the bot
+re-simulates both strategies over recent history and adopts whichever had the
+better trailing 10-trading-day return. Open positions keep the exit rules of
+the strategy that opened them; only new entries use the active strategy.
+Backtested 2024-06 → 2026-06 on the Nasdaq-100 (frictionless switching):
+this rule returned +43.2% vs +54.5% for always-momentum — switching is a
+hedge against momentum decaying, not a return enhancer. Set
+`META_SWITCH = False` to pin the strategy to `STRATEGY`.
+
+Two strategies:
 
 | Strategy | Entry | Exit |
 |----------|-------|------|
