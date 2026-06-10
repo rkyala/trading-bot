@@ -668,8 +668,13 @@ def main():
     state = load_state()
     if not is_halted(state):
         reconcile(state)
+        notify("Bot started",
+               f"Strategy: {STRATEGY} | Universe: {len(SYMBOLS)} symbols | "
+               f"Budget: ${TOTAL_BUDGET} | Open positions: "
+               f"{len(state.get('positions', {}))}\n"
+               "If you received this, email notifications are working.")
     else:
-        log.warning("Starting HALTED (%s) — replace ROBINHOOD_TOKEN to resume.",
+        log.warning("Starting HALTED (%s) — replace Robinhood credentials to resume.",
                     state["halt"]["reason"])
 
     schedule.every(SCAN_MINUTES).minutes.do(run_trading_loop)
