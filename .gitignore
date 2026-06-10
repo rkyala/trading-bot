@@ -1,5 +1,7 @@
 trading_bot.log
 positions.json
+rh_token.json
+rh_oauth.json
 backtest_results.json
 backtest_v2_results.json
 *.pyc

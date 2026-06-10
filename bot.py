@@ -22,6 +22,7 @@ Safety rails:
 """
 
 import anthropic
+import requests
 import yfinance as yf
 import schedule
 import time
@@ -73,11 +74,81 @@ if not api_key:
     log.error("ANTHROPIC_API_KEY not set. Exiting.")
     sys.exit(1)
 
-rh_token = os.environ.get("ROBINHOOD_TOKEN", "")
-if not rh_token:
-    log.warning("ROBINHOOD_TOKEN not set — trades will fail auth.")
+# Robinhood auth — two modes:
+#   OAuth (preferred): RH_CLIENT_ID + RH_REFRESH_TOKEN, bot mints access tokens
+#   itself (run get_token.py once to obtain these).
+#   Static (legacy): ROBINHOOD_TOKEN, expires after ~4 days.
+RH_CLIENT_ID     = os.environ.get("RH_CLIENT_ID", "")
+RH_REFRESH_TOKEN = os.environ.get("RH_REFRESH_TOKEN", "")
+rh_token         = os.environ.get("ROBINHOOD_TOKEN", "")
+RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
+TOKEN_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rh_token.json")
+
+if RH_CLIENT_ID and RH_REFRESH_TOKEN:
+    log.info("Robinhood auth: OAuth refresh mode")
+elif rh_token:
+    log.warning("Robinhood auth: static ROBINHOOD_TOKEN (expires ~4 days) — "
+                "run get_token.py and set RH_CLIENT_ID/RH_REFRESH_TOKEN instead.")
+else:
+    log.warning("No Robinhood credentials set — trades will fail auth.")
 
 client = anthropic.Anthropic(api_key=api_key)
+
+
+# ── Robinhood token management ────────────────────────────────────────────────
+
+_tok = {"access": None, "expires_at": 0.0, "refresh": None}
+
+
+def _can_refresh():
+    return bool(RH_CLIENT_ID and (RH_REFRESH_TOKEN or _tok["refresh"]))
+
+
+def get_rh_access_token(force_refresh=False):
+    """Returns a valid access token, refreshing via OAuth when possible."""
+    if not _can_refresh():
+        return rh_token or None  # static mode
+
+    if _tok["access"] is None:  # warm cache from disk (survives restarts w/ volume)
+        try:
+            with open(TOKEN_FILE) as f:
+                saved = json.load(f)
+            _tok.update({k: saved.get(k, _tok[k]) for k in _tok})
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    if not force_refresh and _tok["access"] and time.time() < _tok["expires_at"] - 600:
+        return _tok["access"]
+
+    # try the most recent refresh token first, then the env one
+    for refresh in dict.fromkeys([_tok["refresh"] or "", RH_REFRESH_TOKEN]):
+        if not refresh:
+            continue
+        try:
+            r = requests.post(RH_TOKEN_URL, data={
+                "grant_type":    "refresh_token",
+                "refresh_token": refresh,
+                "client_id":     RH_CLIENT_ID,
+            }, timeout=20)
+            if r.status_code != 200:
+                log.error("Token refresh failed: %s %s", r.status_code, r.text[:200])
+                continue
+            d = r.json()
+            _tok["access"]     = d["access_token"]
+            _tok["expires_at"] = time.time() + float(d.get("expires_in", 3600))
+            if d.get("refresh_token"):
+                _tok["refresh"] = d["refresh_token"]
+            try:
+                with open(TOKEN_FILE, "w") as f:
+                    json.dump(_tok, f)
+            except OSError as exc:
+                log.warning("Could not persist token cache: %s", exc)
+            log.info("Robinhood access token refreshed (valid ~%.0fh)",
+                     float(d.get("expires_in", 0)) / 3600)
+            return _tok["access"]
+        except Exception as exc:
+            log.error("Token refresh error: %s", exc)
+    return None
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -199,7 +270,9 @@ def save_state(state):
 # ── Halt handling ─────────────────────────────────────────────────────────────
 
 def token_fp():
-    return hashlib.sha256(rh_token.encode()).hexdigest()[:12]
+    """Fingerprint of user-supplied credentials — replacing any of them clears a halt."""
+    material = rh_token + RH_CLIENT_ID + RH_REFRESH_TOKEN
+    return hashlib.sha256(material.encode()).hexdigest()[:12]
 
 
 def set_halt(state, reason):
@@ -210,8 +283,9 @@ def set_halt(state, reason):
     }
     save_state(state)
     notify("HALTED — trading stopped", f"Reason: {reason}\n\n"
-           "The bot will not trade again until ROBINHOOD_TOKEN is replaced "
-           "(a new token clears the halt automatically).")
+           "The bot will not trade again until Robinhood credentials are replaced "
+           "(new RH_REFRESH_TOKEN/RH_CLIENT_ID or ROBINHOOD_TOKEN clears the halt "
+           "automatically).")
 
 
 def is_halted(state):
@@ -219,7 +293,7 @@ def is_halted(state):
     if not h:
         return False
     if h.get("token_fp") != token_fp():
-        log.info("ROBINHOOD_TOKEN changed — clearing halt (was: %s)", h.get("reason"))
+        log.info("Robinhood credentials changed — clearing halt (was: %s)", h.get("reason"))
         del state["halt"]
         save_state(state)
         return False
@@ -234,7 +308,21 @@ AUTH_INSTR = ('If any tool call fails with an authentication or authorization '
 
 
 def claude_call(system, user_msg):
-    """One MCP conversation. Returns (ok, combined_text)."""
+    """One MCP conversation, with one token-refresh retry on auth failure.
+    Returns (ok, combined_text)."""
+    for attempt in (1, 2):
+        token = get_rh_access_token(force_refresh=(attempt == 2))
+        if not token:
+            return False, "AUTH_ERROR: could not obtain a Robinhood access token"
+        ok, text = _claude_call_once(system, user_msg, token)
+        if "AUTH_ERROR" in text and attempt == 1 and _can_refresh():
+            log.warning("MCP auth failed — force-refreshing token and retrying once")
+            continue
+        return ok, text
+    return ok, text
+
+
+def _claude_call_once(system, user_msg, token):
     messages = [{"role": "user", "content": user_msg}]
     texts = []
     try:
@@ -248,7 +336,7 @@ def claude_call(system, user_msg):
                     "type": "url",
                     "url":  "https://agent.robinhood.com/mcp/trading",
                     "name": "Rh",
-                    "authorization_token": rh_token,
+                    "authorization_token": token,
                 }],
                 messages=messages,
             )

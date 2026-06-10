@@ -31,7 +31,25 @@ $env:ANTHROPIC_API_KEY="sk-ant-..."
 
 > Get your API key at: https://console.anthropic.com/
 
-### 3. Email notifications (optional but recommended)
+### 3. Robinhood OAuth (one time, on a desktop)
+Robinhood access tokens expire after ~4 days, so don't copy them by hand.
+Run the helper once — it opens a browser to log in and approve agentic access:
+
+```bash
+python get_token.py
+```
+
+Then set the two values it prints (locally and in Railway):
+
+```bash
+export RH_CLIENT_ID="..."
+export RH_REFRESH_TOKEN="..."
+```
+
+The bot mints and refreshes its own access tokens from these. A static
+`ROBINHOOD_TOKEN` still works as a legacy fallback but dies in ~4 days.
+
+### 4. Email notifications (optional but recommended)
 The bot emails fills, halts, and reconciliation changes. Set SMTP credentials
 (e.g. a Gmail or Yahoo app password — not your account password):
 
