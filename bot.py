@@ -266,8 +266,12 @@ def claude_call(system, user_msg):
         log.warning("claude_call hit round limit")
         return False, "\n".join(texts)
     except Exception as exc:
-        log.error("claude_call failed: %s", exc)
-        return False, str(exc)
+        msg = str(exc)
+        log.error("claude_call failed: %s", msg)
+        # MCP auth failures surface as API-level 400s, not in-conversation text
+        if "Authentication error while communicating with MCP server" in msg:
+            return False, "AUTH_ERROR: " + msg
+        return False, msg
 
 
 def execute_order(side, symbol, dollars, reason):
