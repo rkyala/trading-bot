@@ -57,7 +57,23 @@ TRAIL_PCT    = 0.05         # momentum: trail this far below peak since entry
 RSI_BUY      = 30           # meanrev entry threshold
 RSI_EXIT     = 50           # meanrev exit threshold
 VOL_RATIO    = 2.0          # momentum: volume vs 10d average
-SYMBOLS      = ["META", "MU", "TSLA", "NVDA", "SOXL", "SPXL", "NVDL"]
+
+# Nasdaq-100 constituents as of 2026-06-10 — the universe validated in
+# backtest_n100_results.json (momentum +54.6% / max DD -12.9% over 2y).
+# Budget caps still limit the bot to 4 concurrent positions.
+SYMBOLS = [
+    "AAPL", "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "ALNY", "AMAT", "AMD",
+    "AMGN", "AMZN", "APP", "ARM", "ASML", "AVGO", "AXON", "BKNG", "BKR", "CCEP",
+    "CDNS", "CEG", "CHTR", "CMCSA", "COST", "CPRT", "CRWD", "CSCO", "CSX", "CTAS",
+    "CTSH", "DASH", "DDOG", "DXCM", "EA", "EXC", "FANG", "FAST", "FER", "FTNT",
+    "GEHC", "GILD", "GOOG", "GOOGL", "HON", "IDXX", "INSM", "INTC", "INTU", "ISRG",
+    "KDP", "KHC", "KLAC", "LIN", "LITE", "LRCX", "MAR", "MCHP", "MDLZ", "MELI",
+    "META", "MNST", "MPWR", "MRVL", "MSFT", "MSTR", "MU", "NFLX", "NVDA", "NXPI",
+    "ODFL", "ORLY", "PANW", "PAYX", "PCAR", "PDD", "PEP", "PLTR", "PYPL", "QCOM",
+    "REGN", "ROP", "ROST", "SBUX", "SHOP", "SNDK", "SNPS", "STX", "TMUS", "TRI",
+    "TSLA", "TTWO", "TXN", "VRSK", "VRTX", "WBD", "WDAY", "WDC", "WMT", "XEL",
+    "ZS",
+]
 
 DAILY_LOSS_LIMIT_PCT = 3.0  # halt new entries if day P&L < -3% of TOTAL_BUDGET
 
@@ -207,26 +223,42 @@ def calc_ema(prices, period):
     return round(ema, 4)
 
 
-def fetch_indicators(symbol):
-    try:
-        hist = yf.Ticker(symbol).history(period="30d", interval="1d")
-        if hist.empty or len(hist) < 15:
-            return None
-        prices  = hist["Close"].tolist()
-        volumes = hist["Volume"].tolist()
-        n       = min(len(prices), len(volumes))
-        vwap    = sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1)
-        avg_vol = sum(volumes[-10:]) / 10
-        return {
-            "price":        prices[-1],
-            "rsi":          calc_rsi(prices),
-            "macd":         calc_ema(prices, 12) - calc_ema(prices, 26),
-            "vwap":         round(vwap, 4),
-            "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1.0,
-        }
-    except Exception as exc:
-        log.warning("%s: indicator fetch failed: %s", symbol, exc)
+def _indicators_from_df(df):
+    if df is None or len(df) < 15:
         return None
+    prices  = df["Close"].tolist()
+    volumes = df["Volume"].tolist()
+    n       = min(len(prices), len(volumes))
+    vwap    = sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1)
+    avg_vol = sum(volumes[-10:]) / 10
+    return {
+        "price":        prices[-1],
+        "rsi":          calc_rsi(prices),
+        "macd":         calc_ema(prices, 12) - calc_ema(prices, 26),
+        "vwap":         round(vwap, 4),
+        "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1.0,
+    }
+
+
+def fetch_all_indicators(symbols):
+    """One batched download for the whole universe -> {symbol: indicators}."""
+    try:
+        raw = yf.download(list(symbols), period="30d", interval="1d",
+                          auto_adjust=True, progress=False,
+                          group_by="ticker", threads=True)
+    except Exception as exc:
+        log.error("Batch market data download failed: %s", exc)
+        return {}
+    out = {}
+    for sym in symbols:
+        try:
+            df = raw[sym].dropna()
+        except (KeyError, IndexError):
+            continue
+        ind = _indicators_from_df(df)
+        if ind:
+            out[sym] = ind
+    return out
 
 
 # ── Signals ───────────────────────────────────────────────────────────────────
@@ -519,9 +551,14 @@ def run_trading_loop():
     today     = daily["date"]
     loss_limit = TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100
 
+    market = fetch_all_indicators(sorted(set(SYMBOLS) | set(positions)))
+    if not market:
+        log.warning("No market data this scan — skipping")
+        return
+
     # 1. manage open positions
     for symbol in list(positions):
-        ind = fetch_indicators(symbol)
+        ind = market.get(symbol)
         if ind is None:
             continue
         pos = positions[symbol]
@@ -565,15 +602,17 @@ def run_trading_loop():
     if daily["halted"]:
         log.info("Entries blocked for today (daily loss limit). Day P&L: $%+.2f", pnl_today)
     else:
+        scanned = 0
         for symbol in SYMBOLS:
             if symbol in positions:
                 continue
             available = TOTAL_BUDGET - budget_used
             if available < 1:
                 break
-            ind = fetch_indicators(symbol)
+            ind = market.get(symbol)
             if ind is None:
                 continue
+            scanned += 1
             if entry_signal(ind):
                 dollars = min(MAX_POSITION, available)
                 detail  = (f"price={ind['price']:.2f} vwap={ind['vwap']:.2f} "
@@ -600,10 +639,7 @@ def run_trading_loop():
                 else:
                     notify(f"BUY {symbol} FAILED",
                            f"Entry signal fired but the order did not confirm.\n{detail}")
-            else:
-                log.info("%s no entry  price=%.2f vwap=%.2f macd=%.3f rsi=%.1f vol=%.1fx",
-                         symbol, ind["price"], ind["vwap"], ind["macd"],
-                         ind["rsi"], ind["volume_ratio"])
+        log.info("Scanned %d symbols for entries", scanned)
 
     save_state(state)
     log.info("Scan complete — %d open, $%.0f/$%d budget, day P&L $%+.2f",
