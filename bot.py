@@ -89,6 +89,14 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__))
 os.makedirs(DATA_DIR, exist_ok=True)
 STATE_FILE = os.path.join(DATA_DIR, "positions.json")
 
+# Pre-create yfinance's tz cache to avoid a mkdir race with threaded downloads
+_yf_cache = os.path.join(DATA_DIR, "yf_cache")
+os.makedirs(_yf_cache, exist_ok=True)
+try:
+    yf.set_tz_cache_location(_yf_cache)
+except Exception:
+    pass
+
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
     log.error("ANTHROPIC_API_KEY not set. Exiting.")
