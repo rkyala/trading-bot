@@ -229,7 +229,8 @@ def tool_get_trending_stocks() -> dict:
         resp.raise_for_status()
         quotes = resp.json()["finance"]["result"][0]["quotes"]
         syms   = [q["symbol"].upper() for q in quotes[:20]
-                  if q.get("symbol", "").replace("-", "").isalpha()]
+                  if q.get("symbol", "").replace("-", "").isalpha()
+                  and "-" not in q.get("symbol", "")]
         return {"trending": syms}
     except Exception as exc:
         return {"error": str(exc), "trending": ["SOXL", "NVDL", "SPXL", "NVDA", "TSLA"]}
@@ -387,6 +388,7 @@ Each run you must:
 5. Only trade stocks with market cap > $500M and price >= ${MIN_PRICE} (no penny
    stocks — check the "tradable" field from fetch_market_data). Never exceed
    ${MAX_POSITION} per position, and never invest more than you have in cash.
+   No cryptocurrency (BTC, DOGE, SOL, etc.) — equities only.
 6. Think out loud with specific numbers (RSI, price, % change) for every decision.
 
 Default posture: look for a reason TO trade, not a reason not to. If multiple
