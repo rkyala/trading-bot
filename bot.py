@@ -120,7 +120,7 @@ def is_market_hours() -> bool:
     if now.weekday() >= 5:
         return False
     open_  = now.replace(hour=9,  minute=45, second=0, microsecond=0)
-    close_ = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    close_ = now.replace(hour=16, minute=0, second=0, microsecond=0)
     return open_ <= now <= close_
 
 
