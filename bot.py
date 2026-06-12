@@ -31,6 +31,8 @@ ACCT         = "432591949"
 SCAN_MINUTES = 5
 MAX_POSITION = 125   # max $ per position
 TOTAL_BUDGET = 500
+DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
+STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -51,6 +53,45 @@ def is_market_hours() -> bool:
     open_  = now.replace(hour=9,  minute=45, second=0, microsecond=0)
     close_ = now.replace(hour=15, minute=45, second=0, microsecond=0)
     return open_ <= now <= close_
+
+
+def load_state() -> dict:
+    try:
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    try:
+        with open(STATE_PATH, "w") as f:
+            json.dump(state, f)
+    except Exception as exc:
+        log.warning("Could not save state: %s", exc)
+
+
+def check_daily_loss(equity: float) -> tuple[bool, str]:
+    """Returns (halted, status_message). Resets day-start equity each new ET day."""
+    state = load_state()
+    today = datetime.now(ET).strftime("%Y-%m-%d")
+
+    if state.get("date") != today:
+        state = {"date": today, "day_start_equity": equity}
+        save_state(state)
+        return False, f"New trading day. Day-start equity recorded: ${equity:,.2f}"
+
+    start_equity = state.get("day_start_equity", equity)
+    if start_equity <= 0:
+        return False, "Day-start equity is zero — skipping loss check."
+
+    change_pct = (equity - start_equity) / start_equity * 100
+    if change_pct <= -DAILY_LOSS_LIMIT_PCT:
+        return True, (
+            f"DAILY LOSS LIMIT HIT: equity ${equity:,.2f} is {change_pct:.2f}% "
+            f"below day-start ${start_equity:,.2f} (limit -{DAILY_LOSS_LIMIT_PCT}%)."
+        )
+    return False, f"Day P&L: {change_pct:+.2f}% (start ${start_equity:,.2f}, now ${equity:,.2f})"
 
 
 # ── Tool implementations ──────────────────────────────────────────────────────
@@ -170,6 +211,38 @@ def dispatch_tool(name: str, inp: dict) -> str:
     return json.dumps({"error": f"unknown tool {name}"})
 
 
+def fetch_portfolio_equity():
+    """Ask Claude (via Robinhood MCP) for current total portfolio equity. Returns float or None."""
+    try:
+        resp = client.beta.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            betas=["mcp-client-2025-04-04"],
+            system=(
+                f"You are a read-only assistant for Robinhood account {ACCT}. "
+                "Call get_portfolio (or equivalent) and reply with ONLY the total "
+                "equity as a plain number, e.g. 512.34. No words, no symbols."
+            ),
+            mcp_servers=[
+                {
+                    "type": "url",
+                    "url":  "https://agent.robinhood.com/mcp/trading",
+                    "name": "Rh",
+                    "authorization_token": rh_token,
+                }
+            ],
+            messages=[{"role": "user", "content": "What is the total portfolio equity?"}],
+        )
+        text = " ".join(b.text for b in resp.content if hasattr(b, "text"))
+        import re
+        m = re.search(r"[\d,]+\.?\d*", text)
+        if m:
+            return float(m.group().replace(",", ""))
+    except Exception as exc:
+        log.warning("Could not fetch portfolio equity: %s", exc)
+    return None
+
+
 # ── Main agentic loop ─────────────────────────────────────────────────────────
 
 def run_trading_loop():
@@ -180,11 +253,30 @@ def run_trading_loop():
     now = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
     log.info("\u2550\u2550\u2550 Autonomous trading run at %s \u2550\u2550\u2550", now)
 
+    # \u2500\u2500 Daily loss limit check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    equity = fetch_portfolio_equity()
+    if equity is not None:
+        halted, status_msg = check_daily_loss(equity)
+    else:
+        halted, status_msg = False, "Equity unavailable \u2014 skipping loss check."
+    log.info("Loss-limit check: %s", status_msg)
+
+    trading_clause = ""
+    if halted:
+        trading_clause = (
+            f"\n\n*** {status_msg} ***\n"
+            "TRADING HALTED FOR NEW ENTRIES TODAY. Do NOT place any new BUY orders.\n"
+            "You may still call get_equity_positions and place SELL orders to manage "
+            "or exit existing positions (e.g. stop-losses), but place no new buys."
+        )
+    # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
     system = f"""You are an aggressive, autonomous day-trading agent with full control over a Robinhood brokerage account.
 
 Account : {ACCT} (cash, agentic-enabled)
 Budget  : ${TOTAL_BUDGET} total | max ${MAX_POSITION} per position
 Time    : {now}
+{status_msg}
 
 PHILOSOPHY: This account exists to trade actively. Cash sitting idle is a missed
 opportunity, not a "safe" choice. You should bias toward action over inaction.
@@ -207,7 +299,7 @@ Each run you must:
 6. Think out loud with specific numbers (RSI, price, % change) for every decision.
 
 Default posture: look for a reason TO trade, not a reason not to. If multiple
-candidates look reasonable, trade the best one rather than waiting for a perfect setup."""
+candidates look reasonable, trade the best one rather than waiting for a perfect setup.{trading_clause}"""
 
     messages = [
         {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
