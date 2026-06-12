@@ -1,38 +1,19 @@
 """
-Rule-Based Trading Bot
-Signals are computed deterministically in code (same math as backtest_v2.py).
-Claude is used only to execute specific orders via the Robinhood MCP server.
-
-Strategies (set STRATEGY below):
-  momentum — buy when price > 30d VWAP, MACD > 0, volume >= 2x 10d avg;
-             exit on a stop that starts -3% below entry and trails 5% below
-             the highest price seen since entry.
-  meanrev  — buy when RSI < 30 and price < 30d VWAP (truly oversold);
-             exit at -3% stop or when RSI recovers above 50.
-
-Safety rails:
-  - Startup reconciliation: local positions.json is synced against actual
-    Robinhood holdings, so cloud restarts can't orphan a position.
-  - Auth-failure halt: if Robinhood auth fails, the bot stops trading and
-    stays halted until ROBINHOOD_TOKEN is changed.
-  - Daily loss limit: if the day's P&L drops below -DAILY_LOSS_LIMIT_PCT of
-    budget, no new entries for the rest of the day (exits stay active).
-  - Email notifications on fills, halts, and reconciliation changes
-    (requires SMTP_HOST / SMTP_USER / SMTP_PASS env vars; logs otherwise).
+Autonomous AI Trading Bot
+Claude runs the full trading loop — stock selection, analysis,
+signal generation, and trade execution via the Robinhood MCP server.
+Python is just a scheduler.
 """
 
 import anthropic
-import requests
 import yfinance as yf
+import requests
 import schedule
 import time
 import logging
 import os
 import sys
 import json
-import hashlib
-import smtplib
-from email.message import EmailMessage
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -48,189 +29,22 @@ log = logging.getLogger(__name__)
 ET           = ZoneInfo("America/New_York")
 ACCT         = "432591949"
 SCAN_MINUTES = 5
-
-# BOT_MODE selects which bot this process is:
-#   "core" — momentum/meanrev with meta-switching (default)
-#   "pead" — earnings gap-up overlay only
-# Run them as separate services, each with its own DATA_DIR volume, its own
-# RH_REFRESH_TOKEN (tokens rotate — sharing one kills the other's auth), and
-# its own budget slice.
-BOT_MODE     = os.environ.get("BOT_MODE", "core").lower()
-if BOT_MODE not in ("core", "pead"):
-    print(f"Invalid BOT_MODE {BOT_MODE!r} — use 'core' or 'pead'")
-    sys.exit(1)
-MAX_POSITION = float(os.environ.get("MAX_POSITION", "125"))   # max $ per stock
-TOTAL_BUDGET = float(os.environ.get("TOTAL_BUDGET", "500"))
-
-STRATEGY     = "momentum"   # initial strategy: "momentum" or "meanrev"
-
-# Meta-switching: every SWITCH_EVERY trading days, re-simulate both strategies
-# over recent history (backtest_v2 engine, META_WARMUP-day warmup) and adopt
-# the one with the better trailing SWITCH_LOOKBACK-day return. Open positions
-# keep the exit rules of the strategy that opened them.
-META_SWITCH     = True
-SWITCH_EVERY    = 2     # trading days between evaluations
-SWITCH_LOOKBACK = 10    # trading days of results to compare
-META_WARMUP     = 90    # trading days of simulation warmup before the window
-
-# PEAD (BOT_MODE="pead"): if a universe stock gaps up >= PEAD_GAP at the open
-# on its post-earnings reaction day, buy and ride a trailing stop
-# (backtest_pead.py: +15.7%/yr, -11.6% max DD, 195 trades over 3y).
-PEAD_GAP          = 0.05
-PEAD_CUTOFF_HOUR  = 11   # ET; don't chase reaction-day gaps after this hour
-STOP_LOSS    = 0.03         # initial stop, fraction below entry
-TRAIL_PCT    = 0.05         # momentum: trail this far below peak since entry
-RSI_BUY      = 30           # meanrev entry threshold
-RSI_EXIT     = 50           # meanrev exit threshold
-VOL_RATIO    = 2.0          # momentum: volume vs 10d average
-
-# Nasdaq-100 constituents as of 2026-06-10 — the universe validated in
-# backtest_n100_results.json (momentum +54.6% / max DD -12.9% over 2y).
-# Budget caps still limit the bot to 4 concurrent positions.
-SYMBOLS = [
-    "AAPL", "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "ALNY", "AMAT", "AMD",
-    "AMGN", "AMZN", "APP", "ARM", "ASML", "AVGO", "AXON", "BKNG", "BKR", "CCEP",
-    "CDNS", "CEG", "CHTR", "CMCSA", "COST", "CPRT", "CRWD", "CSCO", "CSX", "CTAS",
-    "CTSH", "DASH", "DDOG", "DXCM", "EA", "EXC", "FANG", "FAST", "FER", "FTNT",
-    "GEHC", "GILD", "GOOG", "GOOGL", "HON", "IDXX", "INSM", "INTC", "INTU", "ISRG",
-    "KDP", "KHC", "KLAC", "LIN", "LITE", "LRCX", "MAR", "MCHP", "MDLZ", "MELI",
-    "META", "MNST", "MPWR", "MRVL", "MSFT", "MSTR", "MU", "NFLX", "NVDA", "NXPI",
-    "ODFL", "ORLY", "PANW", "PAYX", "PCAR", "PDD", "PEP", "PLTR", "PYPL", "QCOM",
-    "REGN", "ROP", "ROST", "SBUX", "SHOP", "SNDK", "SNPS", "STX", "TMUS", "TRI",
-    "TSLA", "TTWO", "TXN", "VRSK", "VRTX", "WBD", "WDAY", "WDC", "WMT", "XEL",
-    "ZS",
-    "ORCL",  # NYSE mega-cap added 2026-06-10 (earnings-reaction coverage)
-]
-
-DAILY_LOSS_LIMIT_PCT = 3.0  # halt new entries if day P&L < -3% of TOTAL_BUDGET
-
-NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "kris.yalala@yahoo.com")
-SMTP_HOST    = os.environ.get("SMTP_HOST", "")
-SMTP_PORT    = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER    = os.environ.get("SMTP_USER", "")
-SMTP_PASS    = os.environ.get("SMTP_PASS", "")
-
-# Persistent storage — point DATA_DIR at a mounted volume in cloud deploys so
-# positions and rotated OAuth tokens survive restarts/redeploys. Files are
-# suffixed per BOT_MODE so modes never share state ("core" keeps legacy names).
-DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(DATA_DIR, exist_ok=True)
-_SFX       = "" if BOT_MODE == "core" else f"_{BOT_MODE}"
-STATE_FILE = os.path.join(DATA_DIR, f"positions{_SFX}.json")
-
-# Pre-create yfinance's tz cache to avoid a mkdir race with threaded downloads
-_yf_cache = os.path.join(DATA_DIR, "yf_cache")
-os.makedirs(_yf_cache, exist_ok=True)
-try:
-    yf.set_tz_cache_location(_yf_cache)
-except Exception:
-    pass
+MAX_POSITION = 125   # max $ per position
+TOTAL_BUDGET = 500
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
     log.error("ANTHROPIC_API_KEY not set. Exiting.")
     sys.exit(1)
 
-# Robinhood auth — two modes:
-#   OAuth (preferred): RH_CLIENT_ID + RH_REFRESH_TOKEN, bot mints access tokens
-#   itself (run get_token.py once to obtain these).
-#   Static (legacy): ROBINHOOD_TOKEN, expires after ~4 days.
-RH_CLIENT_ID     = os.environ.get("RH_CLIENT_ID", "")
-RH_REFRESH_TOKEN = os.environ.get("RH_REFRESH_TOKEN", "")
-rh_token         = os.environ.get("ROBINHOOD_TOKEN", "")
-RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
-TOKEN_FILE       = os.path.join(DATA_DIR, f"rh_token{_SFX}.json")
-
-if RH_CLIENT_ID and RH_REFRESH_TOKEN:
-    log.info("Robinhood auth: OAuth refresh mode")
-elif rh_token:
-    log.warning("Robinhood auth: static ROBINHOOD_TOKEN (expires ~4 days) — "
-                "run get_token.py and set RH_CLIENT_ID/RH_REFRESH_TOKEN instead.")
-else:
-    log.warning("No Robinhood credentials set — trades will fail auth.")
+rh_token = os.environ.get("ROBINHOOD_TOKEN", "")
+if not rh_token:
+    log.warning("ROBINHOOD_TOKEN not set — trades will fail auth.")
 
 client = anthropic.Anthropic(api_key=api_key)
 
 
-# ── Robinhood token management ────────────────────────────────────────────────
-
-_tok = {"access": None, "expires_at": 0.0, "refresh": None}
-
-
-def _can_refresh():
-    return bool(RH_CLIENT_ID and (RH_REFRESH_TOKEN or _tok["refresh"]))
-
-
-def get_rh_access_token(force_refresh=False):
-    """Returns a valid access token, refreshing via OAuth when possible."""
-    if not _can_refresh():
-        return rh_token or None  # static mode
-
-    if _tok["access"] is None:  # warm cache from disk (survives restarts w/ volume)
-        try:
-            with open(TOKEN_FILE) as f:
-                saved = json.load(f)
-            _tok.update({k: saved.get(k, _tok[k]) for k in _tok})
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-
-    if not force_refresh and _tok["access"] and time.time() < _tok["expires_at"] - 600:
-        return _tok["access"]
-
-    # try the most recent refresh token first, then the env one
-    for refresh in dict.fromkeys([_tok["refresh"] or "", RH_REFRESH_TOKEN]):
-        if not refresh:
-            continue
-        try:
-            r = requests.post(RH_TOKEN_URL, data={
-                "grant_type":    "refresh_token",
-                "refresh_token": refresh,
-                "client_id":     RH_CLIENT_ID,
-            }, timeout=20)
-            if r.status_code != 200:
-                log.error("Token refresh failed: %s %s", r.status_code, r.text[:200])
-                continue
-            d = r.json()
-            _tok["access"]     = d["access_token"]
-            _tok["expires_at"] = time.time() + float(d.get("expires_in", 3600))
-            if d.get("refresh_token"):
-                _tok["refresh"] = d["refresh_token"]
-            try:
-                with open(TOKEN_FILE, "w") as f:
-                    json.dump(_tok, f)
-            except OSError as exc:
-                log.warning("Could not persist token cache: %s", exc)
-            log.info("Robinhood access token refreshed (valid ~%.0fh)",
-                     float(d.get("expires_in", 0)) / 3600)
-            return _tok["access"]
-        except Exception as exc:
-            log.error("Token refresh error: %s", exc)
-    return None
-
-
-# ── Notifications ─────────────────────────────────────────────────────────────
-
-def notify(subject, body):
-    log.info("NOTIFY: %s | %s", subject, body.replace("\n", " ")[:300])
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        log.warning("Email not configured (set SMTP_HOST/SMTP_USER/SMTP_PASS) — "
-                    "notification logged only.")
-        return
-    try:
-        msg = EmailMessage()
-        msg["Subject"] = f"[trading-bot:{BOT_MODE}] {subject}"
-        msg["From"]    = SMTP_USER
-        msg["To"]      = NOTIFY_EMAIL
-        msg.set_content(body)
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-            s.starttls()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-    except Exception as exc:
-        log.error("Email send failed: %s", exc)
-
-
-def is_market_hours():
+def is_market_hours() -> bool:
     now = datetime.now(ET)
     if now.weekday() >= 5:
         return False
@@ -239,7 +53,7 @@ def is_market_hours():
     return open_ <= now <= close_
 
 
-# ── Indicators (identical math to backtest_v2.py) ─────────────────────────────
+# ── Tool implementations ──────────────────────────────────────────────────────
 
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -264,645 +78,196 @@ def calc_ema(prices, period):
     return round(ema, 4)
 
 
-def _indicators_from_df(df):
-    if df is None or len(df) < 15:
-        return None
-    prices  = df["Close"].tolist()
-    volumes = df["Volume"].tolist()
-    opens   = df["Open"].tolist()
-    n       = min(len(prices), len(volumes))
-    vwap    = sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1)
-    avg_vol = sum(volumes[-10:]) / 10
-    return {
-        "price":        prices[-1],
-        "rsi":          calc_rsi(prices),
-        "macd":         calc_ema(prices, 12) - calc_ema(prices, 26),
-        "vwap":         round(vwap, 4),
-        "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1.0,
-        "open_gap":     opens[-1] / prices[-2] - 1,   # today's open vs prev close
-        "prev_trading_date": str(df.index[-2].date()),
-        "last_trading_date": str(df.index[-1].date()),
-    }
-
-
-def fetch_all_indicators(symbols):
-    """One batched download for the whole universe -> {symbol: indicators}."""
+def tool_fetch_market_data(symbol: str) -> dict:
     try:
-        raw = yf.download(list(symbols), period="30d", interval="1d",
-                          auto_adjust=True, progress=False,
-                          group_by="ticker", threads=True)
-    except Exception as exc:
-        log.error("Batch market data download failed: %s", exc)
-        return {}
-    out = {}
-    for sym in symbols:
-        try:
-            df = raw[sym].dropna()
-        except (KeyError, IndexError):
-            continue
-        ind = _indicators_from_df(df)
-        if ind:
-            out[sym] = ind
-    return out
-
-
-# ── Signals ───────────────────────────────────────────────────────────────────
-
-def entry_signal(ind, strategy=None):
-    strategy = strategy or STRATEGY
-    if strategy == "momentum":
-        return ind["price"] > ind["vwap"] and ind["macd"] > 0 and ind["volume_ratio"] >= VOL_RATIO
-    return ind["rsi"] < RSI_BUY and ind["price"] < ind["vwap"]
-
-
-def exit_signal(ind, pos):
-    """Returns a reason string if the position should be closed, else None.
-    Uses the rules of the strategy that opened the position."""
-    price = ind["price"]
-    if pos.get("strategy", STRATEGY) in ("momentum", "pead"):
-        stop = max(pos["entry"] * (1 - STOP_LOSS), pos["peak"] * (1 - TRAIL_PCT))
-        if price <= stop:
-            return f"trailing stop hit (price {price:.2f} <= stop {stop:.2f})"
-    else:
-        if price <= pos["entry"] * (1 - STOP_LOSS):
-            return f"stop-loss hit (price {price:.2f}, entry {pos['entry']:.2f})"
-        if ind["rsi"] > RSI_EXIT:
-            return f"RSI recovered ({ind['rsi']:.1f} > {RSI_EXIT})"
-    return None
-
-
-# ── Position state ────────────────────────────────────────────────────────────
-
-def load_state():
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
-
-
-# ── Halt handling ─────────────────────────────────────────────────────────────
-
-def token_fp():
-    """Fingerprint of user-supplied credentials — replacing any of them clears a halt."""
-    material = rh_token + RH_CLIENT_ID + RH_REFRESH_TOKEN
-    return hashlib.sha256(material.encode()).hexdigest()[:12]
-
-
-def set_halt(state, reason):
-    state["halt"] = {
-        "reason":   reason,
-        "token_fp": token_fp(),
-        "at":       datetime.now(ET).isoformat(),
-    }
-    save_state(state)
-    notify("HALTED — trading stopped", f"Reason: {reason}\n\n"
-           "The bot will not trade again until Robinhood credentials are replaced "
-           "(new RH_REFRESH_TOKEN/RH_CLIENT_ID or ROBINHOOD_TOKEN clears the halt "
-           "automatically).")
-
-
-def is_halted(state):
-    h = state.get("halt")
-    if not h:
-        return False
-    if h.get("token_fp") != token_fp():
-        log.info("Robinhood credentials changed — clearing halt (was: %s)", h.get("reason"))
-        del state["halt"]
-        save_state(state)
-        return False
-    return True
-
-
-# ── Claude + Robinhood MCP ────────────────────────────────────────────────────
-
-AUTH_INSTR = ('If any tool call fails with an authentication or authorization '
-              'error (401/403, invalid/expired token), output exactly the line '
-              'AUTH_ERROR and stop.')
-
-
-def claude_call(system, user_msg):
-    """One MCP conversation, with one token-refresh retry on auth failure.
-    Returns (ok, combined_text)."""
-    for attempt in (1, 2):
-        token = get_rh_access_token(force_refresh=(attempt == 2))
-        if not token:
-            return False, "AUTH_ERROR: could not obtain a Robinhood access token"
-        ok, text = _claude_call_once(system, user_msg, token)
-        if "AUTH_ERROR" in text and attempt == 1 and _can_refresh():
-            log.warning("MCP auth failed — force-refreshing token and retrying once")
-            continue
-        return ok, text
-    return ok, text
-
-
-def _claude_call_once(system, user_msg, token):
-    messages = [{"role": "user", "content": user_msg}]
-    texts = []
-    try:
-        for _ in range(8):
-            resp = client.beta.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=2048,
-                betas=["mcp-client-2025-04-04"],
-                system=system,
-                mcp_servers=[{
-                    "type": "url",
-                    "url":  "https://agent.robinhood.com/mcp/trading",
-                    "name": "Rh",
-                    "authorization_token": token,
-                }],
-                messages=messages,
-            )
-            for block in resp.content:
-                if hasattr(block, "text") and block.text:
-                    texts.append(block.text)
-                    log.info("executor: %s", block.text[:500])
-            if resp.stop_reason in ("end_turn", "stop_sequence", "max_tokens"):
-                return True, "\n".join(texts)
-            # pause_turn / tool_use: continue the same conversation
-            messages = messages + [
-                {"role": "assistant", "content": resp.content},
-                {"role": "user",      "content": "Continue."},
-            ]
-        log.warning("claude_call hit round limit")
-        return False, "\n".join(texts)
-    except Exception as exc:
-        msg = str(exc)
-        log.error("claude_call failed: %s", msg)
-        # MCP auth failures surface as API-level 400s, not in-conversation text
-        if "Authentication error while communicating with MCP server" in msg:
-            return False, "AUTH_ERROR: " + msg
-        return False, msg
-
-
-def execute_order(side, symbol, dollars, reason):
-    """Returns 'ok', 'auth', or 'fail'."""
-    if side == "BUY":
-        instruction = f"BUY ${dollars:.2f} (notional, market order) of {symbol}"
-    else:
-        instruction = f"SELL the ENTIRE position in {symbol} (market order)"
-
-    system = f"""You are an order-execution agent for Robinhood account {ACCT}.
-Execute EXACTLY this one order and nothing else:
-
-    {instruction}
-
-Reason for the order (for your log only): {reason}
-
-Steps: call review_equity_order for this order, then place_equity_order to execute it.
-Do not analyze the market, do not place any other order, do not skip execution.
-{AUTH_INSTR}
-After placing, output ORDER_PLACED on success, or "ORDER_FAILED: <error verbatim>" if rejected."""
-
-    ok, text = claude_call(system, "Execute the order now.")
-    if "AUTH_ERROR" in text:
-        return "auth"
-    if ok and "ORDER_PLACED" in text:
-        return "ok"
-    log.error("%s %s did not confirm: %s", side, symbol, text[-300:])
-    return "fail"
-
-
-def fetch_rh_positions():
-    """Returns ('ok'|'auth'|'fail', [{'symbol','quantity','avg_price'}, ...])."""
-    system = f"""You are a read-only assistant for Robinhood account {ACCT}.
-Call get_equity_positions for this account. Then output ONLY a JSON array of the
-open positions, no other text, in exactly this shape:
-[{{"symbol": "ABC", "quantity": 1.23, "avg_price": 45.67}}]
-Use an empty array [] if there are no positions. Do not place or modify any orders.
-{AUTH_INSTR}"""
-
-    ok, text = claude_call(system, "Fetch the positions now.")
-    if "AUTH_ERROR" in text:
-        return "auth", []
-    if not ok:
-        return "fail", []
-    try:
-        start, end = text.index("["), text.rindex("]") + 1
-        raw = json.loads(text[start:end])
-        out = []
-        for p in raw:
-            sym = str(p.get("symbol", "")).upper()
-            qty = float(p.get("quantity", 0) or 0)
-            avg = float(p.get("avg_price", 0) or 0)
-            if sym and qty > 0 and avg > 0:
-                out.append({"symbol": sym, "quantity": qty, "avg_price": avg})
-        return "ok", out
-    except (ValueError, TypeError) as exc:
-        log.error("Could not parse positions from executor output: %s", exc)
-        return "fail", []
-
-
-# ── Startup reconciliation ────────────────────────────────────────────────────
-
-def reconcile(state):
-    log.info("Reconciling local state against Robinhood positions...")
-    status, rh_positions = fetch_rh_positions()
-
-    if status == "auth":
-        set_halt(state, "Robinhood auth failed during startup reconciliation")
-        return
-    if status == "fail":
-        notify("Reconciliation failed",
-               "Could not fetch Robinhood positions at startup. "
-               "Continuing with local positions.json state — verify manually.")
-        return
-
-    positions = state.setdefault("positions", {})
-    rh_by_sym = {p["symbol"]: p for p in rh_positions}
-    changes   = []
-
-    for sym in list(positions):
-        if sym not in rh_by_sym:
-            changes.append(f"DROPPED {sym}: tracked locally but not held in Robinhood "
-                           "(closed externally?)")
-            del positions[sym]
-
-    # With multiple bots on one account, unknown holdings may belong to the
-    # other bot — adopting them would double-manage (and double-sell) them.
-    # Adoption is therefore opt-in via ADOPT_UNKNOWN=true; default is to warn.
-    adopt = os.environ.get("ADOPT_UNKNOWN", "false").lower() == "true"
-    unmanaged = []
-    for sym, p in rh_by_sym.items():
-        if sym in positions:
-            continue
-        if sym not in SYMBOLS:
-            log.info("Ignoring %s held in account — not in bot universe", sym)
-            continue
-        if not adopt:
-            unmanaged.append(f"{sym}: {p['quantity']} sh @ ${p['avg_price']:.2f}")
-            continue
-        positions[sym] = {
-            "entry":      p["avg_price"],
-            "peak":       p["avg_price"],
-            "dollars":    round(p["quantity"] * p["avg_price"], 2),
-            "entry_date": "adopted " + datetime.now(ET).strftime("%Y-%m-%d %H:%M ET"),
+        ticker = yf.Ticker(symbol)
+        hist   = ticker.history(period="30d", interval="1d")
+        if hist.empty or len(hist) < 14:
+            return {"error": f"Not enough history for {symbol}"}
+        prices  = hist["Close"].tolist()
+        volumes = hist["Volume"].tolist()
+        n       = min(len(prices), len(volumes))
+        vwap    = round(sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1), 4)
+        avg_vol = sum(volumes[-10:]) / 10
+        info    = ticker.fast_info
+        return {
+            "symbol":       symbol,
+            "price":        round(prices[-1], 2),
+            "prev_close":   round(prices[-2], 2),
+            "rsi":          calc_rsi(prices),
+            "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
+            "vwap":         vwap,
+            "ema9":         calc_ema(prices, 9),
+            "ema20":        calc_ema(prices, 20),
+            "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1,
+            "market_cap":   getattr(info, "market_cap",  None),
+            "pe_ratio":     getattr(info, "pe_ratio",    None),
+            "52w_high":     getattr(info, "year_high",   None),
+            "52w_low":      getattr(info, "year_low",    None),
         }
-        changes.append(f"ADOPTED {sym}: {p['quantity']} sh @ ${p['avg_price']:.2f} "
-                       f"(${positions[sym]['dollars']:.2f}) — stop set from avg cost")
-    if unmanaged:
-        notify("Holdings this bot is NOT managing",
-               "These account positions are not in this bot's local state and "
-               "ADOPT_UNKNOWN is off (they may belong to the other bot):\n"
-               + "\n".join(unmanaged))
-
-    save_state(state)
-    if changes:
-        notify("Startup reconciliation: state changed", "\n".join(changes))
-        for c in changes:
-            log.info("reconcile: %s", c)
-    else:
-        log.info("Reconciliation clean — local state matches Robinhood (%d position(s))",
-                 len(positions))
-
-
-# ── Daily loss limit ──────────────────────────────────────────────────────────
-
-def roll_daily(state):
-    today = datetime.now(ET).strftime("%Y-%m-%d")
-    d = state.get("daily")
-    if not d or d.get("date") != today:
-        state["daily"] = {"date": today, "realized": 0.0, "halted": False}
-    return state["daily"]
-
-
-def mark_day(pos, price, today):
-    """First price seen today becomes the position's day-start mark."""
-    if pos.get("day_mark_date") != today:
-        pos["day_mark"]      = price
-        pos["day_mark_date"] = today
-
-
-def daily_pnl(state, positions):
-    d = state["daily"]
-    unrealized = 0.0
-    for pos in positions.values():
-        last = pos.get("last_price")
-        mark = pos.get("day_mark")
-        if last and mark:
-            unrealized += pos["dollars"] / pos["entry"] * (last - mark)
-    return d["realized"] + unrealized
-
-
-# ── PEAD earnings overlay ─────────────────────────────────────────────────────
-
-EARNINGS_CAL_FILE = os.path.join(DATA_DIR, "earnings_cal.json")
-
-
-def refresh_earnings_calendar(today):
-    """Once per trading day, cache each symbol's recent/upcoming earnings
-    timestamps. Returns {symbol: [timestamp strings]}."""
-    try:
-        with open(EARNINGS_CAL_FILE) as f:
-            saved = json.load(f)
-        if saved.get("date") == today:
-            return saved.get("data", {})
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    log.info("Refreshing earnings calendar for %d symbols (once per day)...",
-             len(SYMBOLS))
-    data = {}
-    for sym in SYMBOLS:
-        try:
-            ed = yf.Ticker(sym).get_earnings_dates(limit=4)
-            if ed is not None and len(ed):
-                data[sym] = [str(ts) for ts in ed.index]
-        except Exception:
-            continue
-        time.sleep(0.1)
-    log.info("Earnings calendar: %d/%d symbols", len(data), len(SYMBOLS))
-    try:
-        with open(EARNINGS_CAL_FILE, "w") as f:
-            json.dump({"date": today, "data": data}, f)
-    except OSError as exc:
-        log.warning("Could not persist earnings calendar: %s", exc)
-    return data
-
-
-def pead_signal(sym, ind, cal):
-    """True if today is sym's post-earnings reaction day and it gapped up
-    at least PEAD_GAP at the open."""
-    if ind["open_gap"] < PEAD_GAP:
-        return False
-    today, prev = ind["last_trading_date"], ind["prev_trading_date"]
-    for ts in cal.get(sym, []):
-        day  = ts[:10]
-        hour = int(ts[11:13]) if len(ts) >= 13 else 16
-        # AMC report on the previous trading day, or BMO report this morning
-        if (day == prev and hour >= 12) or (day == today and hour < 12):
-            return True
-    return False
-
-
-# ── Strategy meta-switching ───────────────────────────────────────────────────
-
-def evaluate_strategies():
-    """Simulate both strategies over recent history (same engine as the
-    backtests) and return ({strategy: trailing return}, winner) or None."""
-    import backtest_v2 as bv
-    try:
-        raw = yf.download(SYMBOLS, period="1y", interval="1d", auto_adjust=True,
-                          progress=False, group_by="ticker", threads=True)
     except Exception as exc:
-        log.error("Meta-eval download failed: %s", exc)
-        return None
-    data = {}
-    for sym in SYMBOLS:
-        try:
-            df = raw[sym].dropna()
-        except (KeyError, IndexError):
-            continue
-        if len(df) >= bv.LOOKBACK + 10:
-            data[sym] = df
-    if len(data) < 50:
-        log.warning("Meta-eval: only %d symbols with data — skipping", len(data))
-        return None
-
-    all_dates = sorted(set().union(*[set(df.index) for df in data.values()]))
-    dates = all_dates[-(META_WARMUP + SWITCH_LOOKBACK):]
-    bv.SYMBOLS = sorted(data)
-
-    results = {}
-    for strat in ("momentum", "meanrev"):
-        equity, _ = bv.simulate(data, dates, {}, strat, False)
-        if len(equity) <= SWITCH_LOOKBACK:
-            return None
-        results[strat] = equity[-1][1] / equity[-(SWITCH_LOOKBACK + 1)][1] - 1
-    winner = max(results, key=results.get)
-    return results, winner
+        return {"error": str(exc)}
 
 
-def maybe_switch_strategy(state, today):
-    """Every SWITCH_EVERY trading days, adopt the better-performing strategy.
-    Returns the currently active strategy."""
-    meta = state.setdefault("meta", {
-        "active": STRATEGY, "days_since_eval": SWITCH_EVERY, "last_date": None,
-    })
-    if not META_SWITCH:
-        return meta["active"]
-
-    if meta["last_date"] != today:
-        meta["days_since_eval"] += 1
-        meta["last_date"] = today
-
-    if meta["days_since_eval"] >= SWITCH_EVERY:
-        out = evaluate_strategies()
-        if out is None:
-            return meta["active"]  # keep current; retry next scan
-        results, winner = out
-        meta["days_since_eval"] = 0
-        detail = " vs ".join(f"{s} {100 * r:+.2f}%" for s, r in results.items())
-        if winner != meta["active"]:
-            log.info("Strategy switch: %s -> %s (trailing %dd: %s)",
-                     meta["active"], winner, SWITCH_LOOKBACK, detail)
-            notify(f"Strategy switched to {winner}",
-                   f"Trailing {SWITCH_LOOKBACK} trading-day simulated returns: {detail}\n"
-                   "Open positions keep their original exit rules; new entries "
-                   f"use {winner}.")
-            meta["active"] = winner
-        else:
-            log.info("Strategy check: keeping %s (trailing %dd: %s)",
-                     meta["active"], SWITCH_LOOKBACK, detail)
-    return meta["active"]
+def tool_get_trending_stocks() -> dict:
+    try:
+        url  = "https://query1.finance.yahoo.com/v1/finance/trending/US"
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        quotes = resp.json()["finance"]["result"][0]["quotes"]
+        syms   = [q["symbol"].upper() for q in quotes[:20]
+                  if q.get("symbol", "").replace("-", "").isalpha()]
+        return {"trending": syms}
+    except Exception as exc:
+        return {"error": str(exc), "trending": ["SOXL", "NVDL", "SPXL", "NVDA", "TSLA"]}
 
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+def tool_get_news(symbol: str) -> dict:
+    try:
+        news = yf.Ticker(symbol).news or []
+        return {"symbol": symbol, "headlines": [n.get("title", "") for n in news[:5]]}
+    except Exception as exc:
+        return {"error": str(exc), "headlines": []}
+
+
+TOOLS = [
+    {
+        "name": "fetch_market_data",
+        "description": (
+            "Fetch technical indicators for a stock: price, RSI, MACD, VWAP, EMA9/20, "
+            "volume ratio, market cap, P/E. Use before any trade decision."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"symbol": {"type": "string"}},
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_trending_stocks",
+        "description": "Return a list of currently trending US stock symbols from Yahoo Finance.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_news",
+        "description": "Return recent news headlines for a stock symbol.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"symbol": {"type": "string"}},
+            "required": ["symbol"],
+        },
+    },
+]
+
+
+def dispatch_tool(name: str, inp: dict) -> str:
+    if name == "fetch_market_data":
+        return json.dumps(tool_fetch_market_data(inp["symbol"]))
+    if name == "get_trending_stocks":
+        return json.dumps(tool_get_trending_stocks())
+    if name == "get_news":
+        return json.dumps(tool_get_news(inp["symbol"]))
+    return json.dumps({"error": f"unknown tool {name}"})
+
+
+# ── Main agentic loop ─────────────────────────────────────────────────────────
 
 def run_trading_loop():
     if not is_market_hours():
         log.info("Outside market hours — skipping")
         return
 
-    now   = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
-    state = load_state()
+    now = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
+    log.info("\u2550\u2550\u2550 Autonomous trading run at %s \u2550\u2550\u2550", now)
 
-    if is_halted(state):
-        log.warning("Bot is HALTED (%s) — no trading. Replace ROBINHOOD_TOKEN to resume.",
-                    state["halt"]["reason"])
-        return
+    system = f"""You are an aggressive, autonomous day-trading agent with full control over a Robinhood brokerage account.
 
-    positions = state.setdefault("positions", {})
-    daily     = roll_daily(state)
-    today     = daily["date"]
-    loss_limit = TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100
-    active    = "pead" if BOT_MODE == "pead" else maybe_switch_strategy(state, today)
-    log.info("═══ %s scan at %s ═══", active, now)
+Account : {ACCT} (cash, agentic-enabled)
+Budget  : ${TOTAL_BUDGET} total | max ${MAX_POSITION} per position
+Time    : {now}
 
-    market = fetch_all_indicators(sorted(set(SYMBOLS) | set(positions)))
-    if not market:
-        log.warning("No market data this scan — skipping")
-        return
+PHILOSOPHY: This account exists to trade actively. Cash sitting idle is a missed
+opportunity, not a "safe" choice. You should bias toward action over inaction.
+HOLD is a valid choice only when you've genuinely found nothing — not a default.
 
-    # 1. manage open positions
-    for symbol in list(positions):
-        ind = market.get(symbol)
-        if ind is None:
-            continue
-        pos = positions[symbol]
-        mark_day(pos, ind["price"], today)
-        pos["peak"]       = max(pos.get("peak", pos["entry"]), ind["price"])
-        pos["last_price"] = ind["price"]
-        reason = exit_signal(ind, pos)
-        if reason:
-            log.info("%s SELL signal: %s", symbol, reason)
-            status = execute_order("SELL", symbol, None, reason)
-            if status == "auth":
-                set_halt(state, f"Robinhood auth failed selling {symbol}")
-                return
-            if status == "ok":
-                pnl = pos["dollars"] / pos["entry"] * (ind["price"] - pos["day_mark"])
-                daily["realized"] += pnl
-                est_total = pos["dollars"] * (ind["price"] / pos["entry"] - 1)
-                notify(f"SELL {symbol} — {reason}",
-                       f"Sold entire {symbol} position.\nEntry ${pos['entry']:.2f}, "
-                       f"exit ~${ind['price']:.2f}, est. P&L ${est_total:+.2f}.")
-                del positions[symbol]
-            else:
-                notify(f"SELL {symbol} FAILED",
-                       f"Exit signal fired ({reason}) but the order did not confirm. "
-                       "Check the account manually.")
+Each run you must:
+1. Call get_equity_positions (Robinhood MCP) to see current holdings and cash available.
+2. Call get_trending_stocks to discover candidates, then get_news + fetch_market_data
+   on at least 3-5 of them.
+3. Apply momentum/mean-reversion logic liberally:
+   - RSI < 40 or bouncing off VWAP/EMA support -> consider BUY
+   - RSI > 65 or a held position up >3% -> consider taking profit (SELL)
+   - A held position down >3% -> consider cutting the loss (SELL)
+   - Strong volume spike + positive news -> consider BUY even if RSI is neutral
+4. If you have idle cash and at least one candidate clears a reasonable bar
+   (don't require perfection on all signals - 2 out of 3 aligned is enough),
+   PLACE THE TRADE. Use review_equity_order then place_equity_order.
+5. Only trade stocks with market cap > $500M. Never exceed ${MAX_POSITION} per position,
+   and never invest more than you have in cash.
+6. Think out loud with specific numbers (RSI, price, % change) for every decision.
+
+Default posture: look for a reason TO trade, not a reason not to. If multiple
+candidates look reasonable, trade the best one rather than waiting for a perfect setup."""
+
+    messages = [
+        {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
+    ]
+
+    while True:
+        resp = client.beta.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            betas=["mcp-client-2025-04-04"],
+            system=system,
+            mcp_servers=[
+                {
+                    "type": "url",
+                    "url":  "https://agent.robinhood.com/mcp/trading",
+                    "name": "Rh",
+                    "authorization_token": rh_token,
+                }
+            ],
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        for block in resp.content:
+            if hasattr(block, "text") and block.text:
+                log.info("Claude: %s", block.text[:800])
+
+        if resp.stop_reason == "end_turn":
+            log.info("Trading run complete.")
+            break
+
+        if resp.stop_reason == "tool_use":
+            tool_results = []
+            for block in resp.content:
+                if block.type == "tool_use":
+                    log.info("-> tool: %s  input: %s", block.name, json.dumps(block.input)[:120])
+                    result = dispatch_tool(block.name, block.input)
+                    log.info("<- result: %s", result[:200])
+                    tool_results.append({
+                        "type":        "tool_result",
+                        "tool_use_id": block.id,
+                        "content":     result,
+                    })
+            messages = messages + [
+                {"role": "assistant", "content": resp.content},
+                {"role": "user",      "content": tool_results},
+            ]
         else:
-            log.info("%s HOLD  price=%.2f entry=%.2f peak=%.2f rsi=%.1f",
-                     symbol, ind["price"], pos["entry"], pos["peak"], ind["rsi"])
-
-    # 2. daily loss limit — blocks new entries, never exits
-    pnl_today = daily_pnl(state, positions)
-    if not daily["halted"] and pnl_today <= -loss_limit:
-        daily["halted"] = True
-        notify("Daily loss limit hit — no new entries today",
-               f"Day P&L ${pnl_today:+.2f} breached -${loss_limit:.2f} "
-               f"({DAILY_LOSS_LIMIT_PCT}% of ${TOTAL_BUDGET}). "
-               "Open positions keep their stops; entries resume tomorrow.")
-
-    # 3. look for entries within budget
-    budget_used = sum(p["dollars"] for p in positions.values())
-    if daily["halted"]:
-        log.info("Entries blocked for today (daily loss limit). Day P&L: $%+.2f", pnl_today)
-    else:
-        # 3a. PEAD entries (pead mode only, mornings only — late entries chase
-        # a gap the backtest bought at the open)
-        if BOT_MODE == "pead" and datetime.now(ET).hour < PEAD_CUTOFF_HOUR:
-            cal    = refresh_earnings_calendar(today)
-            traded = daily.setdefault("pead_traded", [])
-            for symbol in SYMBOLS:
-                if symbol in positions or symbol in traded:
-                    continue
-                available = TOTAL_BUDGET - budget_used
-                if available < 1:
-                    break
-                ind = market.get(symbol)
-                if ind is None or not pead_signal(symbol, ind, cal):
-                    continue
-                dollars = min(MAX_POSITION, available)
-                detail  = (f"post-earnings gap {100 * ind['open_gap']:+.1f}%, "
-                           f"price={ind['price']:.2f}")
-                log.info("%s PEAD BUY signal: %s", symbol, detail)
-                status = execute_order("BUY", symbol, dollars, f"pead entry: {detail}")
-                if status == "auth":
-                    set_halt(state, f"Robinhood auth failed buying {symbol}")
-                    return
-                if status == "ok":
-                    positions[symbol] = {
-                        "entry":         ind["price"],
-                        "peak":          ind["price"],
-                        "dollars":       dollars,
-                        "entry_date":    now,
-                        "strategy":      "pead",
-                        "day_mark":      ind["price"],
-                        "day_mark_date": today,
-                        "last_price":    ind["price"],
-                    }
-                    budget_used += dollars
-                    traded.append(symbol)
-                    notify(f"BUY {symbol} ${dollars:.0f} (PEAD)",
-                           f"Earnings reaction entry.\n{detail}\n"
-                           "Exit: trailing stop 5% below peak (initial -3%).")
-                else:
-                    notify(f"PEAD BUY {symbol} FAILED",
-                           f"Signal fired but the order did not confirm.\n{detail}")
-
-        # 3b. core momentum/meanrev entries
-        scanned = 0
-        for symbol in SYMBOLS if BOT_MODE == "core" else []:
-            if symbol in positions:
-                continue
-            available = TOTAL_BUDGET - budget_used
-            if available < 1:
-                break
-            ind = market.get(symbol)
-            if ind is None:
-                continue
-            scanned += 1
-            if entry_signal(ind, active):
-                dollars = min(MAX_POSITION, available)
-                detail  = (f"price={ind['price']:.2f} vwap={ind['vwap']:.2f} "
-                           f"macd={ind['macd']:.3f} rsi={ind['rsi']:.1f} "
-                           f"vol={ind['volume_ratio']:.1f}x")
-                log.info("%s BUY signal (%s): %s", symbol, active, detail)
-                status = execute_order("BUY", symbol, dollars, f"{active} entry: {detail}")
-                if status == "auth":
-                    set_halt(state, f"Robinhood auth failed buying {symbol}")
-                    return
-                if status == "ok":
-                    positions[symbol] = {
-                        "entry":         ind["price"],
-                        "peak":          ind["price"],
-                        "dollars":       dollars,
-                        "entry_date":    now,
-                        "strategy":      active,
-                        "day_mark":      ind["price"],
-                        "day_mark_date": today,
-                        "last_price":    ind["price"],
-                    }
-                    budget_used += dollars
-                    notify(f"BUY {symbol} ${dollars:.0f}",
-                           f"{active} entry at ~${ind['price']:.2f}\n{detail}")
-                else:
-                    notify(f"BUY {symbol} FAILED",
-                           f"Entry signal fired but the order did not confirm.\n{detail}")
-        log.info("Scanned %d symbols for entries", scanned)
-
-    save_state(state)
-    log.info("Scan complete — %d open, $%.0f/$%d budget, day P&L $%+.2f",
-             len(positions), budget_used, TOTAL_BUDGET, daily_pnl(state, positions))
+            log.info("Stop reason: %s -- ending loop.", resp.stop_reason)
+            break
 
 
 def main():
-    if BOT_MODE == "pead":
-        log.info("PEAD earnings bot starting — gap>=%.0f%% reaction-day entries "
-                 "before %d:00 ET, trailing-stop exits", 100 * PEAD_GAP, PEAD_CUTOFF_HOUR)
-    elif META_SWITCH:
-        log.info("Core bot starting — meta-switching every %d trading days on "
-                 "trailing %dd results (initial: %s)",
-                 SWITCH_EVERY, SWITCH_LOOKBACK, STRATEGY)
-    else:
-        log.info("Core bot starting — strategy=%s", STRATEGY)
-    log.info("Scan: %d min | Account: %s | Budget: $%d | Max/position: $%d | "
-             "Daily loss limit: %.1f%% | Notify: %s",
-             SCAN_MINUTES, ACCT, TOTAL_BUDGET, MAX_POSITION,
-             DAILY_LOSS_LIMIT_PCT, NOTIFY_EMAIL)
-
-    state = load_state()
-    if not is_halted(state):
-        reconcile(state)
-        notify("Bot started",
-               f"Mode: {BOT_MODE} | Universe: {len(SYMBOLS)} symbols | "
-               f"Budget: ${TOTAL_BUDGET:.0f} | Open positions: "
-               f"{len(state.get('positions', {}))}\n"
-               "If you received this, email notifications are working.")
-    else:
-        log.warning("Starting HALTED (%s) — replace Robinhood credentials to resume.",
-                    state["halt"]["reason"])
+    log.info("Autonomous AI Trading Bot starting -- Claude runs the full loop")
+    log.info("Scan interval: %d min | Account: %s | Budget: $%d",
+             SCAN_MINUTES, ACCT, TOTAL_BUDGET)
 
     schedule.every(SCAN_MINUTES).minutes.do(run_trading_loop)
 
-    log.info("Running first scan immediately...")
+    log.info("Running first loop immediately...")
     run_trading_loop()
 
     while True:
