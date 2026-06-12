@@ -286,10 +286,23 @@ def dispatch_tool(name: str, inp: dict) -> str:
 
 def fetch_portfolio_equity():
     """Ask Claude (via Robinhood MCP) for current total portfolio equity. Returns float or None."""
+    return _fetch_portfolio_field(
+        "total equity", "the total portfolio equity"
+    )
+
+
+def fetch_invested_equity():
+    """Ask Claude (via Robinhood MCP) for current invested equity (stock positions, excludes cash)."""
+    return _fetch_portfolio_field(
+        "equity_value", "the equity_value (value of stock positions, not including cash)"
+    )
+
+
+def _fetch_portfolio_field(label, question):
     for attempt in (1, 2):
         token = get_rh_access_token(force_refresh=(attempt == 2))
         if not token:
-            log.warning("Could not fetch portfolio equity: no Robinhood access token")
+            log.warning("Could not fetch %s: no Robinhood access token", label)
             return None
         try:
             resp = client.beta.messages.create(
@@ -298,8 +311,8 @@ def fetch_portfolio_equity():
                 betas=["mcp-client-2025-04-04"],
                 system=(
                     f"You are a read-only assistant for Robinhood account {ACCT}. "
-                    "Call get_portfolio (or equivalent) and reply with ONLY the total "
-                    "equity as a plain number, e.g. 512.34. No words, no symbols."
+                    f"Call get_portfolio (or equivalent) and reply with ONLY {question} "
+                    "as a plain number, e.g. 512.34. No words, no symbols."
                 ),
                 mcp_servers=[
                     {
@@ -309,7 +322,7 @@ def fetch_portfolio_equity():
                         "authorization_token": token,
                     }
                 ],
-                messages=[{"role": "user", "content": "What is the total portfolio equity?"}],
+                messages=[{"role": "user", "content": f"What is {question}?"}],
             )
             text = " ".join(b.text for b in resp.content if hasattr(b, "text"))
             import re
@@ -319,12 +332,12 @@ def fetch_portfolio_equity():
             return None
         except anthropic.BadRequestError as exc:
             if "Authentication error" in str(exc) and attempt == 1 and _can_refresh():
-                log.warning("MCP auth failed fetching equity — force-refreshing token and retrying once")
+                log.warning("MCP auth failed fetching %s — force-refreshing token and retrying once", label)
                 continue
-            log.warning("Could not fetch portfolio equity: %s", exc)
+            log.warning("Could not fetch %s: %s", label, exc)
             return None
         except Exception as exc:
-            log.warning("Could not fetch portfolio equity: %s", exc)
+            log.warning("Could not fetch %s: %s", label, exc)
             return None
     return None
 
@@ -355,6 +368,20 @@ def run_trading_loop():
             "You may still call get_equity_positions and place SELL orders to manage "
             "or exit existing positions (e.g. stop-losses), but place no new buys."
         )
+
+    # \u2500\u2500 Total budget check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    invested = fetch_invested_equity()
+    if invested is not None:
+        log.info("Invested equity: $%.2f / $%d budget", invested, TOTAL_BUDGET)
+        if invested >= TOTAL_BUDGET:
+            trading_clause += (
+                f"\n\n*** BUDGET LIMIT REACHED: ${invested:,.2f} is already invested, "
+                f"at or above the ${TOTAL_BUDGET} total budget. ***\n"
+                "Do NOT place any new BUY orders. You may still call get_equity_positions "
+                "and place SELL orders to manage or exit existing positions, but place no new buys."
+            )
+    else:
+        log.info("Invested equity unavailable \u2014 skipping budget check.")
     # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     system = f"""You are an aggressive, autonomous day-trading agent with full control over a Robinhood brokerage account.
