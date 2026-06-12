@@ -71,7 +71,7 @@ def main():
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             if q.get("state", [None])[0] == state and "code" in q:
                 result["code"] = q["code"][0]
-                body = "<h2>Authorized — you can close this tab.</h2>".encode("utf-8")
+                body = b"<h2>Authorized — you can close this tab.</h2>"
             else:
                 body = b"<h2>Missing/invalid code. Re-run get_token.py.</h2>"
             self.send_response(200)

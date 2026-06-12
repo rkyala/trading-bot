@@ -39,11 +39,79 @@ if not api_key:
     log.error("ANTHROPIC_API_KEY not set. Exiting.")
     sys.exit(1)
 
-rh_token = os.environ.get("ROBINHOOD_TOKEN", "")
-if not rh_token:
-    log.warning("ROBINHOOD_TOKEN not set — trades will fail auth.")
+# Robinhood auth — two modes:
+#   OAuth (preferred): RH_CLIENT_ID + RH_REFRESH_TOKEN, bot mints access tokens
+#   itself (run get_token.py once to obtain these).
+#   Static (legacy): ROBINHOOD_TOKEN, expires after ~4 days.
+RH_CLIENT_ID     = os.environ.get("RH_CLIENT_ID", "")
+RH_REFRESH_TOKEN = os.environ.get("RH_REFRESH_TOKEN", "")
+rh_token         = os.environ.get("ROBINHOOD_TOKEN", "")
+RH_TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
+TOKEN_FILE       = os.path.join(os.environ.get("DATA_DIR", "."), "rh_token.json")
+
+if RH_CLIENT_ID and RH_REFRESH_TOKEN:
+    log.info("Robinhood auth: OAuth refresh mode")
+elif rh_token:
+    log.warning("Robinhood auth: static ROBINHOOD_TOKEN (expires ~4 days) — "
+                "run get_token.py and set RH_CLIENT_ID/RH_REFRESH_TOKEN instead.")
+else:
+    log.warning("No Robinhood credentials set — trades will fail auth.")
 
 client = anthropic.Anthropic(api_key=api_key)
+
+# ── Robinhood token management ──────────────────────────────────────────────
+
+_tok = {"access": None, "expires_at": 0.0, "refresh": None}
+
+
+def _can_refresh():
+    return bool(RH_CLIENT_ID and (RH_REFRESH_TOKEN or _tok["refresh"]))
+
+
+def get_rh_access_token(force_refresh=False):
+    """Returns a valid access token, refreshing via OAuth when possible."""
+    if not _can_refresh():
+        return rh_token or None  # static mode
+
+    if _tok["access"] is None:  # warm cache from disk (survives restarts w/ volume)
+        try:
+            with open(TOKEN_FILE) as f:
+                saved = json.load(f)
+            _tok.update({k: saved.get(k, _tok[k]) for k in _tok})
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    if not force_refresh and _tok["access"] and time.time() < _tok["expires_at"] - 600:
+        return _tok["access"]
+
+    for refresh in dict.fromkeys([_tok["refresh"] or "", RH_REFRESH_TOKEN]):
+        if not refresh:
+            continue
+        try:
+            r = requests.post(RH_TOKEN_URL, data={
+                "grant_type":    "refresh_token",
+                "refresh_token": refresh,
+                "client_id":     RH_CLIENT_ID,
+            }, timeout=20)
+            if r.status_code != 200:
+                log.error("Token refresh failed: %s %s", r.status_code, r.text[:200])
+                continue
+            d = r.json()
+            _tok["access"]     = d["access_token"]
+            _tok["expires_at"] = time.time() + float(d.get("expires_in", 3600))
+            if d.get("refresh_token"):
+                _tok["refresh"] = d["refresh_token"]
+            try:
+                with open(TOKEN_FILE, "w") as f:
+                    json.dump(_tok, f)
+            except OSError as exc:
+                log.warning("Could not persist token cache: %s", exc)
+            log.info("Robinhood access token refreshed (valid ~%.0fh)",
+                     float(d.get("expires_in", 0)) / 3600)
+            return _tok["access"]
+        except Exception as exc:
+            log.error("Token refresh error: %s", exc)
+    return None
 
 
 def is_market_hours() -> bool:
@@ -213,33 +281,46 @@ def dispatch_tool(name: str, inp: dict) -> str:
 
 def fetch_portfolio_equity():
     """Ask Claude (via Robinhood MCP) for current total portfolio equity. Returns float or None."""
-    try:
-        resp = client.beta.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=300,
-            betas=["mcp-client-2025-04-04"],
-            system=(
-                f"You are a read-only assistant for Robinhood account {ACCT}. "
-                "Call get_portfolio (or equivalent) and reply with ONLY the total "
-                "equity as a plain number, e.g. 512.34. No words, no symbols."
-            ),
-            mcp_servers=[
-                {
-                    "type": "url",
-                    "url":  "https://agent.robinhood.com/mcp/trading",
-                    "name": "Rh",
-                    "authorization_token": rh_token,
-                }
-            ],
-            messages=[{"role": "user", "content": "What is the total portfolio equity?"}],
-        )
-        text = " ".join(b.text for b in resp.content if hasattr(b, "text"))
-        import re
-        m = re.search(r"[\d,]+\.?\d*", text)
-        if m:
-            return float(m.group().replace(",", ""))
-    except Exception as exc:
-        log.warning("Could not fetch portfolio equity: %s", exc)
+    for attempt in (1, 2):
+        token = get_rh_access_token(force_refresh=(attempt == 2))
+        if not token:
+            log.warning("Could not fetch portfolio equity: no Robinhood access token")
+            return None
+        try:
+            resp = client.beta.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=300,
+                betas=["mcp-client-2025-04-04"],
+                system=(
+                    f"You are a read-only assistant for Robinhood account {ACCT}. "
+                    "Call get_portfolio (or equivalent) and reply with ONLY the total "
+                    "equity as a plain number, e.g. 512.34. No words, no symbols."
+                ),
+                mcp_servers=[
+                    {
+                        "type": "url",
+                        "url":  "https://agent.robinhood.com/mcp/trading",
+                        "name": "Rh",
+                        "authorization_token": token,
+                    }
+                ],
+                messages=[{"role": "user", "content": "What is the total portfolio equity?"}],
+            )
+            text = " ".join(b.text for b in resp.content if hasattr(b, "text"))
+            import re
+            m = re.search(r"[\d,]+\.?\d*", text)
+            if m:
+                return float(m.group().replace(",", ""))
+            return None
+        except anthropic.BadRequestError as exc:
+            if "Authentication error" in str(exc) and attempt == 1 and _can_refresh():
+                log.warning("MCP auth failed fetching equity — force-refreshing token and retrying once")
+                continue
+            log.warning("Could not fetch portfolio equity: %s", exc)
+            return None
+        except Exception as exc:
+            log.warning("Could not fetch portfolio equity: %s", exc)
+            return None
     return None
 
 
@@ -305,23 +386,39 @@ candidates look reasonable, trade the best one rather than waiting for a perfect
         {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
     ]
 
+    force_refresh = False
+    auth_retries = 0
     while True:
-        resp = client.beta.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            betas=["mcp-client-2025-04-04"],
-            system=system,
-            mcp_servers=[
-                {
-                    "type": "url",
-                    "url":  "https://agent.robinhood.com/mcp/trading",
-                    "name": "Rh",
-                    "authorization_token": rh_token,
-                }
-            ],
-            tools=TOOLS,
-            messages=messages,
-        )
+        token = get_rh_access_token(force_refresh=force_refresh)
+        if not token:
+            log.error("No Robinhood access token available — aborting run.")
+            break
+        force_refresh = False
+        try:
+            resp = client.beta.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                betas=["mcp-client-2025-04-04"],
+                system=system,
+                mcp_servers=[
+                    {
+                        "type": "url",
+                        "url":  "https://agent.robinhood.com/mcp/trading",
+                        "name": "Rh",
+                        "authorization_token": token,
+                    }
+                ],
+                tools=TOOLS,
+                messages=messages,
+            )
+        except anthropic.BadRequestError as exc:
+            if "Authentication error" in str(exc) and _can_refresh() and auth_retries == 0:
+                log.warning("MCP auth failed — force-refreshing token and retrying once")
+                force_refresh = True
+                auth_retries += 1
+                continue
+            log.error("MCP request failed: %s", exc)
+            break
 
         for block in resp.content:
             if hasattr(block, "text") and block.text:
