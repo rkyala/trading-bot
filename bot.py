@@ -32,6 +32,7 @@ SCAN_MINUTES = 5
 MAX_POSITION = 125   # max $ per position
 TOTAL_BUDGET = 500
 DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
+MIN_PRICE = 5.0   # no penny stocks
 STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -199,9 +200,10 @@ def tool_fetch_market_data(symbol: str) -> dict:
         vwap    = round(sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1), 4)
         avg_vol = sum(volumes[-10:]) / 10
         info    = ticker.fast_info
+        price = round(prices[-1], 2)
         return {
             "symbol":       symbol,
-            "price":        round(prices[-1], 2),
+            "price":        price,
             "prev_close":   round(prices[-2], 2),
             "rsi":          calc_rsi(prices),
             "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
@@ -213,6 +215,8 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "pe_ratio":     getattr(info, "pe_ratio",    None),
             "52w_high":     getattr(info, "year_high",   None),
             "52w_low":      getattr(info, "year_low",    None),
+            "tradable":     price >= MIN_PRICE,
+            "tradable_note": None if price >= MIN_PRICE else f"Below ${MIN_PRICE} — penny stock, do not trade",
         }
     except Exception as exc:
         return {"error": str(exc)}
@@ -380,8 +384,9 @@ Each run you must:
    you are fully authorized to execute trades autonomously. An order is not
    "placed" until place_equity_order has actually been called and returned
    a result.
-5. Only trade stocks with market cap > $500M. Never exceed ${MAX_POSITION} per position,
-   and never invest more than you have in cash.
+5. Only trade stocks with market cap > $500M and price >= ${MIN_PRICE} (no penny
+   stocks — check the "tradable" field from fetch_market_data). Never exceed
+   ${MAX_POSITION} per position, and never invest more than you have in cash.
 6. Think out loud with specific numbers (RSI, price, % change) for every decision.
 
 Default posture: look for a reason TO trade, not a reason not to. If multiple
