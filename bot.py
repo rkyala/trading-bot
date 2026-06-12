@@ -9,12 +9,14 @@ import anthropic
 import yfinance as yf
 import requests
 import schedule
+import smtplib
 import time
 import logging
 import os
 import sys
 import json
 from datetime import datetime
+from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 
 logging.basicConfig(
@@ -34,6 +36,13 @@ TOTAL_BUDGET = 500
 DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
 MIN_PRICE = 5.0   # no penny stocks
 STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
+
+# Email alerts (requires SMTP_HOST / SMTP_USER / SMTP_PASS env vars; logs otherwise)
+NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "kris.yalala@yahoo.com")
+SMTP_HOST    = os.environ.get("SMTP_HOST", "")
+SMTP_PORT    = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER    = os.environ.get("SMTP_USER", "")
+SMTP_PASS    = os.environ.get("SMTP_PASS", "")
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -113,6 +122,47 @@ def get_rh_access_token(force_refresh=False):
         except Exception as exc:
             log.error("Token refresh error: %s", exc)
     return None
+
+
+# ── Notifications ────────────────────────────────────────────────────────────
+
+TRADE_LOG = []  # accumulated trades since the last hourly email
+
+
+def notify(subject, body):
+    log.info("NOTIFY: %s | %s", subject, body.replace("\n", " ")[:300])
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        log.warning("Email not configured (set SMTP_HOST/SMTP_USER/SMTP_PASS) — "
+                    "notification logged only.")
+        return
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = f"[trading-bot] {subject}"
+        msg["From"]    = SMTP_USER
+        msg["To"]      = NOTIFY_EMAIL
+        msg.set_content(body)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+    except Exception as exc:
+        log.error("Email send failed: %s", exc)
+
+
+def send_trade_summary():
+    """Hourly consolidated email of trades placed since the last summary."""
+    if not TRADE_LOG:
+        log.info("Hourly summary: no trades to report.")
+        return
+    lines = [
+        f"{t['time']}  {t['side'].upper():4s} {t['symbol']:6s} "
+        f"qty={t['quantity']}  type={t['type']}"
+        + (f"  limit=${t['price']}" if t.get("price") else "")
+        for t in TRADE_LOG
+    ]
+    body = f"{len(TRADE_LOG)} trade(s) in the last hour:\n\n" + "\n".join(lines)
+    notify("Hourly trade summary", body)
+    TRADE_LOG.clear()
 
 
 def is_market_hours() -> bool:
@@ -462,6 +512,18 @@ candidates look reasonable, trade the best one rather than waiting for a perfect
         for block in resp.content:
             if hasattr(block, "text") and block.text:
                 log.info("Claude: %s", block.text[:800])
+            if getattr(block, "type", "") == "mcp_tool_use" and block.name == "place_equity_order":
+                inp = block.input or {}
+                trade = {
+                    "time":     datetime.now(ET).strftime("%H:%M ET"),
+                    "symbol":   inp.get("symbol", "?"),
+                    "side":     inp.get("side", "?"),
+                    "quantity": inp.get("quantity", inp.get("amount", "?")),
+                    "type":     inp.get("type", "?"),
+                    "price":    inp.get("price"),
+                }
+                TRADE_LOG.append(trade)
+                log.info("TRADE PLACED: %s", trade)
 
         if resp.stop_reason == "end_turn":
             log.info("Trading run complete.")
@@ -494,6 +556,7 @@ def main():
              SCAN_MINUTES, ACCT, TOTAL_BUDGET)
 
     schedule.every(SCAN_MINUTES).minutes.do(run_trading_loop)
+    schedule.every().hour.do(send_trade_summary)
 
     log.info("Running first loop immediately...")
     run_trading_loop()
