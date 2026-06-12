@@ -374,7 +374,12 @@ Each run you must:
    - Strong volume spike + positive news -> consider BUY even if RSI is neutral
 4. If you have idle cash and at least one candidate clears a reasonable bar
    (don't require perfection on all signals - 2 out of 3 aligned is enough),
-   PLACE THE TRADE. Use review_equity_order then place_equity_order.
+   PLACE THE TRADE. Call review_equity_order, and then IMMEDIATELY call
+   place_equity_order yourself in the same turn — do not stop after the
+   review to ask for confirmation. There is no human watching this session;
+   you are fully authorized to execute trades autonomously. An order is not
+   "placed" until place_equity_order has actually been called and returned
+   a result.
 5. Only trade stocks with market cap > $500M. Never exceed ${MAX_POSITION} per position,
    and never invest more than you have in cash.
 6. Think out loud with specific numbers (RSI, price, % change) for every decision.
