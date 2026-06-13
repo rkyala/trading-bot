@@ -286,6 +286,38 @@ def tool_get_trending_stocks() -> dict:
         return {"error": str(exc), "trending": ["SOXL", "NVDL", "SPXL", "NVDA", "TSLA"]}
 
 
+def tool_get_top_movers() -> dict:
+    """Return today's biggest % gainers/losers with high volume — often earnings-driven moves."""
+    try:
+        movers = []
+        for scr_id in ("day_gainers", "day_losers", "most_actives"):
+            url  = f"https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=25&scrIds={scr_id}"
+            resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            quotes = resp.json()["finance"]["result"][0]["quotes"]
+            for q in quotes:
+                sym = q.get("symbol", "")
+                if not (sym.replace("-", "").isalpha() and "-" not in sym):
+                    continue
+                pct = q.get("regularMarketChangePercent")
+                vol = q.get("regularMarketVolume")
+                avg_vol = q.get("averageDailyVolume3Month")
+                movers.append({
+                    "symbol":          sym.upper(),
+                    "price":           q.get("regularMarketPrice"),
+                    "pct_change":      round(pct, 2) if pct is not None else None,
+                    "volume":          vol,
+                    "volume_vs_avg":   round(vol / avg_vol, 2) if vol and avg_vol else None,
+                    "market_cap":      q.get("marketCap"),
+                    "category":        scr_id,
+                })
+        # Sort by absolute % move, biggest first — surfaces extraordinary-earnings type moves
+        movers.sort(key=lambda m: abs(m["pct_change"] or 0), reverse=True)
+        return {"movers": movers[:20]}
+    except Exception as exc:
+        return {"error": str(exc), "movers": []}
+
+
 def tool_get_news(symbol: str) -> dict:
     try:
         news = yf.Ticker(symbol).news or []
@@ -313,6 +345,16 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_top_movers",
+        "description": (
+            "Return today's biggest stock movers (gainers, losers, most active) with "
+            "% change and volume vs average. Use this to find stocks with extraordinary "
+            "earnings-driven moves worth day-trading (e.g. a stock up 10%+ on huge volume "
+            "after an earnings beat)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_news",
         "description": "Return recent news headlines for a stock symbol.",
         "input_schema": {
@@ -329,6 +371,8 @@ def dispatch_tool(name: str, inp: dict) -> str:
         return json.dumps(tool_fetch_market_data(inp["symbol"]))
     if name == "get_trending_stocks":
         return json.dumps(tool_get_trending_stocks())
+    if name == "get_top_movers":
+        return json.dumps(tool_get_top_movers())
     if name == "get_news":
         return json.dumps(tool_get_news(inp["symbol"]))
     return json.dumps({"error": f"unknown tool {name}"})
@@ -447,13 +491,20 @@ HOLD is a valid choice only when you've genuinely found nothing — not a defaul
 
 Each run you must:
 1. Call get_equity_positions (Robinhood MCP) to see current holdings and cash available.
-2. Call get_trending_stocks to discover candidates, then get_news + fetch_market_data
-   on at least 3-5 of them.
+2. Call get_top_movers and get_trending_stocks to discover candidates. get_top_movers
+   surfaces stocks with extraordinary moves (e.g. up double-digits on huge volume after
+   an earnings beat, like MU or SNDK after a blowout quarter) — these are prime
+   day-trading candidates. Then call get_news + fetch_market_data on at least 3-5
+   candidates, prioritizing top_movers entries with |pct_change| > 5% and
+   volume_vs_avg > 1.5.
 3. Apply momentum/mean-reversion logic liberally:
    - RSI < 40 or bouncing off VWAP/EMA support -> consider BUY
    - RSI > 65 or a held position up >3% -> consider taking profit (SELL)
    - A held position down >3% -> consider cutting the loss (SELL)
    - Strong volume spike + positive news -> consider BUY even if RSI is neutral
+   - A top_mover with a big positive % move, confirmed by positive earnings news and
+     volume_vs_avg > 1.5, is a strong BUY candidate even if RSI is already elevated —
+     earnings-driven momentum can keep running intraday.
 4. If you have idle cash and at least one candidate clears a reasonable bar
    (don't require perfection on all signals - 2 out of 3 aligned is enough),
    PLACE THE TRADE. Call review_equity_order, and then IMMEDIATELY call
