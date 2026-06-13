@@ -190,6 +190,85 @@ def save_state(state: dict) -> None:
         log.warning("Could not save state: %s", exc)
 
 
+def record_trade(state: dict, trade: dict) -> None:
+    """Append a placed trade to persistent history for the performance-feedback loop."""
+    history = state.setdefault("trade_history", [])
+    history.append({
+        "symbol":   trade.get("symbol"),
+        "side":     trade.get("side"),
+        "quantity": trade.get("quantity"),
+        "price":    trade.get("price"),
+        "time":     trade.get("time"),
+    })
+    state["trade_history"] = history[-500:]  # cap growth
+    save_state(state)
+
+
+def symbol_performance_summary(state: dict, top_n: int = 4) -> str:
+    """Compute realized P&L per symbol via FIFO matching of buy/sell quantities.
+
+    This is a simple feedback loop (not true RL): symbols that have been
+    consistently losing money are surfaced so the agent can deprioritize them,
+    and consistent winners are surfaced so the agent can keep favoring them.
+    """
+    history = state.get("trade_history", [])
+    if not history:
+        return ""
+
+    open_lots = {}   # symbol -> list of (qty, price) buy lots not yet sold
+    realized  = {}   # symbol -> {"pnl": float, "trades": int}
+
+    for t in history:
+        sym = t.get("symbol")
+        side = (t.get("side") or "").lower()
+        qty = t.get("quantity")
+        price = t.get("price")
+        try:
+            qty = float(qty)
+            price = float(price)
+        except (TypeError, ValueError):
+            continue
+        if not sym or qty <= 0 or price <= 0:
+            continue
+
+        lots = open_lots.setdefault(sym, [])
+        if side == "buy":
+            lots.append([qty, price])
+        elif side == "sell":
+            remaining = qty
+            pnl = 0.0
+            while remaining > 0 and lots:
+                lot_qty, lot_price = lots[0]
+                matched = min(lot_qty, remaining)
+                pnl += matched * (price - lot_price)
+                lot_qty -= matched
+                remaining -= matched
+                if lot_qty <= 1e-9:
+                    lots.pop(0)
+                else:
+                    lots[0][0] = lot_qty
+            if pnl != 0.0:
+                r = realized.setdefault(sym, {"pnl": 0.0, "trades": 0})
+                r["pnl"] += pnl
+                r["trades"] += 1
+
+    if not realized:
+        return ""
+
+    ranked = sorted(realized.items(), key=lambda kv: kv[1]["pnl"])
+    losers = [f"{s} (${d['pnl']:+.2f} over {d['trades']} round-trip(s))"
+              for s, d in ranked[:top_n] if d["pnl"] < 0]
+    winners = [f"{s} (${d['pnl']:+.2f} over {d['trades']} round-trip(s))"
+               for s, d in reversed(ranked[-top_n:]) if d["pnl"] > 0]
+
+    lines = []
+    if winners:
+        lines.append("Recent winners — symbols that have made money for you: " + ", ".join(winners))
+    if losers:
+        lines.append("Recent losers — symbols that have lost you money, be more selective on these: " + ", ".join(losers))
+    return "\n".join(lines)
+
+
 def check_daily_loss(equity: float) -> tuple[bool, str]:
     """Returns (halted, status_message). Resets day-start equity each new ET day."""
     state = load_state()
@@ -318,6 +397,28 @@ def tool_get_top_movers() -> dict:
         return {"error": str(exc), "movers": []}
 
 
+MACRO_KEYWORDS = (
+    "fed", "fomc", "powell", "rate", "rates", "inflation", "cpi", "ppi",
+    "jobs report", "nonfarm", "payroll", "unemployment", "gdp", "treasury",
+    "yield", "recession", "tariff",
+)
+
+
+def tool_get_macro_news() -> dict:
+    """Return recent macro/economic headlines (Fed, rates, inflation, jobs, etc.)."""
+    try:
+        headlines = []
+        for sym in ("^GSPC", "^TNX", "^VIX"):
+            for n in (yf.Ticker(sym).news or [])[:8]:
+                title = n.get("title") or n.get("content", {}).get("title", "")
+                if title and any(k in title.lower() for k in MACRO_KEYWORDS):
+                    if title not in headlines:
+                        headlines.append(title)
+        return {"macro_headlines": headlines[:10]}
+    except Exception as exc:
+        return {"error": str(exc), "macro_headlines": []}
+
+
 def tool_get_news(symbol: str) -> dict:
     try:
         news = yf.Ticker(symbol).news or []
@@ -355,6 +456,17 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_macro_news",
+        "description": (
+            "Return recent macro/economic headlines (Fed decisions, FOMC meetings, "
+            "interest rates, inflation/CPI, jobs reports, GDP, tariffs, etc.). Use this "
+            "to gauge overall market risk posture and to pick rate-sensitive or "
+            "macro-exposed stocks (e.g. banks/financials on rate news, tech/growth on "
+            "inflation surprises, defense/industrials on tariff news)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_news",
         "description": "Return recent news headlines for a stock symbol.",
         "input_schema": {
@@ -373,6 +485,8 @@ def dispatch_tool(name: str, inp: dict) -> str:
         return json.dumps(tool_get_trending_stocks())
     if name == "get_top_movers":
         return json.dumps(tool_get_top_movers())
+    if name == "get_macro_news":
+        return json.dumps(tool_get_macro_news())
     if name == "get_news":
         return json.dumps(tool_get_news(inp["symbol"]))
     return json.dumps({"error": f"unknown tool {name}"})
@@ -454,6 +568,11 @@ def run_trading_loop():
         halted, status_msg = False, "Equity unavailable \u2014 skipping loss check."
     log.info("Loss-limit check: %s", status_msg)
 
+    # ── Performance feedback loop ───────────────────────────────────────────────
+    perf_summary = symbol_performance_summary(load_state())
+    if perf_summary:
+        log.info("Performance feedback: %s", perf_summary.replace("\n", " | "))
+
     trading_clause = ""
     if halted:
         trading_clause = (
@@ -491,6 +610,15 @@ HOLD is a valid choice only when you've genuinely found nothing — not a defaul
 
 Each run you must:
 1. Call get_equity_positions (Robinhood MCP) to see current holdings and cash available.
+   Also call get_macro_news to check for Fed/FOMC, rate, inflation (CPI/PPI), jobs, GDP,
+   or tariff headlines. If there's a major macro event today or a strong macro signal,
+   factor it in:
+     - Hawkish Fed / hot inflation / weak jobs -> be more cautious, prefer taking profits
+       and avoid loading up on rate-sensitive growth names.
+     - Dovish Fed / cooling inflation / strong jobs -> favor rate-sensitive sectors
+       (financials, homebuilders, tech/growth) for new BUYs.
+     - Tariff news -> favor/avoid affected sectors (industrials, retail, semis) accordingly.
+   If no major macro headlines are found, proceed normally.
 2. Call get_top_movers and get_trending_stocks to discover candidates. get_top_movers
    surfaces stocks with extraordinary moves (e.g. up double-digits on huge volume after
    an earnings beat, like MU or SNDK after a blowout quarter) — these are prime
@@ -520,7 +648,10 @@ Each run you must:
 6. Think out loud with specific numbers (RSI, price, % change) for every decision.
 
 Default posture: look for a reason TO trade, not a reason not to. If multiple
-candidates look reasonable, trade the best one rather than waiting for a perfect setup.{trading_clause}"""
+candidates look reasonable, trade the best one rather than waiting for a perfect setup.
+
+LEARNING FROM PAST TRADES:
+{perf_summary or "No closed round-trips recorded yet."}{trading_clause}"""
 
     messages = [
         {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
@@ -574,6 +705,7 @@ candidates look reasonable, trade the best one rather than waiting for a perfect
                     "price":    inp.get("price"),
                 }
                 TRADE_LOG.append(trade)
+                record_trade(load_state(), trade)
                 log.info("TRADE PLACED: %s", trade)
 
         if resp.stop_reason == "end_turn":
