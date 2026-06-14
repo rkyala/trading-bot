@@ -717,6 +717,11 @@ Each run you must:
    day-trading candidates. Then call get_news + fetch_market_data on at least 3-5
    candidates, prioritizing top_movers entries with |pct_change| > 5% and
    volume_vs_avg > 1.5.
+   Also call fetch_market_data on SPY and QQQ (S&P 500 / Nasdaq-100 index ETFs —
+   the closest equity proxies to trading SPX/NDX, since the broker doesn't support
+   index options here) every run as part of your candidate set, so broad-market
+   momentum/mean-reversion setups aren't missed even on days with no standout
+   single-stock movers.
 3. Apply momentum/mean-reversion logic liberally:
    - RSI < 40 or bouncing off VWAP/EMA support -> consider BUY
    - RSI > 65 on a held position -> consider taking some profit (SELL), but note that
