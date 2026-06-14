@@ -37,6 +37,9 @@ MAX_POSITION = 125   # max $ per position
 TOTAL_BUDGET = 500
 DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
 MIN_PRICE = 5.0   # no penny stocks
+STOP_LOSS_PCT   = 3.0   # hard stop: sell if down this much from entry
+PROFIT_LOCK_PCT = 3.0   # once up this much from entry, start trailing
+TRAIL_PCT       = 2.0   # trailing stop distance from the high-water mark
 STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 
 # Email alerts (requires SMTP_HOST / SMTP_USER / SMTP_PASS env vars; logs otherwise)
@@ -193,7 +196,8 @@ def save_state(state: dict) -> None:
 
 
 def record_trade(state: dict, trade: dict) -> None:
-    """Append a placed trade to persistent history for the performance-feedback loop."""
+    """Append a placed trade to persistent history for the performance-feedback loop,
+    and track entry price / high-water mark per symbol for trailing-stop checks."""
     history = state.setdefault("trade_history", [])
     history.append({
         "symbol":   trade.get("symbol"),
@@ -203,7 +207,80 @@ def record_trade(state: dict, trade: dict) -> None:
         "time":     trade.get("time"),
     })
     state["trade_history"] = history[-500:]  # cap growth
+
+    sym   = trade.get("symbol")
+    side  = (trade.get("side") or "").lower()
+    price = trade.get("price")
+    positions = state.setdefault("positions", {})
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        price = None
+
+    if sym and side == "buy" and price:
+        # New entry (or re-entry) — reset tracking for this symbol.
+        positions[sym] = {"entry_price": price, "high_water_mark": price}
+    elif sym and side == "sell":
+        positions.pop(sym, None)
+
     save_state(state)
+
+
+def get_current_price(symbol: str):
+    try:
+        fi = yf.Ticker(symbol).fast_info
+        price = fi.get("lastPrice") if hasattr(fi, "get") else getattr(fi, "last_price", None)
+        return float(price) if price else None
+    except Exception:
+        return None
+
+
+def check_trailing_stops(state: dict) -> list[str]:
+    """Mechanically check tracked positions against stop-loss / trailing-stop rules.
+
+    Updates each position's high-water mark in state, and returns a list of
+    human-readable instructions for symbols that must be sold this run
+    (hard stop-loss hit, or price pulled back from its high by TRAIL_PCT after
+    having locked in PROFIT_LOCK_PCT gain).
+    """
+    positions = state.get("positions", {})
+    if not positions:
+        return []
+
+    forced_sells = []
+    changed = False
+    for sym, pos in list(positions.items()):
+        price = get_current_price(sym)
+        if not price:
+            continue
+
+        entry = pos.get("entry_price", price)
+        hwm   = pos.get("high_water_mark", entry)
+        if price > hwm:
+            pos["high_water_mark"] = price
+            hwm = price
+            changed = True
+
+        change_pct = (price - entry) / entry * 100
+        drop_from_hwm_pct = (hwm - price) / hwm * 100 if hwm else 0
+
+        if change_pct <= -STOP_LOSS_PCT:
+            forced_sells.append(
+                f"{sym}: STOP-LOSS HIT — down {change_pct:.2f}% from entry ${entry:.2f} "
+                f"(current ${price:.2f}). SELL this position now."
+            )
+        elif change_pct >= PROFIT_LOCK_PCT and drop_from_hwm_pct >= TRAIL_PCT:
+            forced_sells.append(
+                f"{sym}: TRAILING STOP HIT — up {change_pct:.2f}% from entry ${entry:.2f}, "
+                f"but pulled back {drop_from_hwm_pct:.2f}% from its high ${hwm:.2f} to "
+                f"${price:.2f}. SELL this position now to lock in the gain."
+            )
+
+    if changed:
+        state["positions"] = positions
+        save_state(state)
+
+    return forced_sells
 
 
 def symbol_performance_summary(state: dict, top_n: int = 4) -> str:
@@ -578,9 +655,15 @@ def run_trading_loop():
     log.info("Loss-limit check: %s", status_msg)
 
     # ── Performance feedback loop ───────────────────────────────────────────────
-    perf_summary = symbol_performance_summary(load_state())
+    state = load_state()
+    perf_summary = symbol_performance_summary(state)
     if perf_summary:
         log.info("Performance feedback: %s", perf_summary.replace("\n", " | "))
+
+    # ── Mechanical stop-loss / trailing-stop check ─────────────────────────────
+    forced_sells = check_trailing_stops(state)
+    if forced_sells:
+        log.info("Forced sells: %s", "; ".join(forced_sells))
 
     trading_clause = ""
     if halted:
@@ -636,8 +719,11 @@ Each run you must:
    volume_vs_avg > 1.5.
 3. Apply momentum/mean-reversion logic liberally:
    - RSI < 40 or bouncing off VWAP/EMA support -> consider BUY
-   - RSI > 65 or a held position up >3% -> consider taking profit (SELL)
-   - A held position down >3% -> consider cutting the loss (SELL)
+   - RSI > 65 on a held position -> consider taking some profit (SELL), but note that
+     stop-loss (-{STOP_LOSS_PCT}%) and trailing-stop (lock in gains above
+     +{PROFIT_LOCK_PCT}%, trail by {TRAIL_PCT}% off the high) are enforced mechanically
+     below — you don't need to sell winners just because they're up a few percent;
+     let the trailing stop do that so winners can keep running.
    - Strong volume spike + positive news -> consider BUY even if RSI is neutral
    - A top_mover with a big positive % move, confirmed by positive earnings news and
      volume_vs_avg > 1.5, is a strong BUY candidate even if RSI is already elevated —
@@ -667,7 +753,11 @@ Default posture: look for a reason TO trade, not a reason not to. If multiple
 candidates look reasonable, trade the best one rather than waiting for a perfect setup.
 
 LEARNING FROM PAST TRADES:
-{perf_summary or "No closed round-trips recorded yet."}{trading_clause}"""
+{perf_summary or "No closed round-trips recorded yet."}
+
+MECHANICAL STOP-LOSS / TRAILING-STOP:
+{chr(10).join(forced_sells) if forced_sells else "No stop-loss or trailing-stop triggers right now."}
+{"These are MANDATORY — call review_equity_order then place_equity_order to SELL the full position for each symbol listed above, before doing anything else." if forced_sells else ""}{trading_clause}"""
 
     messages = [
         {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
