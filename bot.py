@@ -19,6 +19,8 @@ from datetime import datetime
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 
+import rl_policy
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -346,6 +348,13 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "52w_low":      getattr(info, "year_low",    None),
             "tradable":     price >= MIN_PRICE,
             "tradable_note": None if price >= MIN_PRICE else f"Below ${MIN_PRICE} — penny stock, do not trade",
+            "rl_signal":    rl_policy.get_rl_signal(
+                rsi=calc_rsi(prices),
+                macd=calc_ema(prices, 12) - calc_ema(prices, 26),
+                price=price,
+                vwap=vwap,
+                volume_ratio=volumes[-1] / avg_vol if avg_vol else 1,
+            ),
         }
     except Exception as exc:
         return {"error": str(exc)}
@@ -633,6 +642,13 @@ Each run you must:
    - A top_mover with a big positive % move, confirmed by positive earnings news and
      volume_vs_avg > 1.5, is a strong BUY candidate even if RSI is already elevated —
      earnings-driven momentum can keep running intraday.
+   - fetch_market_data also returns "rl_signal": a BUY/SELL/HOLD action learned from
+     historical price/volume patterns via Q-learning, with a "confidence" score
+     (spread between its learned Q-values — higher means more confident). Treat this
+     as one more vote: if rl_signal.action agrees with your other signals and
+     confidence > 0.01, that's added confirmation; if it disagrees, don't let it
+     override strong technical/news signals on its own, but mention it in your
+     reasoning. "UNKNOWN" means no learned data for that state — ignore it.
 4. If you have idle cash and at least one candidate clears a reasonable bar
    (don't require perfection on all signals - 2 out of 3 aligned is enough),
    PLACE THE TRADE. Call review_equity_order, and then IMMEDIATELY call
