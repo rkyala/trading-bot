@@ -227,7 +227,13 @@ def record_trade(state: dict, trade: dict) -> None:
                 rsi=ind["rsi"], macd=ind["macd"], price=ind["price"],
                 vwap=ind["vwap"], volume_ratio=ind["volume_ratio"], holding=False,
             )
-        positions[sym] = {"entry_price": price, "high_water_mark": price, "entry_state": entry_state}
+        sector = None
+        try:
+            sector = (yf.Ticker(sym).info or {}).get("sector")
+        except Exception:
+            pass
+        positions[sym] = {"entry_price": price, "high_water_mark": price,
+                           "entry_state": entry_state, "sector": sector}
     elif sym and side == "sell":
         pos = positions.pop(sym, None)
         if pos and pos.get("entry_state") and price:
@@ -325,6 +331,30 @@ def check_trailing_stops(state: dict) -> list[str]:
         save_state(state)
 
     return forced_sells
+
+
+def sector_exposure_summary(state: dict) -> str:
+    """Summarize current open positions by sector, for diversification awareness."""
+    positions = state.get("positions", {})
+    if not positions:
+        return "No open positions."
+
+    by_sector = {}
+    for sym, pos in positions.items():
+        sector = pos.get("sector") or "Unknown"
+        by_sector.setdefault(sector, []).append(sym)
+
+    lines = [f"{sector}: {', '.join(syms)}" for sector, syms in by_sector.items()]
+    summary = "Current sector exposure — " + "; ".join(lines)
+
+    concentrated = [s for s, syms in by_sector.items() if s != "Unknown" and len(syms) >= 2]
+    if concentrated:
+        summary += (
+            f". NOTE: already {len(by_sector[concentrated[0]])} positions in "
+            f"{concentrated[0]} — avoid adding another position in this sector "
+            "unless the setup is exceptional; prefer diversifying into a different sector."
+        )
+    return summary
 
 
 def symbol_performance_summary(state: dict, top_n: int = 4) -> str:
@@ -452,6 +482,10 @@ def tool_fetch_market_data(symbol: str) -> dict:
         vwap    = round(sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1), 4)
         avg_vol = sum(volumes[-10:]) / 10
         info    = ticker.fast_info
+        try:
+            full_info = ticker.info or {}
+        except Exception:
+            full_info = {}
         price = round(prices[-1], 2)
         return {
             "symbol":       symbol,
@@ -463,6 +497,8 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "ema9":         calc_ema(prices, 9),
             "ema20":        calc_ema(prices, 20),
             "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1,
+            "sector":       full_info.get("sector"),
+            "industry":     full_info.get("industry"),
             "market_cap":   getattr(info, "market_cap",  None),
             "pe_ratio":     getattr(info, "pe_ratio",    None),
             "52w_high":     getattr(info, "year_high",   None),
@@ -704,6 +740,9 @@ def run_trading_loop():
     if perf_summary:
         log.info("Performance feedback: %s", perf_summary.replace("\n", " | "))
 
+    sector_summary = sector_exposure_summary(state)
+    log.info("Sector exposure: %s", sector_summary)
+
     # ── Mechanical stop-loss / trailing-stop check ─────────────────────────────
     forced_sells = check_trailing_stops(state)
     if forced_sells:
@@ -800,6 +839,12 @@ Each run you must:
 
 Default posture: look for a reason TO trade, not a reason not to. If multiple
 candidates look reasonable, trade the best one rather than waiting for a perfect setup.
+
+SECTOR DIVERSIFICATION:
+{sector_summary}
+fetch_market_data returns "sector"/"industry" for each candidate — use this to avoid
+overconcentrating the small ${TOTAL_BUDGET} budget in a single sector when choosing
+between otherwise-similar candidates.
 
 LEARNING FROM PAST TRADES:
 {perf_summary or "No closed round-trips recorded yet."}
