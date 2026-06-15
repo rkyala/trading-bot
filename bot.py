@@ -218,12 +218,56 @@ def record_trade(state: dict, trade: dict) -> None:
         price = None
 
     if sym and side == "buy" and price:
-        # New entry (or re-entry) — reset tracking for this symbol.
-        positions[sym] = {"entry_price": price, "high_water_mark": price}
+        # New entry (or re-entry) — reset tracking for this symbol, and record
+        # the market state at entry so a later sell can do an online Q-update.
+        entry_state = None
+        ind = get_indicators(sym)
+        if ind:
+            entry_state = rl_policy.discretize(
+                rsi=ind["rsi"], macd=ind["macd"], price=ind["price"],
+                vwap=ind["vwap"], volume_ratio=ind["volume_ratio"], holding=False,
+            )
+        positions[sym] = {"entry_price": price, "high_water_mark": price, "entry_state": entry_state}
     elif sym and side == "sell":
-        positions.pop(sym, None)
+        pos = positions.pop(sym, None)
+        if pos and pos.get("entry_state") and price:
+            entry_price = pos.get("entry_price")
+            if entry_price:
+                reward = (price - entry_price) / entry_price
+                ind = get_indicators(sym)
+                next_state = (
+                    rl_policy.discretize(
+                        rsi=ind["rsi"], macd=ind["macd"], price=ind["price"],
+                        vwap=ind["vwap"], volume_ratio=ind["volume_ratio"], holding=False,
+                    ) if ind else pos["entry_state"]
+                )
+                rl_policy.update_q(pos["entry_state"], "BUY", reward, next_state)
+                log.info("RL online update: state=%s action=BUY reward=%.4f next_state=%s",
+                         pos["entry_state"], reward, next_state)
 
     save_state(state)
+
+
+def get_indicators(symbol: str):
+    """Lightweight indicator snapshot for RL state discretization (price, RSI, MACD, VWAP, volume ratio)."""
+    try:
+        hist = yf.Ticker(symbol).history(period="30d", interval="1d")
+        if hist.empty or len(hist) < 14:
+            return None
+        prices  = hist["Close"].tolist()
+        volumes = hist["Volume"].tolist()
+        n       = min(len(prices), len(volumes))
+        vwap    = sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1)
+        avg_vol = sum(volumes[-10:]) / 10
+        return {
+            "price":        prices[-1],
+            "rsi":          calc_rsi(prices),
+            "macd":         calc_ema(prices, 12) - calc_ema(prices, 26),
+            "vwap":         vwap,
+            "volume_ratio": volumes[-1] / avg_vol if avg_vol else 1,
+        }
+    except Exception:
+        return None
 
 
 def get_current_price(symbol: str):
