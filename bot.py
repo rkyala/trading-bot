@@ -584,7 +584,7 @@ def tool_get_top_movers() -> dict:
                 })
         # Sort by absolute % move, biggest first — surfaces extraordinary-earnings type moves
         movers.sort(key=lambda m: abs(m["pct_change"] or 0), reverse=True)
-        return {"movers": movers[:20]}
+        return {"movers": movers[:10]}
     except Exception as exc:
         return {"error": str(exc), "movers": []}
 
@@ -863,14 +863,14 @@ Each run you must:
 2. Call get_top_movers and get_trending_stocks to discover candidates. get_top_movers
    surfaces stocks with extraordinary moves (e.g. up double-digits on huge volume after
    an earnings beat, like MU or SNDK after a blowout quarter) — these are prime
-   day-trading candidates. Then call get_news + fetch_market_data on at least 3-5
-   candidates, prioritizing top_movers entries with |pct_change| > 5% and
+   day-trading candidates. Then call get_news + fetch_market_data on 2-3 of the
+   strongest candidates, prioritizing top_movers entries with |pct_change| > 5% and
    volume_vs_avg > 1.5.
-   Also call fetch_market_data on SPY and QQQ (S&P 500 / Nasdaq-100 index ETFs —
-   the closest equity proxies to trading SPX/NDX, since the broker doesn't support
-   index options here) every run as part of your candidate set, so broad-market
-   momentum/mean-reversion setups aren't missed even on days with no standout
-   single-stock movers.
+   Also call fetch_market_data (news not needed) on SPY and QQQ (S&P 500 / Nasdaq-100
+   index ETFs — the closest equity proxies to trading SPX/NDX, since the broker
+   doesn't support index options here) every run as part of your candidate set, so
+   broad-market momentum/mean-reversion setups aren't missed even on days with no
+   standout single-stock movers.
 3. Apply momentum/mean-reversion logic liberally:
    - RSI < 40 or bouncing off VWAP/EMA support -> consider BUY
    - RSI > 65 on a held position -> consider taking some profit (SELL), but note that
