@@ -595,9 +595,41 @@ MACRO_KEYWORDS = (
     "yield", "recession", "tariff",
 )
 
+# Dates (ET, "YYYY-MM-DD") of scheduled FOMC rate-decision announcements.
+# On these days, the macro check refreshes every scan (every SCAN_MINUTES)
+# during the 1-hour announcement window below; otherwise it only refreshes
+# every MACRO_CHECK_MINUTES. Update this list as new FOMC dates are announced.
+FOMC_DATES = {
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+    "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+}
+FOMC_WINDOW_START_ET = 14  # 2:00 PM ET
+FOMC_WINDOW_END_ET   = 15  # 3:00 PM ET
+
+MACRO_CHECK_MINUTES = 30
+
+_macro_cache = {"ts": 0.0, "data": None}
+
+
+def _in_fomc_window() -> bool:
+    now = datetime.now(ET)
+    if now.strftime("%Y-%m-%d") not in FOMC_DATES:
+        return False
+    return FOMC_WINDOW_START_ET <= now.hour < FOMC_WINDOW_END_ET
+
 
 def tool_get_macro_news() -> dict:
-    """Return recent macro/economic headlines (Fed, rates, inflation, jobs, etc.)."""
+    """Return recent macro/economic headlines (Fed, rates, inflation, jobs, etc.).
+
+    Cached for MACRO_CHECK_MINUTES to cut redundant API/token usage, except
+    during a scheduled FOMC announcement window (see FOMC_DATES), when it
+    refreshes on every scan.
+    """
+    now = time.time()
+    max_age = SCAN_MINUTES * 60 if _in_fomc_window() else MACRO_CHECK_MINUTES * 60
+    if _macro_cache["data"] is not None and (now - _macro_cache["ts"]) < max_age:
+        return _macro_cache["data"]
+
     try:
         headlines = []
         for sym in ("^GSPC", "^TNX", "^VIX"):
@@ -606,9 +638,13 @@ def tool_get_macro_news() -> dict:
                 if title and any(k in title.lower() for k in MACRO_KEYWORDS):
                     if title not in headlines:
                         headlines.append(title)
-        return {"macro_headlines": headlines[:10]}
+        result = {"macro_headlines": headlines[:10]}
     except Exception as exc:
-        return {"error": str(exc), "macro_headlines": []}
+        result = {"error": str(exc), "macro_headlines": []}
+
+    _macro_cache["ts"] = now
+    _macro_cache["data"] = result
+    return result
 
 
 def tool_get_news(symbol: str) -> dict:
