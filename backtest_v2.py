@@ -1,15 +1,18 @@
 """
 Strategy comparison backtest — runs all variants over the same window:
 
-  original  — README rules: 3-of-4 buy votes, 2-of-3 sell votes, -3% SL, +5% TP
-  meanrev   — buy RSI<30 AND price<VWAP (truly oversold); exit when RSI>50; -3% SL
-  momentum  — buy price>VWAP AND MACD>0 AND volume>=2x; -3% initial stop that
-              trails 5% below the highest high since entry; no profit cap
+  original  — README rules: 3-of-4 buy votes, 2-of-3 sell votes
+  meanrev   — buy RSI<30 AND price<VWAP (truly oversold); exit when RSI>50
+  momentum  — buy price>VWAP AND MACD>0 AND volume>=2x
+
+All variants use the same mechanical stop-loss / trailing-stop as bot.py:
+-3% hard stop from entry; once unrealized gain reaches +3%, trail 2% below
+the high-water mark instead of a fixed take-profit (commit 5818f07).
 
 Each variant runs with and without a regime filter (long entries only when
 SPY close > its 50-day SMA). Indicator math is identical to bot.py.
 Sizing: $125 per position, $500 total budget, fractional shares, fills at close;
-stops fill at the stop price (checked before profit exits — conservative).
+stops fill at the stop price (checked before signal exits — conservative).
 No slippage/fees modeled.
 """
 
@@ -21,9 +24,12 @@ SYMBOLS      = ["META", "MU", "TSLA", "NVDA", "SOXL", "SPXL", "NVDL"]
 BENCHMARK    = "SPY"
 MAX_POSITION = 125.0
 TOTAL_BUDGET = 500.0
+# Mirrors bot.py's mechanical stop-loss / trailing-stop (commit 5818f07):
+# hard stop at -3% from entry; once unrealized gain reaches +3%, trail 2%
+# below the high-water mark instead of using a fixed take-profit.
 STOP_LOSS    = 0.03
-TAKE_PROFIT  = 0.05
-TRAIL_PCT    = 0.05
+PROFIT_LOCK  = 0.03
+TRAIL_PCT    = 0.02
 REGIME_SMA   = 50
 LOOKBACK     = 30
 
@@ -104,25 +110,19 @@ def simulate(data, dates, spy_ok, strategy, use_filter):
             exit_price = reason = None
 
             op = float(row["Open"])
-            if exit_mode == "trailing":
-                stop = max(pos["entry"] * (1 - STOP_LOSS), pos["peak"] * (1 - TRAIL_PCT))
-                if op <= stop:
-                    exit_price, reason = op, "trail-stop-gap"
-                elif row["Low"] <= stop:
-                    exit_price, reason = stop, "trail-stop"
-                else:
-                    pos["peak"] = max(pos["peak"], float(row["High"]))
+            pos["peak"] = max(pos["peak"], float(row["High"]))
+            locked_in = pos["peak"] >= pos["entry"] * (1 + PROFIT_LOCK)
+            if locked_in:
+                stop = pos["peak"] * (1 - TRAIL_PCT)
+                stop_reason = "trail-stop"
             else:
                 stop = pos["entry"] * (1 - STOP_LOSS)
-                tp   = pos["entry"] * (1 + TAKE_PROFIT)
-                if op <= stop:
-                    exit_price, reason = op, "stop-gap"
-                elif row["Low"] <= stop:
-                    exit_price, reason = stop, "stop-loss"
-                elif exit_mode == "fixed" and op >= tp:
-                    exit_price, reason = op, "tp-gap"
-                elif exit_mode == "fixed" and row["High"] >= tp:
-                    exit_price, reason = tp, "take-profit"
+                stop_reason = "stop-loss"
+
+            if op <= stop:
+                exit_price, reason = op, stop_reason + "-gap"
+            elif row["Low"] <= stop:
+                exit_price, reason = stop, stop_reason
 
             if exit_price is None:
                 loc = df.index.get_loc(d)
