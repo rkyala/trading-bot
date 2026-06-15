@@ -896,13 +896,36 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
                 log.info("Claude: %s", block.text[:800])
             if getattr(block, "type", "") == "mcp_tool_use" and block.name == "place_equity_order":
                 inp = block.input or {}
+                symbol = inp.get("symbol", "?")
+
+                # The order's fill price isn't in the request input — look for it in
+                # the matching mcp_tool_result, falling back to the current market
+                # price if the order is still pending fill.
+                fill_price = inp.get("price")
+                if not fill_price:
+                    for rblock in resp.content:
+                        if (getattr(rblock, "type", "") == "mcp_tool_result"
+                                and getattr(rblock, "tool_use_id", None) == block.id):
+                            text = " ".join(
+                                c.text for c in (rblock.content or [])
+                                if hasattr(c, "text")
+                            ) if hasattr(rblock, "content") else str(rblock)
+                            import re
+                            m = re.search(r'"average_price"\s*:\s*"?([\d.]+)', text) \
+                                or re.search(r'"price"\s*:\s*"?([\d.]+)', text)
+                            if m:
+                                fill_price = float(m.group(1))
+                            break
+                if not fill_price:
+                    fill_price = get_current_price(symbol)
+
                 trade = {
                     "time":     datetime.now(ET).strftime("%H:%M ET"),
-                    "symbol":   inp.get("symbol", "?"),
+                    "symbol":   symbol,
                     "side":     inp.get("side", "?"),
                     "quantity": inp.get("quantity", inp.get("amount", "?")),
                     "type":     inp.get("type", "?"),
-                    "price":    inp.get("price"),
+                    "price":    fill_price,
                 }
                 TRADE_LOG.append(trade)
                 record_trade(load_state(), trade)
