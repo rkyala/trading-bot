@@ -40,6 +40,8 @@ MIN_PRICE = 5.0   # no penny stocks
 STOP_LOSS_PCT   = 3.0   # hard stop: sell if down this much from entry
 PROFIT_LOCK_PCT = 3.0   # once up this much from entry, start trailing
 TRAIL_PCT       = 2.0   # trailing stop distance from the high-water mark
+MIN_POSITION    = 50    # smallest position size for a low-conviction entry
+COOLDOWN_MINUTES = 30   # don't re-enter a symbol this soon after exiting it
 STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 
 # Email alerts (requires SMTP_HOST / SMTP_USER / SMTP_PASS env vars; logs otherwise)
@@ -235,6 +237,8 @@ def record_trade(state: dict, trade: dict) -> None:
         positions[sym] = {"entry_price": price, "high_water_mark": price,
                            "entry_state": entry_state, "sector": sector}
     elif sym and side == "sell":
+        cooldowns = state.setdefault("cooldowns", {})
+        cooldowns[sym] = time.time()
         pos = positions.pop(sym, None)
         if pos and pos.get("entry_state") and price:
             entry_price = pos.get("entry_price")
@@ -331,6 +335,28 @@ def check_trailing_stops(state: dict) -> list[str]:
         save_state(state)
 
     return forced_sells
+
+
+def cooldown_summary(state: dict) -> str:
+    """List symbols recently sold that are still within their re-entry cooldown."""
+    cooldowns = state.get("cooldowns", {})
+    if not cooldowns:
+        return ""
+
+    now = time.time()
+    active = []
+    for sym, sold_at in cooldowns.items():
+        remaining = COOLDOWN_MINUTES - (now - sold_at) / 60
+        if remaining > 0:
+            active.append(f"{sym} ({remaining:.0f} min left)")
+
+    if not active:
+        return ""
+    return (
+        f"Recently exited, in cooldown — do NOT re-buy these symbols yet "
+        f"(min {COOLDOWN_MINUTES} min between exit and re-entry to avoid churn): "
+        + ", ".join(active)
+    )
 
 
 def sector_exposure_summary(state: dict) -> str:
@@ -743,6 +769,10 @@ def run_trading_loop():
     sector_summary = sector_exposure_summary(state)
     log.info("Sector exposure: %s", sector_summary)
 
+    cooldown_msg = cooldown_summary(state)
+    if cooldown_msg:
+        log.info("Cooldowns: %s", cooldown_msg)
+
     # ── Mechanical stop-loss / trailing-stop check ─────────────────────────────
     forced_sells = check_trailing_stops(state)
     if forced_sells:
@@ -835,6 +865,13 @@ Each run you must:
    stocks — check the "tradable" field from fetch_market_data). Never exceed
    ${MAX_POSITION} per position, and never invest more than you have in cash.
    No cryptocurrency (BTC, DOGE, SOL, etc.) — equities only.
+   Position sizing — scale with conviction instead of always using the max:
+     - High conviction (3/3 technical signals aligned AND rl_signal agrees with
+       confidence > 0.01 AND no conflicting macro signal) -> ${MAX_POSITION}
+     - Medium conviction (2/3 aligned, or rl_signal is "UNKNOWN"/neutral) ->
+       around ${(MAX_POSITION + MIN_POSITION) // 2}
+     - Lower conviction but still worth a small toehold -> ${MIN_POSITION}
+   Use dollar-based orders (amount=) so these sizes apply cleanly to fractional shares.
 6. Think out loud with specific numbers (RSI, price, % change) for every decision.
 
 Default posture: look for a reason TO trade, not a reason not to. If multiple
@@ -845,6 +882,9 @@ SECTOR DIVERSIFICATION:
 fetch_market_data returns "sector"/"industry" for each candidate — use this to avoid
 overconcentrating the small ${TOTAL_BUDGET} budget in a single sector when choosing
 between otherwise-similar candidates.
+
+RE-ENTRY COOLDOWN:
+{cooldown_msg or "No symbols currently in cooldown."}
 
 LEARNING FROM PAST TRADES:
 {perf_summary or "No closed round-trips recorded yet."}
@@ -898,32 +938,52 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
                 inp = block.input or {}
                 symbol = inp.get("symbol", "?")
 
-                # The order's fill price isn't in the request input — look for it in
-                # the matching mcp_tool_result, falling back to the current market
-                # price if the order is still pending fill.
+                # The order's fill price/quantity aren't in the request input — look
+                # for them in the matching mcp_tool_result, falling back to the
+                # current market price if the order is still pending fill.
+                import re
                 fill_price = inp.get("price")
-                if not fill_price:
-                    for rblock in resp.content:
-                        if (getattr(rblock, "type", "") == "mcp_tool_result"
-                                and getattr(rblock, "tool_use_id", None) == block.id):
-                            text = " ".join(
-                                c.text for c in (rblock.content or [])
-                                if hasattr(c, "text")
-                            ) if hasattr(rblock, "content") else str(rblock)
-                            import re
+                fill_qty = None
+                for rblock in resp.content:
+                    if (getattr(rblock, "type", "") == "mcp_tool_result"
+                            and getattr(rblock, "tool_use_id", None) == block.id):
+                        text = " ".join(
+                            c.text for c in (rblock.content or [])
+                            if hasattr(c, "text")
+                        ) if hasattr(rblock, "content") else str(rblock)
+                        if not fill_price:
                             m = re.search(r'"average_price"\s*:\s*"?([\d.]+)', text) \
                                 or re.search(r'"price"\s*:\s*"?([\d.]+)', text)
                             if m:
                                 fill_price = float(m.group(1))
-                            break
+                        m = re.search(r'"cumulative_quantity"\s*:\s*"?([\d.]+)', text) \
+                            or re.search(r'"filled_quantity"\s*:\s*"?([\d.]+)', text)
+                        if m:
+                            fill_qty = float(m.group(1))
+                        break
                 if not fill_price:
                     fill_price = get_current_price(symbol)
+
+                # quantity: prefer share quantity from the fill; for dollar-based
+                # orders (input has "amount" instead of "quantity"), derive shares
+                # from amount / fill_price so position/P&L tracking uses share counts.
+                if fill_qty is not None:
+                    quantity = fill_qty
+                elif "quantity" in inp:
+                    quantity = inp["quantity"]
+                elif "amount" in inp and fill_price:
+                    try:
+                        quantity = float(inp["amount"]) / fill_price
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        quantity = inp.get("amount", "?")
+                else:
+                    quantity = "?"
 
                 trade = {
                     "time":     datetime.now(ET).strftime("%H:%M ET"),
                     "symbol":   symbol,
                     "side":     inp.get("side", "?"),
-                    "quantity": inp.get("quantity", inp.get("amount", "?")),
+                    "quantity": quantity,
                     "type":     inp.get("type", "?"),
                     "price":    fill_price,
                 }

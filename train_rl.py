@@ -21,7 +21,11 @@ import random
 
 import yfinance as yf
 
-SYMBOLS  = ["META", "MU", "TSLA", "NVDA", "SOXL", "SPXL", "NVDL", "ROKU", "ASTS", "RKLB"]
+SYMBOLS  = [
+    "META", "MU", "TSLA", "NVDA", "SOXL", "SPXL", "NVDL", "ROKU", "ASTS", "RKLB",
+    "SPY", "QQQ", "TQQQ", "AAPL", "AMZN", "GOOGL", "MSFT", "AMD", "AVGO", "NFLX",
+    "DXYZ", "QBTS", "PLTR", "SOFI", "COIN", "DASH", "SMCI", "ARM", "IONQ", "RGTI",
+]
 YEARS    = "3y"
 ACTIONS  = ["BUY", "SELL", "HOLD"]
 
