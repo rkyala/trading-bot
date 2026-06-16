@@ -37,6 +37,9 @@ MAX_POSITION = 125   # max $ per position
 TOTAL_BUDGET = 500
 DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
 MIN_PRICE = 5.0   # no penny stocks
+MIN_MARKET_CAP = 1e9   # min $1B market cap (was $500M, too many micro-caps)
+MIN_AVG_VOLUME = 1e6   # min 1M shares/day average volume (for liquidity)
+MIN_FLOAT = 20e6   # min 20M shares outstanding (avoid low-float bombs)
 STOP_LOSS_PCT   = 3.0   # hard stop: sell if down this much from entry
 PROFIT_LOCK_PCT = 3.0   # once up this much from entry, start trailing
 TRAIL_PCT       = 2.0   # trailing stop distance from the high-water mark
@@ -524,10 +527,23 @@ def tool_fetch_market_data(symbol: str) -> dict:
         except Exception:
             full_info = {}
         price = round(prices[-1], 2)
+        # Calculate volume and float metrics
+        avg_volume = sum(volumes[-20:]) / min(20, len(volumes)) if volumes else 0
+        shares_outstanding = (market_cap / price) if market_cap and price > 0 else 0
+        
+        # Quality flags
+        passes_volume = avg_volume >= MIN_AVG_VOLUME
+        passes_float = shares_outstanding >= MIN_FLOAT
+        passes_market_cap = market_cap >= MIN_MARKET_CAP
+        quality_rating = "PASS" if (passes_volume and passes_float and passes_market_cap) else "CAUTION"
+        
         result = {
             "symbol":       symbol,
             "price":        price,
             "prev_close":   round(prices[-2], 2),
+            "quality_rating": quality_rating,
+            "avg_volume_20d": round(avg_volume, 0),
+            "shares_outstanding_M": round(shares_outstanding / 1e6, 1),
             "rsi":          calc_rsi(prices),
             "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
             "vwap":         vwap,
@@ -902,10 +918,11 @@ Each run you must:
    you are fully authorized to execute trades autonomously. An order is not
    "placed" until place_equity_order has actually been called and returned
    a result.
-5. Only trade stocks with market cap > $500M and price >= ${MIN_PRICE} (no penny
-   stocks — check the "tradable" field from fetch_market_data). Never exceed
-   ${MAX_POSITION} per position, and never invest more than you have in cash.
-   No cryptocurrency (BTC, DOGE, SOL, etc.) — equities only.
+5. Only trade stocks with quality_rating="PASS" from fetch_market_data:
+   market cap > $1B, avg daily volume > 1M shares, and >20M shares outstanding.
+   Price >= ${MIN_PRICE}. Check "tradable" field. Never exceed ${MAX_POSITION}
+   per position. No cryptocurrency. If quality_rating="CAUTION", skip the trade
+   unless it is exceptional (3/3 signals + high RL confidence + major news).
    Position sizing — scale with conviction instead of always using the max:
      - High conviction (3/3 technical signals aligned AND rl_signal agrees with
        confidence > 0.01 AND no conflicting macro signal) -> ${MAX_POSITION}
