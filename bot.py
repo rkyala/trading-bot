@@ -505,6 +505,82 @@ def calc_ema(prices, period):
     return round(ema, 4)
 
 
+def detect_divergence(prices: list, rsi_values: list, lookback: int = 5) -> dict:
+    """Detect RSI divergence: price makes new high/low but RSI doesn't."""
+    if len(prices) < lookback or len(rsi_values) < lookback:
+        return {"bullish_div": False, "bearish_div": False, "description": ""}
+    
+    recent_prices = prices[-lookback:]
+    recent_rsi = rsi_values[-lookback:]
+    
+    # Bullish divergence: price lower low, RSI higher low
+    if recent_prices[0] < recent_prices[-1]:  # price made lower low
+        if recent_rsi[0] < recent_rsi[-1]:  # RSI made higher low
+            return {"bullish_div": True, "bearish_div": False, "description": "Bullish divergence (buy signal)"}
+    
+    # Bearish divergence: price higher high, RSI lower high
+    if recent_prices[-1] > recent_prices[0]:  # price made higher high
+        if recent_rsi[-1] < recent_rsi[0]:  # RSI made lower high
+            return {"bearish_div": True, "bullish_div": False, "description": "Bearish divergence (sell/avoid signal)"}
+    
+    return {"bullish_div": False, "bearish_div": False, "description": "No divergence"}
+
+
+def calc_bollinger_bands(prices: list, period: int = 20, num_std: float = 2.0) -> dict:
+    """Calculate Bollinger Bands and price position relative to them."""
+    if len(prices) < period:
+        return {"upper": prices[-1], "middle": prices[-1], "lower": prices[-1], "position": "insufficient_data"}
+    
+    recent = prices[-period:]
+    sma = sum(recent) / period
+    variance = sum((x - sma) ** 2 for x in recent) / period
+    std_dev = variance ** 0.5
+    
+    upper = sma + (num_std * std_dev)
+    lower = sma - (num_std * std_dev)
+    current = prices[-1]
+    
+    # Determine price position
+    if current > upper:
+        position = "above_upper"  # overbought
+    elif current < lower:
+        position = "below_lower"  # oversold
+    elif current > sma:
+        position = "above_middle"
+    else:
+        position = "below_middle"
+    
+    return {
+        "upper": round(upper, 4),
+        "middle": round(sma, 4),
+        "lower": round(lower, 4),
+        "current": round(current, 4),
+        "position": position,
+        "squeeze": round(upper - lower, 4),  # narrow band = low volatility
+    }
+
+
+def is_optimal_trading_hours(et_time) -> dict:
+    """Check if current time is optimal for day trading (avoid open chaos and close weakness)."""
+    hour = et_time.hour
+    minute = et_time.minute
+    total_minutes = hour * 60 + minute
+    
+    market_open = 9 * 60 + 30  # 9:30 ET
+    optimal_start = 10 * 60 + 0  # 10:00 ET (skip first 30 min chaos)
+    optimal_end = 15 * 60 + 0  # 15:00 ET (skip last hour weakness)
+    market_close = 16 * 60  # 16:00 ET
+    
+    if total_minutes < optimal_start or total_minutes >= optimal_end:
+        status = "suboptimal"
+        reason = "before 10:00 or after 15:00 ET" if total_minutes < optimal_start else "last hour before close (illiquid)"
+    else:
+        status = "optimal"
+        reason = "peak liquidity hours"
+    
+    return {"status": status, "reason": reason, "current_et_time": et_time.strftime("%H:%M")}
+
+
 def calc_fib_levels(swing_low: float, swing_high: float) -> dict:
     """Calculate Fibonacci retracement/extension levels."""
     diff = swing_high - swing_low
@@ -604,6 +680,17 @@ def tool_fetch_market_data(symbol: str) -> dict:
         # Scale position size by how extended the move already is
         sizing = scale_position_by_extension(daily_pct_change)
         
+        # Calculate RSI for divergence detection
+        rsi_val = calc_rsi(prices)
+        rsi_history = [calc_rsi(prices[:i+1]) for i in range(max(0, len(prices)-10), len(prices))]
+        divergence = detect_divergence(prices[-10:], rsi_history, lookback=5)
+        
+        # Bollinger Bands for mean reversion context
+        bbands = calc_bollinger_bands(prices, period=20, num_std=2.0)
+        
+        # Trading hours check
+        trading_hours = is_optimal_trading_hours(datetime.now(ET))
+        
         result = {
             "symbol":       symbol,
             "price":        price,
@@ -618,7 +705,11 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "pivot_points": pivots,
             "swing_high_20d": round(swings["swing_high"], 2),
             "swing_low_20d": round(swings["swing_low"], 2),
-            "rsi":          calc_rsi(prices),
+            "rsi":          rsi_val,
+            "divergence": divergence,
+            "bollinger_bands": bbands,
+            "trading_hours_status": trading_hours["status"],
+            "trading_hours_reason": trading_hours["reason"],
             "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
             "vwap":         vwap,
             "ema9":         calc_ema(prices, 9),
@@ -977,18 +1068,30 @@ Each run you must:
    doesn't support index options here) every run as part of your candidate set, so
    broad-market momentum/mean-reversion setups aren't missed even on days with no
    standout single-stock movers.
-3. Apply momentum/mean-reversion logic:
+3. Apply momentum/mean-reversion logic with divergence awareness:
    - RSI < 40 or bouncing off VWAP/EMA support → BUY
    - RSI > 65 → take profit (but mechanical stops handle this below)
    - Volume spike + positive news → BUY even if RSI neutral
+   - Divergence detection: if price makes new high but RSI diverges (lower high), 
+     that's exhaustion — avoid entries or exit positions at these levels. Bullish
+     divergence (price lower low, RSI higher low) = reversal entry signal.
+   - Bollinger Bands context: entry near lower band (oversold) has higher probability
+     of mean reversion; avoid entries when price is above upper band (overbought unless
+     strong breakout confirmed by volume + RL signal).
+   - Trading hours: skip before 10:00 ET (market open chaos) and after 15:00 ET 
+     (illiquid close); focus 10:00-15:00 ET for best signal quality.
    - fetch_market_data returns "rl_signal" (BUY/SELL/HOLD + confidence 0-1):
-     if it agrees with your signals and confidence > 0.01, that's added confirmation;
-     if it disagrees, don't override strong technicals, but mention it.
-4. Use the technical levels from fetch_market_data to refine entries/exits:
+     if it agrees with your signals and confidence > 0.01, that's added confirmation.
+4. Check trading_hours_status before entering: if it is "suboptimal", skip or size down
+   significantly. Use the technical levels from fetch_market_data to refine entries/exits:
    - fib_levels: 38.2% and 61.8% are strong S/R zones. Buy near support (swing_low_20d
      or 61.8% level), exit near resistance (swing_high_20d or 38.2% level).
    - pivot_points: S1/S2 = support, R1/R2 = resistance. If price is near a pivot level
      and your other signals align, higher conviction.
+   - bollinger_bands position: below_lower = oversold (buy), above_upper = overbought 
+     (avoid unless volume breakout). Use the squeeze (upper-lower) as volatility context.
+   - divergence: if bearish_div is true, skip or exit. If bullish_div is true, that
+     confirms a reversal entry near Fib support or pivot S-level.
    - suggested_position_size: use this value instead of $125 max — scaled based on how
      much the stock has already moved (lower extension = higher size, higher extension
      = lower size). Only place orders where conviction_by_extension is not "caution"
