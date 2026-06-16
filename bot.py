@@ -44,6 +44,9 @@ MIN_POSITION    = 50    # smallest position size for a low-conviction entry
 COOLDOWN_MINUTES = 30   # don't re-enter a symbol this soon after exiting it
 STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 
+# Market data cache (reuse if < 90 seconds old to reduce API/token calls)
+_market_cache = {}
+
 # Email alerts (requires SMTP_HOST / SMTP_USER / SMTP_PASS env vars; logs otherwise)
 NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "kris.yalala@yahoo.com")
 SMTP_HOST    = os.environ.get("SMTP_HOST", "")
@@ -497,6 +500,11 @@ def calc_ema(prices, period):
 
 
 def tool_fetch_market_data(symbol: str) -> dict:
+    # Return cached result if < 90 seconds old
+    now = time.time()
+    if symbol in _market_cache and (now - _market_cache[symbol].get("_ts", 0)) < 90:
+        return _market_cache[symbol]
+    
     try:
         ticker = yf.Ticker(symbol)
         hist   = ticker.history(period="30d", interval="1d")
@@ -513,7 +521,7 @@ def tool_fetch_market_data(symbol: str) -> dict:
         except Exception:
             full_info = {}
         price = round(prices[-1], 2)
-        return {
+        result = {
             "symbol":       symbol,
             "price":        price,
             "prev_close":   round(prices[-2], 2),
@@ -872,24 +880,13 @@ Each run you must:
    doesn't support index options here) every run as part of your candidate set, so
    broad-market momentum/mean-reversion setups aren't missed even on days with no
    standout single-stock movers.
-3. Apply momentum/mean-reversion logic liberally:
-   - RSI < 40 or bouncing off VWAP/EMA support -> consider BUY
-   - RSI > 65 on a held position -> consider taking some profit (SELL), but note that
-     stop-loss (-{STOP_LOSS_PCT}%) and trailing-stop (lock in gains above
-     +{PROFIT_LOCK_PCT}%, trail by {TRAIL_PCT}% off the high) are enforced mechanically
-     below — you don't need to sell winners just because they're up a few percent;
-     let the trailing stop do that so winners can keep running.
-   - Strong volume spike + positive news -> consider BUY even if RSI is neutral
-   - A top_mover with a big positive % move, confirmed by positive earnings news and
-     volume_vs_avg > 1.5, is a strong BUY candidate even if RSI is already elevated —
-     earnings-driven momentum can keep running intraday.
-   - fetch_market_data also returns "rl_signal": a BUY/SELL/HOLD action learned from
-     historical price/volume patterns via Q-learning, with a "confidence" score
-     (spread between its learned Q-values — higher means more confident). Treat this
-     as one more vote: if rl_signal.action agrees with your other signals and
-     confidence > 0.01, that's added confirmation; if it disagrees, don't let it
-     override strong technical/news signals on its own, but mention it in your
-     reasoning. "UNKNOWN" means no learned data for that state — ignore it.
+3. Apply momentum/mean-reversion logic:
+   - RSI < 40 or bouncing off VWAP/EMA support → BUY
+   - RSI > 65 → take profit (but mechanical stops handle this below)
+   - Volume spike + positive news → BUY even if RSI neutral
+   - fetch_market_data returns "rl_signal" (BUY/SELL/HOLD + confidence 0-1):
+     if it agrees with your signals and confidence > 0.01, that's added confirmation;
+     if it disagrees, don't override strong technicals, but mention it.
 4. If you have idle cash and at least one candidate clears a reasonable bar
    (don't require perfection on all signals - 2 out of 3 aligned is enough),
    PLACE THE TRADE. Call review_equity_order, and then IMMEDIATELY call
@@ -945,7 +942,7 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
         try:
             resp = client.beta.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=4096,
+                max_tokens=2048,
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 mcp_servers=[
