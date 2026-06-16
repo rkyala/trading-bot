@@ -1149,6 +1149,7 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
                 model="claude-sonnet-4-6",
                 max_tokens=2048,
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
+                timeout=90.0,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 mcp_servers=[
                     {
