@@ -702,6 +702,7 @@ TOOLS = [
             "properties": {"symbol": {"type": "string"}},
             "required": ["symbol"],
         },
+        "cache_control": {"type": "ephemeral"},
     },
 ]
 
@@ -945,8 +946,8 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
             resp = client.beta.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=4096,
-                betas=["mcp-client-2025-04-04"],
-                system=system,
+                betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 mcp_servers=[
                     {
                         "type": "url",
