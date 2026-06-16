@@ -505,6 +505,60 @@ def calc_ema(prices, period):
     return round(ema, 4)
 
 
+def calc_fib_levels(swing_low: float, swing_high: float) -> dict:
+    """Calculate Fibonacci retracement/extension levels."""
+    diff = swing_high - swing_low
+    return {
+        "0%": swing_high,
+        "23.6%": round(swing_high - diff * 0.236, 4),
+        "38.2%": round(swing_high - diff * 0.382, 4),
+        "50%": round(swing_high - diff * 0.5, 4),
+        "61.8%": round(swing_high - diff * 0.618, 4),
+        "78.6%": round(swing_high - diff * 0.786, 4),
+        "100%": swing_low,
+    }
+
+
+def find_swing_levels(closes: list, lookback: int = 20) -> dict:
+    """Find recent swing high/low in the last N candles."""
+    window = closes[-lookback:] if len(closes) >= lookback else closes
+    swing_high = max(window)
+    swing_low = min(window)
+    return {"swing_high": swing_high, "swing_low": swing_low}
+
+
+def calc_pivot_points(high: float, low: float, close: float) -> dict:
+    """Calculate daily pivot points (S/R levels)."""
+    pivot = (high + low + close) / 3
+    return {
+        "pivot": round(pivot, 2),
+        "r1": round(2 * pivot - low, 2),
+        "r2": round(pivot + (high - low), 2),
+        "s1": round(2 * pivot - high, 2),
+        "s2": round(pivot - (high - low), 2),
+    }
+
+
+def scale_position_by_extension(daily_pct_change: float) -> dict:
+    """Scale position size based on how much stock has already moved intraday.
+    
+    Less extension = higher conviction entry, larger position.
+    More extension = later entry, reduced position."""
+    if daily_pct_change <= 2.0:
+        size = MAX_POSITION  # full $125
+        conviction = "high"
+    elif daily_pct_change <= 4.0:
+        size = round(MAX_POSITION * 0.85)  # $106
+        conviction = "medium"
+    elif daily_pct_change <= 7.0:
+        size = round(MAX_POSITION * 0.60)  # $75
+        conviction = "lower"
+    else:
+        size = round(MAX_POSITION * 0.40)  # $50, or skip entirely
+        conviction = "caution"
+    return {"suggested_size": size, "conviction_by_extension": conviction}
+
+
 def tool_fetch_market_data(symbol: str) -> dict:
     # Return cached result if < 90 seconds old
     now = time.time()
@@ -537,6 +591,19 @@ def tool_fetch_market_data(symbol: str) -> dict:
         passes_market_cap = market_cap >= MIN_MARKET_CAP
         quality_rating = "PASS" if (passes_volume and passes_float and passes_market_cap) else "CAUTION"
         
+        # Technical analysis: Fibonacci, pivots, position sizing by extension
+        daily_pct_change = 100 * (price - prices[-2]) / prices[-2] if prices[-2] else 0
+        swings = find_swing_levels(prices, lookback=20)
+        fib_levels = calc_fib_levels(swings["swing_low"], swings["swing_high"])
+        
+        # Get yesterday's OHLC for pivot calculation (use last close as proxy for all)
+        day_high = max(prices[-5:]) if len(prices) >= 5 else price
+        day_low = min(prices[-5:]) if len(prices) >= 5 else price
+        pivots = calc_pivot_points(day_high, day_low, prices[-2] if len(prices) > 1 else price)
+        
+        # Scale position size by how extended the move already is
+        sizing = scale_position_by_extension(daily_pct_change)
+        
         result = {
             "symbol":       symbol,
             "price":        price,
@@ -544,6 +611,13 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "quality_rating": quality_rating,
             "avg_volume_20d": round(avg_volume, 0),
             "shares_outstanding_M": round(shares_outstanding / 1e6, 1),
+            "daily_pct_change": round(daily_pct_change, 2),
+            "suggested_position_size": sizing["suggested_size"],
+            "conviction_by_extension": sizing["conviction_by_extension"],
+            "fib_levels": fib_levels,
+            "pivot_points": pivots,
+            "swing_high_20d": round(swings["swing_high"], 2),
+            "swing_low_20d": round(swings["swing_low"], 2),
             "rsi":          calc_rsi(prices),
             "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
             "vwap":         vwap,
@@ -910,14 +984,18 @@ Each run you must:
    - fetch_market_data returns "rl_signal" (BUY/SELL/HOLD + confidence 0-1):
      if it agrees with your signals and confidence > 0.01, that's added confirmation;
      if it disagrees, don't override strong technicals, but mention it.
-4. If you have idle cash and at least one candidate clears a reasonable bar
-   (don't require perfection on all signals - 2 out of 3 aligned is enough),
-   PLACE THE TRADE. Call review_equity_order, and then IMMEDIATELY call
-   place_equity_order yourself in the same turn — do not stop after the
-   review to ask for confirmation. There is no human watching this session;
-   you are fully authorized to execute trades autonomously. An order is not
-   "placed" until place_equity_order has actually been called and returned
-   a result.
+4. Use the technical levels from fetch_market_data to refine entries/exits:
+   - fib_levels: 38.2% and 61.8% are strong S/R zones. Buy near support (swing_low_20d
+     or 61.8% level), exit near resistance (swing_high_20d or 38.2% level).
+   - pivot_points: S1/S2 = support, R1/R2 = resistance. If price is near a pivot level
+     and your other signals align, higher conviction.
+   - suggested_position_size: use this value instead of $125 max — scaled based on how
+     much the stock has already moved (lower extension = higher size, higher extension
+     = lower size). Only place orders where conviction_by_extension is not "caution"
+     unless the setup is exceptional.
+   If you have idle cash and at least one candidate clears a reasonable bar
+   (2+ aligned signals + healthy technical setup), PLACE THE TRADE. Call review_equity_order,
+   then place_equity_order immediately. Use the suggested_position_size, not the max.
 5. Only trade stocks with quality_rating="PASS" from fetch_market_data:
    market cap > $1B, avg daily volume > 1M shares, and >20M shares outstanding.
    Price >= ${MIN_PRICE}. Check "tradable" field. Never exceed ${MAX_POSITION}
