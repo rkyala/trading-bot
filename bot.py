@@ -47,6 +47,9 @@ STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 # Market data cache (reuse if < 90 seconds old to reduce API/token calls)
 _market_cache = {}
 
+# Run counter for throttling expensive operations
+_run_count = 0
+
 # Email alerts (requires SMTP_HOST / SMTP_USER / SMTP_PASS env vars; logs otherwise)
 NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "kris.yalala@yahoo.com")
 SMTP_HOST    = os.environ.get("SMTP_HOST", "")
@@ -790,6 +793,9 @@ def _fetch_portfolio_field(label, question):
 # ── Main agentic loop ─────────────────────────────────────────────────────────
 
 def run_trading_loop():
+    global _run_count
+    _run_count += 1
+    
     if not is_market_hours():
         log.info("Outside market hours — skipping")
         return
@@ -847,6 +853,7 @@ def run_trading_loop():
         log.info("Invested equity unavailable \u2014 skipping budget check.")
     # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
+    movers_note = "(Get_top_movers is throttled to every other run — skip it on odd-numbered runs to save tokens.) " if _run_count % 2 == 1 else ""
     system = f"""You are an aggressive, autonomous day-trading agent with full control over a Robinhood brokerage account.
 
 Account : {ACCT} (cash, agentic-enabled)
@@ -869,12 +876,12 @@ Each run you must:
        (financials, homebuilders, tech/growth) for new BUYs.
      - Tariff news -> favor/avoid affected sectors (industrials, retail, semis) accordingly.
    If no major macro headlines are found, proceed normally.
-2. Call get_top_movers and get_trending_stocks to discover candidates. get_top_movers
-   surfaces stocks with extraordinary moves (e.g. up double-digits on huge volume after
-   an earnings beat, like MU or SNDK after a blowout quarter) — these are prime
-   day-trading candidates. Then call get_news + fetch_market_data on 2-3 of the
-   strongest candidates, prioritizing top_movers entries with |pct_change| > 5% and
-   volume_vs_avg > 1.5.
+2. {movers_note}Call get_trending_stocks to discover candidates (get_top_movers is only called
+   every other run to save tokens — use trending as your fallback on slower scans).
+   get_top_movers surfaces stocks with extraordinary moves (e.g. up double-digits on
+   huge volume after earnings) — these are prime day-trading candidates. Then call
+   get_news + fetch_market_data on 2-3 of the strongest candidates, prioritizing
+   top_movers entries with |pct_change| > 5% and volume_vs_avg > 1.5.
    Also call fetch_market_data (news not needed) on SPY and QQQ (S&P 500 / Nasdaq-100
    index ETFs — the closest equity proxies to trading SPX/NDX, since the broker
    doesn't support index options here) every run as part of your candidate set, so
