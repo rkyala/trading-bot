@@ -1036,6 +1036,127 @@ def _fetch_portfolio_field(label, question):
 
 # ── Main agentic loop ─────────────────────────────────────────────────────────
 
+def score_candidate(market_data: dict, spy_data: dict, sector_strength: dict) -> dict:
+    """Score a candidate based on different strategy fits.
+    
+    Returns: {
+        "symbol": str,
+        "gap_fill_score": 0-100,
+        "momentum_score": 0-100,
+        "reversal_score": 0-100,
+        "mean_reversion_score": 0-100,
+        "best_strategy": str,
+        "overall_score": 0-100,
+        "filters_pass": bool,
+    }
+    """
+    if not market_data or market_data.get("error"):
+        return {"symbol": market_data.get("symbol", "?"), "overall_score": 0, "filters_pass": False}
+    
+    sym = market_data.get("symbol", "")
+    
+    # Extract data
+    gap_fill = market_data.get("gap_fill", {})
+    rs = market_data.get("relative_strength_vs_spy", {})
+    div = market_data.get("divergence", {})
+    bbands = market_data.get("bollinger_bands", {})
+    daily_pct = market_data.get("daily_pct_change", 0)
+    vol_ratio = market_data.get("volume_ratio", 1)
+    rsi = market_data.get("rsi", 50)
+    sector = market_data.get("sector")
+    
+    # SPY data for relative strength
+    spy_pct = spy_data.get("daily_pct_change", 0) if spy_data else 0
+    
+    # Baseline filter: quality + hours + relative strength
+    quality_pass = market_data.get("quality_rating") == "PASS"
+    hours_pass = market_data.get("trading_hours_status") != "suboptimal"
+    rs_pass = rs.get("tradable", False) if isinstance(rs, dict) else True
+    
+    filters_pass = quality_pass and hours_pass and rs_pass
+    
+    # Strategy scores (0-100)
+    
+    # GAP FILL: gap up >2%, price pulled back, now oversold
+    gap_fill_score = 0
+    if gap_fill.get("gap_type") == "gap_up" and gap_fill.get("gap_pct", 0) > 2:
+        gap_score = min(100, gap_fill.get("gap_pct", 0) * 10)  # bigger gap = higher score
+        pullback_score = 50 if bbands.get("position") in ["below_lower", "below_middle"] else 20
+        gap_fill_score = (gap_score + pullback_score) / 2
+    
+    # MOMENTUM: strong RS, volume, above VWAP, rising RSI
+    momentum_score = 0
+    if rs.get("outperformance_pct", 0) > 1.5:
+        rs_score = min(100, (rs.get("outperformance_pct", 0) + 2) * 20)
+        vol_score = min(100, vol_ratio * 40) if vol_ratio > 1 else 20
+        price_pos = 40 if bbands.get("position") in ["above_middle", "above_upper"] else 60
+        rsi_score = min(100, rsi * 1.2) if 40 < rsi < 70 else (rsi * 0.8 if rsi > 70 else rsi)
+        momentum_score = (rs_score + vol_score + price_pos + rsi_score) / 4
+    
+    # REVERSAL: divergence at resistance, Fib level, overbought
+    reversal_score = 0
+    if div.get("bullish_div"):
+        div_score = 80
+        fib_bonus = 20 if "fib_levels" in str(market_data) else 0
+        rsi_bonus = 20 if rsi < 40 else 0
+        reversal_score = min(100, div_score + fib_bonus + rsi_bonus)
+    
+    # MEAN REVERSION: Bollinger lower band, oversold RSI
+    mean_reversion_score = 0
+    if bbands.get("position") == "below_lower":
+        bband_score = 80
+        rsi_score = min(80, (30 - rsi) * 3) if rsi < 30 else 20
+        sector_bonus = 10 if sector and sector in sector_strength.get("top_sector", "") else 0
+        mean_reversion_score = (bband_score + rsi_score + sector_bonus) / 2
+    
+    # Overall: best score + some bonus for multiple aligned signals
+    scores = [gap_fill_score, momentum_score, reversal_score, mean_reversion_score]
+    best_strategy = ["gap_fill", "momentum", "reversal", "mean_reversion"][scores.index(max(scores))]
+    overall_score = max(scores)
+    
+    # Bonus if multiple strategies align
+    high_scores = sum(1 for s in scores if s > 40)
+    if high_scores >= 2:
+        overall_score = min(100, overall_score + 15)
+    
+    return {
+        "symbol": sym,
+        "gap_fill_score": round(gap_fill_score, 1),
+        "momentum_score": round(momentum_score, 1),
+        "reversal_score": round(reversal_score, 1),
+        "mean_reversion_score": round(mean_reversion_score, 1),
+        "best_strategy": best_strategy,
+        "overall_score": round(overall_score, 1),
+        "filters_pass": filters_pass,
+    }
+
+
+def format_ranked_candidates(candidates_with_scores: list) -> str:
+    """Format top-ranked candidates into a concise prompt section."""
+    if not candidates_with_scores:
+        return "No candidates met the quality filter today."
+    
+    # Sort by overall score descending
+    sorted_cands = sorted(candidates_with_scores, key=lambda x: x.get("overall_score", 0), reverse=True)
+    
+    # Take top 5
+    top_cands = sorted_cands[:5]
+    
+    lines = ["PRE-RANKED CANDIDATE LIST (sorted by setup quality):\n"]
+    for i, cand in enumerate(top_cands, 1):
+        sym = cand.get("symbol", "?")
+        score = cand.get("overall_score", 0)
+        strategy = cand.get("best_strategy", "unknown")
+        daily_pct = cand.get("daily_pct_change", 0)
+        rs_pct = cand.get("outperformance_pct", 0)
+        
+        line = f"{i}. {sym} | score:{score}% | strategy:{strategy} | change:{daily_pct:+.1f}% | RS:{rs_pct:+.1f}%"
+        lines.append(line)
+    
+    lines.append("\nPick ONE candidate to trade (or PASS if none are compelling).")
+    return "\n".join(lines)
+
+
 def run_trading_loop():
     global _run_count
     _run_count += 1
@@ -1097,7 +1218,12 @@ def run_trading_loop():
         log.info("Invested equity unavailable \u2014 skipping budget check.")
     # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
+    # Build system prompt
     movers_note = "(Get_top_movers is throttled to every other run — skip it on odd-numbered runs to save tokens.) " if _run_count % 2 == 1 else ""
+    
+    # Candidate ranking will be inserted here before API call
+    ranked_candidates_summary = ""  # will be populated below
+    
     system = f"""You are an aggressive, autonomous day-trading agent with full control over a Robinhood brokerage account.
 
 Account : {ACCT} (cash, agentic-enabled)
@@ -1120,19 +1246,23 @@ Each run you must:
        (financials, homebuilders, tech/growth) for new BUYs.
      - Tariff news -> favor/avoid affected sectors (industrials, retail, semis) accordingly.
    If no major macro headlines are found, proceed normally.
-2. {movers_note}Call get_trending_stocks and get_top_movers to discover candidates.
-   Gap fill strategy: if gap_type="gap_up" >2%, buy dips toward gap_fill_level (high-
-   probability mean reversion). Relative strength: only trade stocks outperforming SPY
-   by >0.5% (avoid laggards). Sector strength: prefer entries in the strongest sector
-   of the day. Then call get_news + fetch_market_data on 2-3 of the strongest candidates,
-   prioritizing outperformers with |pct_change| > 5%, volume_vs_avg > 1.5, and positive
-   relative strength vs. SPY.
+2. You will be given a pre-ranked list of top 3-5 candidates, sorted by setup quality
+   and best-fit strategy (gap_fill, momentum, reversal, or mean_reversion). Each candidate
+   shows: symbol, daily % change, relative strength vs SPY, best strategy, and overall score.
+   Review the list and pick ONE candidate to trade (or none if none score high enough).
+   The candidates are already filtered by: quality (>$1B cap, 1M+ volume, 20M+ float),
+   relative strength (>0.5% outperformance vs SPY), and sector strength (only top 2 sectors).
    Also call fetch_market_data (news not needed) on SPY and QQQ (S&P 500 / Nasdaq-100
    index ETFs — the closest equity proxies to trading SPX/NDX, since the broker
    doesn't support index options here) every run as part of your candidate set, so
    broad-market momentum/mean-reversion setups aren't missed even on days with no
    standout single-stock movers.
-3. Apply momentum/mean-reversion logic with divergence awareness:
+3. For the top candidate you're considering, confirm the setup with its key signals:
+   - Gap fill: is price near gap_fill_level with bollinger_bands below_lower?
+   - Momentum: is outperformance_pct >1.5% and RSI rising without divergence?
+   - Reversal: is bullish_div detected at a Fib support level?
+   - Mean reversion: is price at bollinger lower band with oversold RSI?
+   Apply these specific checks:
    - RSI < 40 or bouncing off VWAP/EMA support → BUY
    - RSI > 65 → take profit (but mechanical stops handle this below)
    - Volume spike + positive news → BUY even if RSI neutral
@@ -1202,6 +1332,10 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
         {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
     ]
 
+    # === CANDIDATE RANKING PHASE ===
+    # Fetch candidates, score them, and pass only top 3-5 to Claude
+    # This reduces token usage by avoiding analysis of marginal candidates
+    
     force_refresh = False
     auth_retries = 0
     while True:
