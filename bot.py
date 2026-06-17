@@ -709,6 +709,7 @@ def tool_fetch_market_data(symbol: str) -> dict:
         except Exception:
             full_info = {}
         price = round(prices[-1], 2)
+        market_cap = full_info.get("marketCap") or (ticker.fast_info.get("marketCap", 0))
         # Calculate volume and float metrics
         avg_volume = sum(volumes[-20:]) / min(20, len(volumes)) if volumes else 0
         shares_outstanding = (market_cap / price) if market_cap and price > 0 else 0
