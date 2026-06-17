@@ -777,6 +777,10 @@ def tool_fetch_market_data(symbol: str) -> dict:
         avg_volume = sum(volumes[-20:]) / min(20, len(volumes)) if volumes else 0
         shares_outstanding = (market_cap / price) if market_cap and price > 0 else 0
         
+        # Volatility calculation (filter out high-churn names) — MUST BE BEFORE quality checks
+        volatility_pct = calc_volatility(prices, lookback=20) or 0.0
+        volatility_ok = volatility_pct <= 40.0
+        
         # Quality flags
         passes_volume = (avg_volume or 0) >= MIN_AVG_VOLUME
         passes_float = (shares_outstanding or 0) >= MIN_FLOAT
@@ -786,10 +790,6 @@ def tool_fetch_market_data(symbol: str) -> dict:
         
         # Gap fill analysis (overnight gap -> mean reversion setup)
         gap_fill = calc_gap_fill(prices[-2], prices[0] if len(prices) > 0 else price)
-        
-        # Volatility calculation (filter out high-churn names)
-        volatility_pct = calc_volatility(prices, lookback=20) or 0.0
-        volatility_ok = volatility_pct <= 40.0
         
         # Technical analysis: Fibonacci, pivots, position sizing by extension
         daily_pct_change = 100 * (price - prices[-2]) / prices[-2] if prices[-2] else 0
