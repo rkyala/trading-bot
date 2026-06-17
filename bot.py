@@ -49,6 +49,7 @@ STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 
 # Market data cache (reuse if < 90 seconds old to reduce API/token calls)
 _market_cache = {}
+_spy_cache = {"price": None, "prev_close": None, "pct_change": None, "ts": 0}
 
 # Run counter for throttling expensive operations
 _run_count = 0
@@ -505,6 +506,57 @@ def calc_ema(prices, period):
     return round(ema, 4)
 
 
+def calc_gap_fill(prev_close: float, current_open: float) -> dict:
+    """Calculate overnight gap and gap-fill level (mean reversion target)."""
+    if not prev_close or prev_close == 0:
+        return {"gap_pct": 0, "gap_fill_level": 0, "gap_type": "none"}
+    
+    gap_pct = 100 * (current_open - prev_close) / prev_close
+    
+    if gap_pct > 2.0:
+        gap_type = "gap_up"
+    elif gap_pct < -2.0:
+        gap_type = "gap_down"
+    else:
+        gap_type = "none"
+    
+    return {
+        "gap_pct": round(gap_pct, 2),
+        "gap_fill_level": prev_close,
+        "gap_type": gap_type,
+        "setup": "fade gap up (buy dip toward fill)" if gap_type == "gap_up" else (
+            "ride gap down (short or skip)" if gap_type == "gap_down" else "no gap"
+        ),
+    }
+
+
+def calc_relative_strength_vs_spy(stock_pct_change: float, spy_pct_change: float) -> dict:
+    """Calculate outperformance vs. SPY (relative strength).
+    
+    Positive = stock outperforming broad market (bullish signal).
+    Negative = stock lagging SPY (bearish signal)."""
+    outperformance = stock_pct_change - spy_pct_change
+    
+    if outperformance > 1.5:
+        strength = "strong"
+    elif outperformance > 0.5:
+        strength = "moderate"
+    elif outperformance > -0.5:
+        strength = "neutral"
+    elif outperformance > -1.5:
+        strength = "weak"
+    else:
+        strength = "very_weak"
+    
+    return {
+        "stock_pct_change": round(stock_pct_change, 2),
+        "spy_pct_change": round(spy_pct_change, 2),
+        "outperformance_pct": round(outperformance, 2),
+        "relative_strength": strength,
+        "tradable": outperformance > -0.5,  # only trade if not significantly lagging
+    }
+
+
 def detect_divergence(prices: list, rsi_values: list, lookback: int = 5) -> dict:
     """Detect RSI divergence: price makes new high/low but RSI doesn't."""
     if len(prices) < lookback or len(rsi_values) < lookback:
@@ -667,6 +719,9 @@ def tool_fetch_market_data(symbol: str) -> dict:
         passes_market_cap = market_cap >= MIN_MARKET_CAP
         quality_rating = "PASS" if (passes_volume and passes_float and passes_market_cap) else "CAUTION"
         
+        # Gap fill analysis (overnight gap -> mean reversion setup)
+        gap_fill = calc_gap_fill(prices[-2], prices[0] if len(prices) > 0 else price)
+        
         # Technical analysis: Fibonacci, pivots, position sizing by extension
         daily_pct_change = 100 * (price - prices[-2]) / prices[-2] if prices[-2] else 0
         swings = find_swing_levels(prices, lookback=20)
@@ -685,6 +740,12 @@ def tool_fetch_market_data(symbol: str) -> dict:
         rsi_history = [calc_rsi(prices[:i+1]) for i in range(max(0, len(prices)-10), len(prices))]
         divergence = detect_divergence(prices[-10:], rsi_history, lookback=5)
         
+        # Relative strength will be calculated vs. SPY in the trading loop
+        relative_strength_placeholder = {
+            "outperformance_pct": "TBD_vs_SPY",
+            "tradable": "TBD_vs_SPY",
+        }
+        
         # Bollinger Bands for mean reversion context
         bbands = calc_bollinger_bands(prices, period=20, num_std=2.0)
         
@@ -699,6 +760,7 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "avg_volume_20d": round(avg_volume, 0),
             "shares_outstanding_M": round(shares_outstanding / 1e6, 1),
             "daily_pct_change": round(daily_pct_change, 2),
+            "gap_fill": gap_fill,
             "suggested_position_size": sizing["suggested_size"],
             "conviction_by_extension": sizing["conviction_by_extension"],
             "fib_levels": fib_levels,
@@ -708,6 +770,7 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "rsi":          rsi_val,
             "divergence": divergence,
             "bollinger_bands": bbands,
+            "relative_strength_vs_spy": relative_strength_placeholder,
             "trading_hours_status": trading_hours["status"],
             "trading_hours_reason": trading_hours["reason"],
             "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
@@ -1057,12 +1120,13 @@ Each run you must:
        (financials, homebuilders, tech/growth) for new BUYs.
      - Tariff news -> favor/avoid affected sectors (industrials, retail, semis) accordingly.
    If no major macro headlines are found, proceed normally.
-2. {movers_note}Call get_trending_stocks to discover candidates (get_top_movers is only called
-   every other run to save tokens — use trending as your fallback on slower scans).
-   get_top_movers surfaces stocks with extraordinary moves (e.g. up double-digits on
-   huge volume after earnings) — these are prime day-trading candidates. Then call
-   get_news + fetch_market_data on 2-3 of the strongest candidates, prioritizing
-   top_movers entries with |pct_change| > 5% and volume_vs_avg > 1.5.
+2. {movers_note}Call get_trending_stocks and get_top_movers to discover candidates.
+   Gap fill strategy: if gap_type="gap_up" >2%, buy dips toward gap_fill_level (high-
+   probability mean reversion). Relative strength: only trade stocks outperforming SPY
+   by >0.5% (avoid laggards). Sector strength: prefer entries in the strongest sector
+   of the day. Then call get_news + fetch_market_data on 2-3 of the strongest candidates,
+   prioritizing outperformers with |pct_change| > 5%, volume_vs_avg > 1.5, and positive
+   relative strength vs. SPY.
    Also call fetch_market_data (news not needed) on SPY and QQQ (S&P 500 / Nasdaq-100
    index ETFs — the closest equity proxies to trading SPX/NDX, since the broker
    doesn't support index options here) every run as part of your candidate set, so
@@ -1084,6 +1148,8 @@ Each run you must:
      if it agrees with your signals and confidence > 0.01, that's added confirmation.
 4. Check trading_hours_status before entering: if it is "suboptimal", skip or size down
    significantly. Use the technical levels from fetch_market_data to refine entries/exits:
+   - gap_fill: if gap_type="gap_up", watch for pullback toward gap_fill_level (mean
+     reversion entry). If price is already at/below gap fill, skip the setup.
    - fib_levels: 38.2% and 61.8% are strong S/R zones. Buy near support (swing_low_20d
      or 61.8% level), exit near resistance (swing_high_20d or 38.2% level).
    - pivot_points: S1/S2 = support, R1/R2 = resistance. If price is near a pivot level
