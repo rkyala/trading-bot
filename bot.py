@@ -506,6 +506,18 @@ def calc_ema(prices, period):
     return round(ema, 4)
 
 
+def calc_volatility(prices: list, lookback: int = 20) -> float:
+    """Calculate 20-day volatility as % standard deviation."""
+    if len(prices) < lookback:
+        return 0.0
+    recent = prices[-lookback:]
+    returns = [(recent[i] - recent[i-1]) / recent[i-1] for i in range(1, len(recent))]
+    mean_return = sum(returns) / len(returns)
+    variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+    std_dev = variance ** 0.5
+    return std_dev * 100  # as percentage
+
+
 def calc_gap_fill(prev_close: float, current_open: float) -> dict:
     """Calculate overnight gap and gap-fill level (mean reversion target)."""
     if not prev_close or prev_close == 0:
@@ -671,19 +683,19 @@ def scale_position_by_extension(daily_pct_change: float) -> dict:
     """Scale position size based on how much stock has already moved intraday.
     
     Less extension = higher conviction entry, larger position.
-    More extension = later entry, reduced position."""
+    More extension = later entry, reduced position or skip."""
     if daily_pct_change <= 2.0:
         size = MAX_POSITION  # full $125
         conviction = "high"
-    elif daily_pct_change <= 4.0:
-        size = round(MAX_POSITION * 0.85)  # $106
+    elif daily_pct_change <= 5.0:
+        size = round(MAX_POSITION * 0.75)  # $94
         conviction = "medium"
-    elif daily_pct_change <= 7.0:
-        size = round(MAX_POSITION * 0.60)  # $75
+    elif daily_pct_change <= 10.0:
+        size = 50  # $50 hard cap for extended moves
         conviction = "lower"
     else:
-        size = round(MAX_POSITION * 0.40)  # $50, or skip entirely
-        conviction = "caution"
+        size = 0  # skip entirely if up >10%
+        conviction = "skip_extended"
     return {"suggested_size": size, "conviction_by_extension": conviction}
 
 
@@ -718,10 +730,15 @@ def tool_fetch_market_data(symbol: str) -> dict:
         passes_volume = avg_volume >= MIN_AVG_VOLUME
         passes_float = shares_outstanding >= MIN_FLOAT
         passes_market_cap = market_cap >= MIN_MARKET_CAP
-        quality_rating = "PASS" if (passes_volume and passes_float and passes_market_cap) else "CAUTION"
+        passes_volatility = volatility_ok
+        quality_rating = "PASS" if (passes_volume and passes_float and passes_market_cap and passes_volatility) else "CAUTION"
         
         # Gap fill analysis (overnight gap -> mean reversion setup)
         gap_fill = calc_gap_fill(prices[-2], prices[0] if len(prices) > 0 else price)
+        
+        # Volatility calculation (filter out high-churn names)
+        volatility_pct = calc_volatility(prices, lookback=20)
+        volatility_ok = volatility_pct <= 40.0
         
         # Technical analysis: Fibonacci, pivots, position sizing by extension
         daily_pct_change = 100 * (price - prices[-2]) / prices[-2] if prices[-2] else 0
@@ -772,6 +789,8 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "divergence": divergence,
             "bollinger_bands": bbands,
             "relative_strength_vs_spy": relative_strength_placeholder,
+            "volatility_20d_pct": round(volatility_pct, 1),
+            "volatility_ok": volatility_ok,
             "trading_hours_status": trading_hours["status"],
             "trading_hours_reason": trading_hours["reason"],
             "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
@@ -1297,10 +1316,10 @@ Each run you must:
    (2+ aligned signals + healthy technical setup), PLACE THE TRADE. Call review_equity_order,
    then place_equity_order immediately. Use the suggested_position_size, not the max.
 5. Only trade stocks with quality_rating="PASS" from fetch_market_data:
-   market cap > $1B, avg daily volume > 1M shares, and >20M shares outstanding.
-   Price >= ${MIN_PRICE}. Check "tradable" field. Never exceed ${MAX_POSITION}
-   per position. No cryptocurrency. If quality_rating="CAUTION", skip the trade
-   unless it is exceptional (3/3 signals + high RL confidence + major news).
+   market cap > $1B, volume > 1M/day, float > 20M, volatility ≤ 40%, price >= ${MIN_PRICE}.
+   If quality_rating="CAUTION", skip unless exceptional. Position sizing uses
+   suggested_position_size (scales with extension). If daily_pct_change > 10%, SKIP
+   entirely — too extended, mean-reversion risk. No cryptocurrency.
    Position sizing — scale with conviction instead of always using the max:
      - High conviction (3/3 technical signals aligned AND rl_signal agrees with
        confidence > 0.01 AND no conflicting macro signal) -> ${MAX_POSITION}
