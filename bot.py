@@ -727,17 +727,17 @@ def tool_fetch_market_data(symbol: str) -> dict:
         shares_outstanding = (market_cap / price) if market_cap and price > 0 else 0
         
         # Quality flags
-        passes_volume = avg_volume >= MIN_AVG_VOLUME
-        passes_float = shares_outstanding >= MIN_FLOAT
-        passes_market_cap = market_cap >= MIN_MARKET_CAP
-        passes_volatility = volatility_ok
+        passes_volume = (avg_volume or 0) >= MIN_AVG_VOLUME
+        passes_float = (shares_outstanding or 0) >= MIN_FLOAT
+        passes_market_cap = (market_cap or 0) >= MIN_MARKET_CAP
+        passes_volatility = volatility_ok and (volatility_pct or 0) <= 40.0
         quality_rating = "PASS" if (passes_volume and passes_float and passes_market_cap and passes_volatility) else "CAUTION"
         
         # Gap fill analysis (overnight gap -> mean reversion setup)
         gap_fill = calc_gap_fill(prices[-2], prices[0] if len(prices) > 0 else price)
         
         # Volatility calculation (filter out high-churn names)
-        volatility_pct = calc_volatility(prices, lookback=20)
+        volatility_pct = calc_volatility(prices, lookback=20) or 0.0
         volatility_ok = volatility_pct <= 40.0
         
         # Technical analysis: Fibonacci, pivots, position sizing by extension
