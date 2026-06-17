@@ -89,10 +89,55 @@ else:
 
 client = anthropic.Anthropic(api_key=api_key)
 
+# Token usage tracking for ROI analysis
+_token_metrics = {
+    "date": "",
+    "runs": 0,
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "daily_pnl": 0.0,
+    "token_cost_usd": 0.0,  # Sonnet 4.6: $3/1M input, $15/1M output
+}
+_run_tokens = {"input": 0, "output": 0, "cost_usd": 0.0}
+
+
 # ── Robinhood token management ──────────────────────────────────────────────
 
 _tok = {"access": None, "expires_at": 0.0, "refresh": None}
 
+
+
+def _record_token_usage(input_tokens, output_tokens):
+    """Record token usage for ROI analysis. Sonnet 4.6: $3/1M input, $15/1M output."""
+    cost = (input_tokens * 3 + output_tokens * 15) / 1_000_000
+    _last_run_tokens["input"] = input_tokens
+    _last_run_tokens["output"] = output_tokens
+    _last_run_tokens["cost_usd"] = round(cost, 6)
+    _token_metrics["total_input_tokens"] += input_tokens
+    _token_metrics["total_output_tokens"] += output_tokens
+    _token_metrics["token_cost_usd"] = round(_token_metrics["token_cost_usd"] + cost, 6)
+    return cost
+
+def _log_metrics_summary(state):
+    """Log token/ROI metrics at end of run."""
+    # Calculate daily P&L from trades
+    daily_pnl = 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for trade in state.get("trade_history", [])[-100:]:  # Recent trades
+        if trade.get("date", "")[:10] == today:
+            daily_pnl += trade.get("realized_pnl", 0.0)
+    
+    _token_metrics["daily_pnl"] = round(daily_pnl, 2)
+    _token_metrics["date"] = today
+    _token_metrics["runs"] += 1
+    
+    # Check if profitable
+    roi = (daily_pnl / _token_metrics["token_cost_usd"]) if _token_metrics["token_cost_usd"] > 0 else 0
+    logging.info(f"METRICS — Tokens: {_last_run_tokens['input']+_last_run_tokens['output']} "
+                f"(${_last_run_tokens['cost_usd']:.4f}) | "
+                f"Daily P&L: ${daily_pnl:+.2f} | "
+                f"Token Cost Today: ${_token_metrics['token_cost_usd']:.2f} | "
+                f"ROI: {roi:+.1f}x")
 
 def _can_refresh():
     return bool(RH_CLIENT_ID and (RH_REFRESH_TOKEN or _tok["refresh"]))
@@ -1228,6 +1273,51 @@ def format_ranked_candidates(candidates_with_scores: list) -> str:
     return "\n".join(lines)
 
 
+def _record_token_usage(input_tokens, output_tokens):
+    """Record token usage. Sonnet 4.6: $3/1M input, $15/1M output."""
+    cost = (input_tokens * 3 + output_tokens * 15) / 1_000_000
+    _run_tokens["input"] = input_tokens
+    _run_tokens["output"] = output_tokens
+    _run_tokens["cost_usd"] = round(cost, 6)
+    _token_metrics["total_input_tokens"] += input_tokens
+    _token_metrics["total_output_tokens"] += output_tokens
+    _token_metrics["token_cost_usd"] = round(_token_metrics["token_cost_usd"] + cost, 6)
+
+def _get_daily_pnl(state):
+    """Calculate realized P&L from trades made today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    daily_pnl = 0.0
+    for trade in state.get("trade_history", [])[-200:]:
+        trade_date = trade.get("date", "")[:10] if trade.get("date") else ""
+        if trade_date == today and "realized_pnl" in trade:
+            daily_pnl += trade["realized_pnl"]
+    return round(daily_pnl, 2)
+
+def _log_metrics_summary(state):
+    """Log token/ROI metrics at end of run."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    daily_pnl = _get_daily_pnl(state)
+    _token_metrics["date"] = today
+    _token_metrics["daily_pnl"] = daily_pnl
+    _token_metrics["runs"] += 1
+    
+    roi = (daily_pnl / _token_metrics["token_cost_usd"]) if _token_metrics["token_cost_usd"] > 0 else 0
+    roi_pct = 100 * roi if _token_metrics["token_cost_usd"] > 0 else 0
+    log.info(f"TOKEN-METRICS || Tokens: {_run_tokens['input']+_run_tokens['output']} "
+             f"(${_run_tokens['cost_usd']:.4f}) || "
+             f"Daily P&L: ${daily_pnl:+.2f} || "
+             f"Total Cost: ${_token_metrics['token_cost_usd']:.2f} || "
+             f"ROI: {roi_pct:+.0f}%")
+    
+    # Save daily metrics snapshot to persistent volume for tracking
+    try:
+        metrics_file = os.path.join(os.environ.get("DATA_DIR", "."), "daily_metrics.json")
+        with open(metrics_file, "w") as f:
+            json.dump(_token_metrics, f, indent=2)
+    except Exception as e:
+        log.warning(f"Could not save metrics: {e}")
+
+
 def run_trading_loop():
     global _run_count
     _run_count += 1
@@ -1441,6 +1531,10 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
                 continue
             log.error("MCP request failed: %s", exc)
             break
+
+        # Record token usage for ROI analysis
+        if hasattr(resp, 'usage'):
+            _record_token_usage(resp.usage.input_tokens, resp.usage.output_tokens)
 
         for block in resp.content:
             if hasattr(block, "text") and block.text:
