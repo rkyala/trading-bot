@@ -51,6 +51,9 @@ STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 _market_cache = {}
 _spy_cache = {"price": None, "prev_close": None, "pct_change": None, "ts": 0}
 
+# Sector/industry cache (24-hour TTL, rarely changes)
+_sector_cache = {}  # {symbol: {sector, industry, ts}}
+
 # Run counter for throttling expensive operations
 _run_count = 0
 
@@ -699,6 +702,52 @@ def scale_position_by_extension(daily_pct_change: float) -> dict:
     return {"suggested_size": size, "conviction_by_extension": conviction}
 
 
+def batch_fetch_yfinance(symbols: list) -> dict:
+    """Fetch historical data for multiple symbols at once (much faster than serial calls).
+    
+    Returns: {symbol: {hist_df, ticker_obj}} for use by fetch_market_data."""
+    if not symbols:
+        return {}
+    
+    try:
+        # Batch download is ~10x faster than individual ticker calls
+        hist = yf.download(symbols, period="30d", interval="1d", auto_adjust=True, progress=False, group_by="ticker")
+        result = {}
+        for sym in symbols:
+            try:
+                df = hist[sym] if sym in hist else hist
+                if df is not None and not df.empty:
+                    result[sym] = {"hist": df}
+            except Exception:
+                pass
+        return result
+    except Exception:
+        return {}
+
+
+def get_sector_info(symbol: str) -> tuple:
+    """Get sector and industry, using 24-hour cache to avoid repeated API calls."""
+    now = time.time()
+    cache_entry = _sector_cache.get(symbol, {})
+    
+    # Return cached if < 24 hours old
+    if cache_entry.get("sector") and (now - cache_entry.get("ts", 0)) < 86400:
+        return cache_entry.get("sector"), cache_entry.get("industry")
+    
+    # Fetch fresh
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+        sector = info.get("sector")
+        industry = info.get("industry")
+        
+        # Cache the result
+        _sector_cache[symbol] = {"sector": sector, "industry": industry, "ts": now}
+        return sector, industry
+    except Exception:
+        return None, None
+
+
 def tool_fetch_market_data(symbol: str) -> dict:
     # Return cached result if < 90 seconds old
     now = time.time()
@@ -716,6 +765,8 @@ def tool_fetch_market_data(symbol: str) -> dict:
         vwap    = round(sum(prices[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1), 4)
         avg_vol = sum(volumes[-10:]) / 10
         info    = ticker.fast_info
+        # Use cached sector fetcher to avoid repeated API calls
+        sector, industry = get_sector_info(symbol)
         try:
             full_info = ticker.info or {}
         except Exception:
@@ -798,8 +849,8 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "ema9":         calc_ema(prices, 9),
             "ema20":        calc_ema(prices, 20),
             "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1,
-            "sector":       full_info.get("sector"),
-            "industry":     full_info.get("industry"),
+            "sector":       sector,
+            "industry":     industry,
             "market_cap":   getattr(info, "market_cap",  None),
             "pe_ratio":     getattr(info, "pe_ratio",    None),
             "52w_high":     getattr(info, "year_high",   None),
