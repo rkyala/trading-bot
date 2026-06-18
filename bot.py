@@ -99,6 +99,7 @@ _token_metrics = {
     "token_cost_usd": 0.0,  # Sonnet 4.6: $3/1M input, $15/1M output
 }
 _run_tokens = {"input": 0, "output": 0, "cost_usd": 0.0}
+_market_data_failures = 0  # Track consecutive fetch_market_data failures
 
 
 # ── Robinhood token management ──────────────────────────────────────────────
