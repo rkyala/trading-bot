@@ -757,29 +757,34 @@ def calculate_position_size_by_confidence(rsi, volume_ratio, relative_strength, 
     confidence_points = 0
     
     # RSI signal
-    if rsi < 30 or rsi > 70:
+    if rsi and not isinstance(rsi, str) and (rsi < 30 or rsi > 70):
         confidence_points += 2  # extreme RSI
-    elif 35 < rsi < 65:
+    elif rsi and not isinstance(rsi, str) and 35 < rsi < 65:
         confidence_points += 1  # neutral RSI
     
     # Volume signal
-    if volume_ratio >= 2.0:
-        confidence_points += 2  # strong volume
-    elif volume_ratio >= 1.5:
-        confidence_points += 1
+    if volume_ratio and not isinstance(volume_ratio, str):
+        if volume_ratio >= 2.0:
+            confidence_points += 2  # strong volume
+        elif volume_ratio >= 1.5:
+            confidence_points += 1
     
     # Relative strength signal
-    if relative_strength and relative_strength.get("outperformance_pct", 0) > 1.5:
-        confidence_points += 2  # strong outperformance
-    elif relative_strength and relative_strength.get("outperformance_pct", 0) > 0.75:
-        confidence_points += 1
+    if relative_strength and isinstance(relative_strength, dict):
+        rs_pct = relative_strength.get("outperformance_pct")
+        if rs_pct and not isinstance(rs_pct, str) and rs_pct > 1.5:
+            confidence_points += 2  # strong outperformance
+        elif rs_pct and not isinstance(rs_pct, str) and rs_pct > 0.75:
+            confidence_points += 1
     
     # Gap fill signal
-    if gap_fill and gap_fill.get("gap_type") == "gap_up" and 2 < gap_fill.get("gap_pct", 0) < 5:
-        confidence_points += 2  # mean reversion setup
+    if gap_fill and isinstance(gap_fill, dict):
+        gap_pct = gap_fill.get("gap_pct", 0)
+        if gap_fill.get("gap_type") == "gap_up" and isinstance(gap_pct, (int, float)) and 2 < gap_pct < 5:
+            confidence_points += 2  # mean reversion setup
     
     # Divergence signal
-    if divergence and divergence.get("bullish_div"):
+    if divergence and isinstance(divergence, dict) and divergence.get("bullish_div"):
         confidence_points += 1  # bullish divergence
     
     # Map points to position size
