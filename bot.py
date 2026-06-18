@@ -33,8 +33,8 @@ log = logging.getLogger(__name__)
 ET           = ZoneInfo("America/New_York")
 ACCT         = "432591949"
 SCAN_MINUTES = 10
-MAX_POSITION = 125   # max $ per position
-TOTAL_BUDGET = 500
+MAX_POSITION = 250   # max $ per position
+TOTAL_BUDGET = 1000
 DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
 MIN_PRICE = 5.0   # no penny stocks
 MIN_MARKET_CAP = 1e9   # min $1B market cap (was $500M, too many micro-caps)
@@ -753,6 +753,7 @@ def calculate_position_size_by_confidence(rsi, volume_ratio, relative_strength, 
     """Calculate position size based on signal confluence (how many signals align).
     
     Higher confidence = bigger position (scale with edge).
+    Doubled sizing for $1000 budget (was $500).
     """
     confidence_points = 0
     
@@ -787,17 +788,17 @@ def calculate_position_size_by_confidence(rsi, volume_ratio, relative_strength, 
     if divergence and isinstance(divergence, dict) and divergence.get("bullish_div"):
         confidence_points += 1  # bullish divergence
     
-    # Map points to position size
+    # Map points to position size (doubled for $1k budget)
     if confidence_points >= 6:
-        return {"size": 150, "confidence_level": "very_high"}
+        return {"size": 250, "confidence_level": "very_high"}
     elif confidence_points >= 5:
-        return {"size": 125, "confidence_level": "high"}
+        return {"size": 200, "confidence_level": "high"}
     elif confidence_points >= 3:
-        return {"size": 100, "confidence_level": "medium"}
+        return {"size": 150, "confidence_level": "medium"}
     elif confidence_points >= 2:
-        return {"size": 75, "confidence_level": "low"}
+        return {"size": 100, "confidence_level": "low"}
     else:
-        return {"size": 50, "confidence_level": "very_low"}
+        return {"size": 75, "confidence_level": "very_low"}
 
 
 def calculate_volatility_adjusted_stop(entry_price: float, volatility_pct: float) -> dict:
@@ -1736,10 +1737,10 @@ Each run you must:
    - divergence: if bearish_div is true, skip or exit. If bullish_div is true, that
      confirms a reversal entry near Fib support or pivot S-level.
    - suggested_position_size: This is your MINIMUM. Scale UP based on signal confluence:
-     * Very high confidence (3+ signals aligned): $150 (max position)
-     * High confidence (2+ signals): $125
-     * Medium confidence (1+ signal): $100
-     * Low confidence: $75
+     * Very high confidence (3+ signals aligned): $250 (max position, doubled for $1k budget)
+     * High confidence (2+ signals): $200
+     * Medium confidence (1+ signal): $150
+     * Low confidence: $100
      Use calculate_position_size_by_confidence() to assess signal alignment.
    - volatility_adjusted_stop: Use this instead of flat -3%. Tight markets = tighter
      stops (-1.5%), choppy markets = wider stops (-3%). Exit early at -1.5% if 
