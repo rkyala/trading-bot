@@ -910,6 +910,10 @@ def tool_fetch_market_data(symbol: str) -> dict:
                 volume_ratio=volumes[-1] / avg_vol if avg_vol else 1,
             ),
         }
+        
+        # Cache the result before returning
+        _market_cache[symbol] = {**result, "_ts": time.time()}
+        return result
     except Exception as exc:
         return {"error": str(exc)}
 
