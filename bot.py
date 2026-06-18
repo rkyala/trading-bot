@@ -1438,8 +1438,9 @@ Each run you must:
    - Bollinger Bands context: entry near lower band (oversold) has higher probability
      of mean reversion; avoid entries when price is above upper band (overbought unless
      strong breakout confirmed by volume + RL signal).
-   - Trading hours: skip before 10:00 ET (market open chaos) and after 15:00 ET 
-     (illiquid close); focus 10:00-15:00 ET for best signal quality.
+   - Trading hours: MANDATORY — DO NOT PLACE TRADES before 10:00 ET or after 15:00 ET.
+     Before 10:00 = market open chaos (wide spreads, low signal quality).
+     After 15:00 = low volume, closing volatility. Only monitor outside this window, do not trade.
    - fetch_market_data returns "rl_signal" (BUY/SELL/HOLD + confidence 0-1):
      if it agrees with your signals and confidence > 0.01, that's added confirmation.
 4. Check trading_hours_status before entering: if it is "suboptimal", skip or size down
