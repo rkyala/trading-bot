@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 ET           = ZoneInfo("America/New_York")
 ACCT         = "432591949"
-SCAN_MINUTES = 5
+SCAN_MINUTES = 10
 MAX_POSITION = 125   # max $ per position
 TOTAL_BUDGET = 500
 DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
