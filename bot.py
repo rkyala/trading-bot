@@ -878,6 +878,14 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "gap_fill": gap_fill,
             "suggested_position_size": sizing["suggested_size"],
             "conviction_by_extension": sizing["conviction_by_extension"],
+            "confidence_position_sizing": calculate_position_size_by_confidence(
+                rsi_val,
+                volumes[-1] / avg_vol if avg_vol else 1,
+                relative_strength_placeholder,
+                gap_fill,
+                divergence
+            ),
+            "volatility_adjusted_stop": calculate_volatility_adjusted_stop(price, volatility_pct),
             "fib_levels": fib_levels,
             "pivot_points": pivots,
             "swing_high_20d": round(swings["swing_high"], 2),
@@ -1353,18 +1361,20 @@ CANDIDATES (from movers + trending):
 {movers_text}
 {', '.join(trending[:10])}
 
-RULES (score 1-10):
-- +10% move or more = skip (too extended)
-- High volume (>2x avg) = +2 points
-- Recent earnings/catalyst = +3 points  
-- Technology sector = +1 point (momentum bias)
-- Defensive sector = +1 point (reversal bias)
+SCORING RULES (0-10 scale):
+- Gap fill (2-5% overnight): +3 pts (mean reversion play)
+- Gap fill (>5%): +1 pt (too extended, risky)
+- RSI extreme (<30 or >70): +2 pts (oversold/overbought)
+- Volume spike (>2x avg): +2 pts (institutional interest)
+- Relative strength vs SPY (>1%): +1 pt (outperforming)
+- Technology sector: +0.5 pt (momentum bias)
+- Sector momentum (top 2 sectors today): +1 pt
 
-TASK: Return ONLY the top 2-3 symbols with brief reason. Format:
-SYMBOL1 (score 8.5) - reason
-SYMBOL2 (score 7.2) - reason
+TASK: Score all candidates, return TOP 5 scored. Format:
+SYMBOL (8.5) - gap_fill + rsi_signal
+SYMBOL (7.2) - volume_spike + strength
 
-Be terse. No explanation needed."""
+Be terse."""
 
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -1391,7 +1401,7 @@ Be terse. No explanation needed."""
         
         log.info("HAIKU-SCREENING: Filtered %d candidates → %d finalists: %s", 
                  len(all_candidates), len(symbols), ", ".join(symbols))
-        return symbols[:3]  # Top 3 only
+        return symbols[:5]  # Top 5 candidates (give Claude more choices)
         
     except Exception as e:
         log.warning("Haiku screening failed: %s — using all candidates", e)
@@ -1471,9 +1481,11 @@ Budget  : ${TOTAL_BUDGET} total | max ${MAX_POSITION} per position
 Time    : {now}
 {status_msg}
 
-PHILOSOPHY: This account exists to trade actively. Cash sitting idle is a missed
-opportunity, not a "safe" choice. You should bias toward action over inaction.
-HOLD is a valid choice only when you've genuinely found nothing — not a default.
+PHILOSOPHY: MONEY-MAKING MODE. This account exists to generate returns through
+active day trading. Your job is to find 2-4 high-conviction setups per day and
+execute them decisively. Be aggressive on confirmed setups, not conservative.
+Size UP on high-conviction signals. Cut losers early (-1.5%) rather than riding
+to stop. Take profits at +2% when uncertain, let winners run when confirmed.
 
 Each run you must:
 1. Call get_equity_positions (Robinhood MCP) to see current holdings and cash available.
@@ -1505,6 +1517,10 @@ Each run you must:
    - Mean reversion: is price at bollinger lower band with oversold RSI?
    Apply these specific checks:
    - RSI < 40 or bouncing off VWAP/EMA support → BUY
+   - RSI > 65 → scale out 50% (take some profits, let rest run)
+   - RSI < 30 but divergence appears → take profit immediately (exhaustion)
+   - Position +1% but volume dries up → exit (momentum fading)
+   - Position -1.5% and confirmation signal fails → exit early (avoid -3% stop)
    - RSI > 65 → take profit (but mechanical stops handle this below)
    - Volume spike + positive news → BUY even if RSI neutral
    - Divergence detection: if price makes new high but RSI diverges (lower high), 
@@ -1530,10 +1546,15 @@ Each run you must:
      (avoid unless volume breakout). Use the squeeze (upper-lower) as volatility context.
    - divergence: if bearish_div is true, skip or exit. If bullish_div is true, that
      confirms a reversal entry near Fib support or pivot S-level.
-   - suggested_position_size: use this value instead of $125 max — scaled based on how
-     much the stock has already moved (lower extension = higher size, higher extension
-     = lower size). Only place orders where conviction_by_extension is not "caution"
-     unless the setup is exceptional.
+   - suggested_position_size: This is your MINIMUM. Scale UP based on signal confluence:
+     * Very high confidence (3+ signals aligned): $150 (max position)
+     * High confidence (2+ signals): $125
+     * Medium confidence (1+ signal): $100
+     * Low confidence: $75
+     Use calculate_position_size_by_confidence() to assess signal alignment.
+   - volatility_adjusted_stop: Use this instead of flat -3%. Tight markets = tighter
+     stops (-1.5%), choppy markets = wider stops (-3%). Exit early at -1.5% if 
+     signal confirmation fails (RSI divergence, volume drops, price falls below VWAP).
    If you have idle cash and at least one candidate clears a reasonable bar
    (2+ aligned signals + healthy technical setup), PLACE THE TRADE. Call review_equity_order,
    then place_equity_order immediately. Use the suggested_position_size, not the max.
