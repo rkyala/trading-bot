@@ -878,8 +878,14 @@ def tool_fetch_market_data(symbol: str) -> dict:
         return _market_cache[symbol]
     
     try:
+        # Use cached price history (much faster than fetching fresh)
+        prices = get_cached_price_history(symbol)
+        if not prices or len(prices) < 14:
+            return {"error": f"Not enough history for {symbol}"}
+        
+        # Get volumes from fresh data (needed for current calculation)
         ticker = yf.Ticker(symbol)
-        hist   = ticker.history(period="30d", interval="1d")
+        hist = ticker.history(period="30d", interval="1d")
         if hist.empty or len(hist) < 14:
             return {"error": f"Not enough history for {symbol}"}
         prices  = hist["Close"].tolist()
@@ -1019,7 +1025,17 @@ def tool_get_trending_stocks() -> dict:
 
 
 def tool_get_top_movers() -> dict:
-    """Return today's biggest % gainers/losers with high volume — often earnings-driven moves."""
+    """Return today's biggest % gainers/losers with high volume — often earnings-driven moves.
+    
+    Throttled to every 2 runs (20 min) to save API calls. Movers don't change significantly
+    in 10 minutes, so cache is safe.
+    """
+    global _movers_cache
+    
+    # Throttle: skip fetching if we have cached results from last run
+    if _movers_cache is not None and _run_count % 2 == 1:
+        return _movers_cache
+    
     try:
         movers = []
         for scr_id in ("day_gainers", "day_losers", "most_actives"):
@@ -1408,6 +1424,102 @@ def _log_metrics_summary(state):
         log.warning(f"Could not save metrics: {e}")
 
 
+
+
+def get_cached_price_history(symbol: str, period_days: int = 30) -> list:
+    """Get 30-day price history from cache, or fetch fresh and cache it."""
+    now = time.time()
+    cache_entry = _price_cache.get(symbol, {})
+    
+    # Return if cached and less than 1 hour old
+    if cache_entry.get("prices") and (now - cache_entry.get("ts", 0)) < 3600:
+        return cache_entry.get("prices", [])
+    
+    # Fetch fresh
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period=f"{period_days}d", interval="1d")
+        if hist.empty or len(hist) < 14:
+            return []
+        
+        prices = hist["Close"].tolist()
+        
+        # Cache it
+        _price_cache[symbol] = {
+            "prices": prices,
+            "last_close": prices[-1],
+            "ts": now
+        }
+        return prices
+    except Exception:
+        return []
+
+
+def get_cached_fundamentals(symbol: str) -> dict:
+    """Get fundamentals from cache (24-hour TTL), or fetch fresh."""
+    now = time.time()
+    cache_entry = _fundamentals_cache.get(symbol, {})
+    
+    # Return if cached and less than 24 hours old
+    if cache_entry.get("market_cap") and (now - cache_entry.get("ts", 0)) < 86400:
+        return cache_entry
+    
+    # Fetch fresh
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+        fast_info = ticker.fast_info or {}
+        
+        fundamentals = {
+            "market_cap": info.get("marketCap") or fast_info.get("marketCap"),
+            "pe_ratio": info.get("trailingPE"),
+            "dividend": info.get("dividendRate"),
+            "ts": now
+        }
+        
+        # Cache it
+        _fundamentals_cache[symbol] = fundamentals
+        return fundamentals
+    except Exception:
+        return {}
+
+
+def is_quality_stock_cached(symbol: str) -> dict:
+    """Check if stock passes quality filters using cache (24-hour TTL)."""
+    now = time.time()
+    cache_entry = _quality_cache.get(symbol, {})
+    
+    # Return if cached and less than 24 hours old
+    if "passes" in cache_entry and (now - cache_entry.get("ts", 0)) < 86400:
+        return cache_entry
+    
+    # Evaluate fresh
+    try:
+        fundamentals = get_cached_fundamentals(symbol)
+        market_cap = fundamentals.get("market_cap", 0)
+        
+        # Get volume
+        prices = get_cached_price_history(symbol)
+        hist = yf.Ticker(symbol).history(period="20d", interval="1d")
+        avg_vol = hist["Volume"].tail(10).mean() if not hist.empty else 0
+        
+        passes = (
+            (market_cap or 0) >= MIN_MARKET_CAP and
+            (avg_vol or 0) >= MIN_AVG_VOLUME
+        )
+        
+        result = {
+            "passes": passes,
+            "market_cap": market_cap,
+            "avg_volume": avg_vol,
+            "ts": now
+        }
+        
+        # Cache it
+        _quality_cache[symbol] = result
+        return result
+    except Exception:
+        return {"passes": False, "ts": now}
 
 def haiku_screen_candidates(movers: list, trending: list) -> list:
     """Stage 1: Use Haiku to quickly filter candidates (cheap).
