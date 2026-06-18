@@ -1323,6 +1323,80 @@ def _log_metrics_summary(state):
         log.warning(f"Could not save metrics: {e}")
 
 
+
+def haiku_screen_candidates(movers: list, trending: list) -> list:
+    """Stage 1: Use Haiku to quickly filter candidates (cheap).
+    
+    Returns: List of top 2-3 candidate symbols ranked by score.
+    Expected tokens: 300-400 (Haiku is 3-4x cheaper than Sonnet)
+    """
+    if not movers and not trending:
+        return []
+    
+    # Combine and deduplicate
+    all_candidates = list(set([m.get("symbol") for m in movers if m.get("symbol")] + 
+                              trending[:15]))[:20]
+    
+    if not all_candidates:
+        return []
+    
+    # Build a simple context for Haiku to screen
+    movers_text = "\n".join([
+        f"  {m['symbol']}: {m.get('pct_change', 0):+.1f}%, vol {m.get('volume_vs_avg', 0):.1f}x"
+        for m in movers[:10]
+    ])
+    
+    try:
+        screening_prompt = f"""You are a fast stock screener. Rank these candidates by day-trading potential.
+
+CANDIDATES (from movers + trending):
+{movers_text}
+{', '.join(trending[:10])}
+
+RULES (score 1-10):
+- +10% move or more = skip (too extended)
+- High volume (>2x avg) = +2 points
+- Recent earnings/catalyst = +3 points  
+- Technology sector = +1 point (momentum bias)
+- Defensive sector = +1 point (reversal bias)
+
+TASK: Return ONLY the top 2-3 symbols with brief reason. Format:
+SYMBOL1 (score 8.5) - reason
+SYMBOL2 (score 7.2) - reason
+
+Be terse. No explanation needed."""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{"role": "user", "content": screening_prompt}],
+        )
+        
+        # Track Haiku token usage (Haiku is 3-4x cheaper than Sonnet)
+        if hasattr(resp, 'usage'):
+            haiku_cost = (resp.usage.input_tokens * 1 + resp.usage.output_tokens * 5) / 1_000_000
+            _run_tokens["input"] += resp.usage.input_tokens
+            _run_tokens["output"] += resp.usage.output_tokens
+            _run_tokens["cost_usd"] = round(_run_tokens["cost_usd"] + haiku_cost, 6)
+            log.info("Haiku tokens: %d in + %d out ($.%.4f)", resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
+        
+        # Parse response to extract symbols
+        text = resp.content[0].text if resp.content else ""
+        symbols = []
+        for line in text.split("\n"):
+            if line.strip() and any(c.isalpha() for c in line):
+                parts = line.split()
+                if parts and parts[0].isupper() and len(parts[0]) <= 4:
+                    symbols.append(parts[0])
+        
+        log.info("HAIKU-SCREENING: Filtered %d candidates → %d finalists: %s", 
+                 len(all_candidates), len(symbols), ", ".join(symbols))
+        return symbols[:3]  # Top 3 only
+        
+    except Exception as e:
+        log.warning("Haiku screening failed: %s — using all candidates", e)
+        return all_candidates[:5]  # Fallback
+
 def run_trading_loop():
     global _run_count
     _run_count += 1
@@ -1412,7 +1486,8 @@ Each run you must:
        (financials, homebuilders, tech/growth) for new BUYs.
      - Tariff news -> favor/avoid affected sectors (industrials, retail, semis) accordingly.
    If no major macro headlines are found, proceed normally.
-2. You will be given a pre-ranked list of top 3-5 candidates, sorted by setup quality
+2. NOTE: Haiku has already pre-screened candidates for you. Focus on the finalists listed in your prompt.
+   You will be given a pre-ranked list of top 2-3 finalists (pre-filtered by Haiku), sorted by setup quality
    and best-fit strategy (gap_fill, momentum, reversal, or mean_reversion). Each candidate
    shows: symbol, daily % change, relative strength vs SPY, best strategy, and overall score.
    Review the list and pick ONE candidate to trade (or none if none score high enough).
@@ -1495,11 +1570,30 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
 {chr(10).join(forced_sells) if forced_sells else "No stop-loss or trailing-stop triggers right now."}
 {"These are MANDATORY — call review_equity_order then place_equity_order to SELL the full position for each symbol listed above, before doing anything else." if forced_sells else ""}{trading_clause}"""
 
+    # === STAGE 1: HAIKU SCREENING (cheap, fast filtering) ===
+    # Get movers and trending, then use Haiku to filter → top 3 candidates
+    movers_data = tool_get_top_movers()
+    trending_data = tool_get_trending_stocks()
+    movers_list = movers_data.get("movers", [])
+    trending_list = trending_data.get("trending", [])
+    
+    finalists = haiku_screen_candidates(movers_list, trending_list)
+    # Note: Haiku call tokens are recorded separately in haiku_screen_candidates
+    
+    if not finalists:
+        log.info("No compelling candidates passed Haiku screening — monitoring only")
+        finalists = []
+    else:
+        log.info("Haiku screening identified finalists: %s", ", ".join(finalists))
+    
+    # Build candidate list for Sonnet (focus on finalists only)
+    finalists_note = f"\nFOCUS ON THESE TOP CANDIDATES (pre-screened by Haiku): {', '.join(finalists)}" if finalists else ""
+    
     messages = [
-        {"role": "user", "content": "Run your trading analysis now and execute any trades you identify."}
+        {"role": "user", "content": f"Run your trading analysis now and execute any trades you identify.{finalists_note}"}
     ]
 
-    # === CANDIDATE RANKING PHASE ===
+    # === STAGE 2: SONNET DEEP ANALYSIS (expensive, final decision) ===
     # Fetch candidates, score them, and pass only top 3-5 to Claude
     # This reduces token usage by avoiding analysis of marginal candidates
     
@@ -1514,7 +1608,7 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
         try:
             resp = client.beta.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=2048,
+                max_tokens=1024,
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 timeout=90.0,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
