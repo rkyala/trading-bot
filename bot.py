@@ -748,6 +748,78 @@ def scale_position_by_extension(daily_pct_change: float) -> dict:
     return {"suggested_size": size, "conviction_by_extension": conviction}
 
 
+
+def calculate_position_size_by_confidence(rsi, volume_ratio, relative_strength, gap_fill, divergence) -> dict:
+    """Calculate position size based on signal confluence (how many signals align).
+    
+    Higher confidence = bigger position (scale with edge).
+    """
+    confidence_points = 0
+    
+    # RSI signal
+    if rsi < 30 or rsi > 70:
+        confidence_points += 2  # extreme RSI
+    elif 35 < rsi < 65:
+        confidence_points += 1  # neutral RSI
+    
+    # Volume signal
+    if volume_ratio >= 2.0:
+        confidence_points += 2  # strong volume
+    elif volume_ratio >= 1.5:
+        confidence_points += 1
+    
+    # Relative strength signal
+    if relative_strength and relative_strength.get("outperformance_pct", 0) > 1.5:
+        confidence_points += 2  # strong outperformance
+    elif relative_strength and relative_strength.get("outperformance_pct", 0) > 0.75:
+        confidence_points += 1
+    
+    # Gap fill signal
+    if gap_fill and gap_fill.get("gap_type") == "gap_up" and 2 < gap_fill.get("gap_pct", 0) < 5:
+        confidence_points += 2  # mean reversion setup
+    
+    # Divergence signal
+    if divergence and divergence.get("bullish_div"):
+        confidence_points += 1  # bullish divergence
+    
+    # Map points to position size
+    if confidence_points >= 6:
+        return {"size": 150, "confidence_level": "very_high"}
+    elif confidence_points >= 5:
+        return {"size": 125, "confidence_level": "high"}
+    elif confidence_points >= 3:
+        return {"size": 100, "confidence_level": "medium"}
+    elif confidence_points >= 2:
+        return {"size": 75, "confidence_level": "low"}
+    else:
+        return {"size": 50, "confidence_level": "very_low"}
+
+
+def calculate_volatility_adjusted_stop(entry_price: float, volatility_pct: float) -> dict:
+    """Calculate stop loss based on volatility (wider stops in choppy markets).
+    
+    Volatility <25%: -1.5% (tight, calm market)
+    Volatility 25-40%: -2% (normal market)
+    Volatility >40%: -3% (choppy, volatile market)
+    """
+    if volatility_pct < 25:
+        stop_pct = 1.5
+        reason = "tight_stop_calm_market"
+    elif volatility_pct <= 40:
+        stop_pct = 2.0
+        reason = "normal_stop"
+    else:
+        stop_pct = 3.0
+        reason = "wide_stop_volatile_market"
+    
+    stop_price = entry_price * (1 - stop_pct / 100)
+    return {
+        "stop_price": round(stop_price, 2),
+        "stop_pct": stop_pct,
+        "reason": reason
+    }
+
+
 def batch_fetch_yfinance(symbols: list) -> dict:
     """Fetch historical data for multiple symbols at once (much faster than serial calls).
     
