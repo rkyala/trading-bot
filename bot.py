@@ -972,7 +972,6 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "volatility_adjusted_stop": calculate_volatility_adjusted_stop(price, volatility_pct),
             "news_sentiment": assess_news_sentiment(symbol),
             "sector_context": assess_sector_context(symbol, sector),
-            "fundamental_strength": assess_fundamental_strength(symbol),
             "macro_regime": assess_macro_regime(),
             "fib_levels": fib_levels,
             "pivot_points": pivots,
@@ -1860,26 +1859,23 @@ def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = No
     ])
     
     try:
-        screening_prompt = f"""You are a fast stock screener. Rank these candidates by day-trading potential.
+        screening_prompt = f"""You are a decisive stock screener. Pick the #1 best candidate TODAY.
 
 CANDIDATES (from movers + trending):
 {movers_text}
 {', '.join(trending[:10])}
 
 SCORING RULES (0-10 scale):
-- Gap fill (2-5% overnight): +3 pts (mean reversion play)
-- Gap fill (>5%): +1 pt (too extended, risky)
-- RSI extreme (<30 or >70): +2 pts (oversold/overbought)
-- Volume spike (>2x avg): +2 pts (institutional interest)
-- Relative strength vs SPY (>1%): +1 pt (outperforming)
-- Technology sector: +0.5 pt (momentum bias)
-- Sector momentum (top 2 sectors today): +1 pt
+- Gap fill (2-5% overnight): +3 pts
+- RSI extreme (<30 or >70): +2 pts
+- Volume spike (>2x avg): +2 pts
+- Sector momentum (in top 3 today): +2 pts
+- Relative strength vs SPY (>1%): +1 pt
 
-TASK: Score all candidates, return TOP 5 scored. Format:
-SYMBOL (8.5) - gap_fill + rsi_signal
-SYMBOL (7.2) - volume_spike + strength
+TASK: Score all, return ONLY #1 best trade today. Format:
+SYMBOL
 
-Be terse."""
+Just the symbol, nothing else. Pick the highest-conviction setup."""
 
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -1904,9 +1900,9 @@ Be terse."""
                 if parts and parts[0].isupper() and len(parts[0]) <= 4:
                     symbols.append(parts[0])
         
-        log.info("HAIKU-SCREENING: Filtered %d candidates → %d finalists: %s", 
-                 len(all_candidates), len(symbols), ", ".join(symbols))
-        return symbols[:5]  # Top 5 candidates (give Claude more choices)
+        log.info("HAIKU-SCREENING: Filtered %d candidates → top pick: %s", 
+                 len(all_candidates), symbols[0] if symbols else "NONE")
+        return symbols[:1]  # Return ONLY top 1 (Sonnet will fetch data for it)
         
     except Exception as e:
         log.warning("Haiku screening failed: %s — using all candidates", e)
@@ -2003,19 +1999,20 @@ Each run you must:
        (financials, homebuilders, tech/growth) for new BUYs.
      - Tariff news -> favor/avoid affected sectors (industrials, retail, semis) accordingly.
    If no major macro headlines are found, proceed normally.
-2. NOTE: Haiku has already pre-screened candidates for you. Focus on the finalists listed in your prompt.
-   You will be given a pre-ranked list of top 2-3 finalists (pre-filtered by Haiku), sorted by setup quality
-   and best-fit strategy (gap_fill, momentum, reversal, or mean_reversion). Each candidate
-   shows: symbol, daily % change, relative strength vs SPY, best strategy, and overall score.
-   Review the list and pick ONE candidate to trade (or none if none score high enough).
+2. NOTE: Haiku has pre-screened all candidates and picked the #1 best setup TODAY.
+   You will receive market data ONLY for that top candidate (already selected by Haiku).
+   Your job: validate Haiku's pick with full context (news, sector, macro) and execute if confirmed,
+   or SKIP if context shows it's a trap (bad news, sector headwind, etc).
    The candidates are already filtered by: quality (>$1B cap, 1M+ volume, 20M+ float),
    relative strength (>0.5% outperformance vs SPY), and sector strength (only top 2 sectors).
-   Also call fetch_market_data (news not needed) on SPY and QQQ (S&P 500 / Nasdaq-100
-   index ETFs — the closest equity proxies to trading SPX/NDX, since the broker
-   doesn't support index options here) every run as part of your candidate set, so
-   broad-market momentum/mean-reversion setups aren't missed even on days with no
-   standout single-stock movers.
-3. For the top candidate you're considering, confirm the setup with its key signals:
+3. You have ONE candidate (Haiku's top pick) with full market data already fetched.
+   Your decision: BUY or SKIP?
+   - BUY if: news is positive/neutral + sector has momentum + chart confirms
+   - SKIP if: news is negative (earnings miss, scandal) + sector is weak + chart doesn't confirm
+   
+   Also check SPY and QQQ (macro context) if needed for regime confirmation.
+   
+   For the candidate you're evaluating, confirm the setup with its key signals:
    - Gap fill: is price near gap_fill_level with bollinger_bands below_lower?
    - Momentum: is outperformance_pct >1.5% and RSI rising without divergence?
    - Reversal: is bullish_div detected at a Fib support level?
@@ -2149,17 +2146,31 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
     finalists = haiku_screen_candidates(movers_list, trending_list, top_sectors=top_sectors)
     # Note: Haiku call tokens are recorded separately in haiku_screen_candidates
     
-    if not finalists:
+    if not finalists or not finalists[0]:
         log.info("No compelling candidates passed Haiku screening — monitoring only")
-        finalists = []
+        top_candidate = None
     else:
-        log.info("Haiku screening identified finalists: %s", ", ".join(finalists))
+        top_candidate = finalists[0]
+        log.info("Haiku picked top candidate: %s", top_candidate)
     
-    # Build candidate list for Sonnet (focus on finalists only)
-    finalists_note = f"\nFOCUS ON THESE TOP CANDIDATES (pre-screened by Haiku): {', '.join(finalists)}" if finalists else ""
+    # Only fetch market data for the top candidate (massive token savings)
+    candidate_data_str = ""
+    if top_candidate:
+        try:
+            market_data = tool_fetch_market_data(top_candidate)
+            if market_data and "error" not in market_data:
+                candidate_data_str = f"""
+TOP CANDIDATE (picked by Haiku): {top_candidate}
+Market data: {str(market_data)[:2000]}  (truncated)
+"""
+                log.info("Fetched market data for: %s", top_candidate)
+            else:
+                log.warning("Could not fetch data for %s", top_candidate)
+        except Exception as e:
+            log.warning("Error fetching data for %s: %s", top_candidate, e)
     
     messages = [
-        {"role": "user", "content": f"Run your trading analysis now and execute any trades you identify.{finalists_note}"}
+        {"role": "user", "content": f"Run your trading analysis now.{candidate_data_str}"}
     ]
 
     # === STAGE 2: SONNET DEEP ANALYSIS (expensive, final decision) ===
