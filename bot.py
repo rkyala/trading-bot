@@ -1982,6 +1982,35 @@ Each run you must:
      (avoid unless volume breakout). Use the squeeze (upper-lower) as volatility context.
    - divergence: if bearish_div is true, skip or exit. If bullish_div is true, that
      confirms a reversal entry near Fib support or pivot S-level.
+   
+   STRATEGY-SPECIFIC RULES (Technicals vs Context):
+   
+   MOMENTUM TRADES (price > VWAP, MACD > 0, strong volume):
+     * Technicals are self-validating — no context filter needed
+     * Works in any macro environment (bull/bear/choppy)
+     * Example: "XYZ breaks above $100 with 2x volume" → BUY (technicals confirm)
+   
+   REVERSAL/MEAN-REVERSION TRADES (RSI < 30, gap fill, bullish divergence):
+     * REQUIRES context validation (check news_sentiment, sector_context, 
+       fundamental_strength, macro_regime from fetch_market_data)
+     * Key questions: Why did it fall? Will it bounce same-day?
+       - Bad news (earnings miss, scandal) → SKIP (fundamental problem, no bounce)
+       - Whole sector falling → SKIP (sector drag, stock won't bounce)
+       - Weak fundamentals (high PE, negative profit) → SKIP (wait for better signal)
+       - Hawkish macro → reduce size or SKIP (reversals fail in rate-hike environment)
+     * Example: "XYZ RSI 25, gap fill, news neutral, sector strong, good PE" → BUY
+     * Example: "XYZ RSI 25, gap fill, earnings miss, sector weak" → SKIP
+   
+   BREAKOUT TRADES (price breaks resistance with volume, clean chart):
+     * Technicals are strong in trending markets
+     * Skip if macro regime is "bear" (breakouts fail in downtrends)
+     * Example: "SPY breaks $600 with 3x volume in bull market" → BUY
+     * Size down if market regime is "choppy"
+   
+   CORE PRINCIPLE: Technicals drive 100% of entry signals. Context just validates
+   reversals (which are risky in bad conditions) but does NOT constrain momentum or
+   breakout trades (which work in any environment).
+   
    - suggested_position_size: This is your MINIMUM. Scale UP based on signal confluence:
      * Very high confidence (3+ signals aligned): $250 (max position, doubled for $1k budget)
      * High confidence (2+ signals): $200
