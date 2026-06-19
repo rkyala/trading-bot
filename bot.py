@@ -970,6 +970,7 @@ def tool_fetch_market_data(symbol: str) -> dict:
                 divergence
             ),
             "volatility_adjusted_stop": calculate_volatility_adjusted_stop(price, volatility_pct),
+            "news_sentiment": assess_news_sentiment(symbol),
             "fib_levels": fib_levels,
             "pivot_points": pivots,
             "swing_high_20d": round(swings["swing_high"], 2),
@@ -1521,6 +1522,62 @@ def is_quality_stock_cached(symbol: str) -> dict:
         return result
     except Exception:
         return {"passes": False, "ts": now}
+
+def assess_news_sentiment(symbol: str) -> dict:
+    """Quick sentiment check on recent news. Returns sentiment and reason.
+    
+    Returns: {
+        "sentiment": "positive" | "negative" | "neutral",
+        "reason": "explanation",
+        "skip_reversal": bool  # True if bad news, don't take mean reversion
+    }
+    """
+    try:
+        news = tool_get_news(symbol)
+        headlines = news.get("headlines", [])
+        
+        if not headlines:
+            return {"sentiment": "neutral", "reason": "no news", "skip_reversal": False}
+        
+        # Check first few headlines for red flags
+        recent = " ".join(headlines[:3]).lower()
+        
+        negative_keywords = [
+            "miss", "miss", "cut", "guidance", "loss", "decline", "weak",
+            "bankruptcy", "suspend", "halt", "downgrade", "fraud", "scandal",
+            "lawsuit", "recall", "warning", "breach", "exploit"
+        ]
+        
+        positive_keywords = [
+            "beat", "surge", "gain", "strong", "upgrade", "outperform",
+            "profit", "growth", "expand", "acquisition", "partnership",
+            "approval", "launch", "record"
+        ]
+        
+        negative_count = sum(1 for kw in negative_keywords if kw in recent)
+        positive_count = sum(1 for kw in positive_keywords if kw in recent)
+        
+        if negative_count > positive_count:
+            return {
+                "sentiment": "negative",
+                "reason": f"News: {headlines[0][:100]}",
+                "skip_reversal": True
+            }
+        elif positive_count > negative_count:
+            return {
+                "sentiment": "positive",
+                "reason": f"News: {headlines[0][:100]}",
+                "skip_reversal": False
+            }
+        else:
+            return {
+                "sentiment": "neutral",
+                "reason": f"News: {headlines[0][:100]}",
+                "skip_reversal": False
+            }
+    except Exception as e:
+        return {"sentiment": "unknown", "reason": str(e), "skip_reversal": False}
+
 
 def haiku_screen_candidates(movers: list, trending: list) -> list:
     """Stage 1: Use Haiku to quickly filter candidates (cheap).
