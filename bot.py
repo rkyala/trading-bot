@@ -971,6 +971,9 @@ def tool_fetch_market_data(symbol: str) -> dict:
             ),
             "volatility_adjusted_stop": calculate_volatility_adjusted_stop(price, volatility_pct),
             "news_sentiment": assess_news_sentiment(symbol),
+            "sector_context": assess_sector_context(symbol, sector),
+            "fundamental_strength": assess_fundamental_strength(symbol),
+            "macro_regime": assess_macro_regime(),
             "fib_levels": fib_levels,
             "pivot_points": pivots,
             "swing_high_20d": round(swings["swing_high"], 2),
@@ -1522,6 +1525,192 @@ def is_quality_stock_cached(symbol: str) -> dict:
         return result
     except Exception:
         return {"passes": False, "ts": now}
+
+def assess_sector_context(symbol: str, sector: str) -> dict:
+    """Check if sector is dragging down the stock (not just company-specific).
+    
+    Returns: {
+        "sector_momentum": "strong" | "weak" | "neutral",
+        "reason": "sector up 1.5% vs stock down 3%",
+        "skip_reversal": bool  # True if whole sector is falling
+    }
+    """
+    try:
+        if not sector or sector == "Unknown":
+            return {"sector_momentum": "unknown", "reason": "no sector", "skip_reversal": False}
+        
+        # Get sector peers (use cache if available)
+        sector_etf_map = {
+            "Technology": "XLK",
+            "Financials": "XLF",
+            "Healthcare": "XLV",
+            "Utilities": "XLU",
+            "Energy": "XLE",
+            "Materials": "XLB",
+            "Industrials": "XLI",
+            "Consumer Discretionary": "XLY",
+            "Consumer Staples": "XLP",
+            "Real Estate": "XLRE",
+            "Communication": "XLC"
+        }
+        
+        etf = sector_etf_map.get(sector)
+        if not etf:
+            return {"sector_momentum": "unknown", "reason": f"sector {sector} unknown", "skip_reversal": False}
+        
+        # Check if sector ETF is weak (down more than 1% = sector drag)
+        try:
+            sector_ticker = yf.Ticker(etf)
+            sector_hist = sector_ticker.history(period="1d")
+            if sector_hist.empty:
+                return {"sector_momentum": "unknown", "reason": f"no {etf} data", "skip_reversal": False}
+            
+            sector_close = sector_hist["Close"].iloc[-1]
+            sector_prev = sector_hist["Open"].iloc[0]
+            sector_change = ((sector_close - sector_prev) / sector_prev) * 100
+            
+            if sector_change < -1.5:
+                return {
+                    "sector_momentum": "weak",
+                    "reason": f"{sector} ({etf}) down {sector_change:.1f}% — sector drag",
+                    "skip_reversal": True
+                }
+            elif sector_change > 1.5:
+                return {
+                    "sector_momentum": "strong",
+                    "reason": f"{sector} ({etf}) up {sector_change:.1f}% — tailwind",
+                    "skip_reversal": False
+                }
+            else:
+                return {
+                    "sector_momentum": "neutral",
+                    "reason": f"{sector} ({etf}) {sector_change:+.1f}%",
+                    "skip_reversal": False
+                }
+        except Exception:
+            return {"sector_momentum": "unknown", "reason": "ETF data error", "skip_reversal": False}
+    except Exception as e:
+        return {"sector_momentum": "unknown", "reason": str(e), "skip_reversal": False}
+
+
+def assess_fundamental_strength(symbol: str) -> dict:
+    """Check if stock has strong fundamentals (safe for reversal).
+    
+    Returns: {
+        "fundamental_health": "strong" | "moderate" | "weak",
+        "pe_ratio": float,
+        "relative_strength": "outperformer" | "in_line" | "underperformer",
+        "reason": "explanation"
+    }
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+        
+        pe = info.get("trailingPE") or info.get("forwardPE")
+        market_cap = info.get("marketCap")
+        profit_margin = info.get("profitMargins")
+        
+        # Industry averages (rough)
+        industry_pe = 20  # market average
+        industry_margin = 0.08
+        
+        health_score = 0
+        
+        # PE check (lower = cheaper = better for reversal)
+        if pe and pe < industry_pe * 0.8:
+            health_score += 2
+            pe_status = "cheap"
+        elif pe and pe > industry_pe * 1.2:
+            health_score -= 1
+            pe_status = "expensive"
+        else:
+            health_score += 1
+            pe_status = "fair"
+        
+        # Profitability check
+        if profit_margin and profit_margin > industry_margin:
+            health_score += 2
+        elif profit_margin and profit_margin < 0:
+            health_score -= 2
+        else:
+            health_score += 1
+        
+        # Market cap (larger = safer reversal)
+        if market_cap and market_cap >= 1e9:
+            health_score += 1
+        
+        # Overall assessment
+        if health_score >= 4:
+            return {
+                "fundamental_health": "strong",
+                "pe_ratio": round(pe, 1) if pe else None,
+                "relative_strength": "outperformer",
+                "reason": f"PE {pe_status}, profitable, large cap — safe reversal"
+            }
+        elif health_score >= 2:
+            return {
+                "fundamental_health": "moderate",
+                "pe_ratio": round(pe, 1) if pe else None,
+                "relative_strength": "in_line",
+                "reason": "Moderate fundamentals, reversal OK with caution"
+            }
+        else:
+            return {
+                "fundamental_health": "weak",
+                "pe_ratio": round(pe, 1) if pe else None,
+                "relative_strength": "underperformer",
+                "reason": "Weak fundamentals, skip reversal — wait for stronger signal"
+            }
+    except Exception as e:
+        return {
+            "fundamental_health": "unknown",
+            "pe_ratio": None,
+            "relative_strength": "unknown",
+            "reason": str(e)
+        }
+
+
+def assess_macro_regime() -> dict:
+    """Assess current macro environment (affects reversal probability).
+    
+    Returns: {
+        "regime": "bull" | "bear" | "choppy",
+        "fed_signal": "hawkish" | "dovish" | "neutral",
+        "reversal_conviction": 1.0 to 0.5  # multiply position size by this
+    }
+    """
+    # Get macro context from cached macro news
+    macro_data = _macro_cache.get("data", {})
+    headlines = macro_data.get("headlines", "") if macro_data else ""
+    
+    fed_signal = "neutral"
+    if "rate" in headlines.lower() and "hike" in headlines.lower():
+        fed_signal = "hawkish"
+        reversal_mult = 0.7  # rates rising = less reversal probability
+    elif "cut" in headlines.lower() and "rate" in headlines.lower():
+        fed_signal = "dovish"
+        reversal_mult = 1.2  # rates falling = more reversal probability
+    else:
+        reversal_mult = 1.0
+    
+    # Market regime (bull/bear) based on macro
+    if "inflation" in headlines.lower() or "recession" in headlines.lower():
+        regime = "bear"
+        reversal_mult *= 0.8
+    elif "strong" in headlines.lower() and "growth" in headlines.lower():
+        regime = "bull"
+        reversal_mult *= 1.1
+    else:
+        regime = "choppy"
+        reversal_mult *= 0.9
+    
+    return {
+        "regime": regime,
+        "fed_signal": fed_signal,
+        "reversal_conviction": round(max(0.5, min(1.3, reversal_mult)), 2)
+    }
+
 
 def assess_news_sentiment(symbol: str) -> dict:
     """Quick sentiment check on recent news. Returns sentiment and reason.
