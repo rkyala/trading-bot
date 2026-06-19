@@ -237,8 +237,28 @@ def send_trade_summary():
 
 def is_market_hours() -> bool:
     now = datetime.now(ET)
+    # Weekend check
     if now.weekday() >= 5:
         return False
+    
+    # US market holidays (closed all day)
+    holidays_2026 = {
+        "01-01",  # New Year's Day
+        "01-19",  # MLK Jr Day (3rd Monday)
+        "02-16",  # Presidents Day (3rd Monday)
+        "03-30",  # Good Friday
+        "05-25",  # Memorial Day (last Monday)
+        "06-19",  # Juneteenth
+        "07-03",  # Independence Day (observed, market closed early Friday)
+        "09-07",  # Labor Day (1st Monday)
+        "11-26",  # Thanksgiving
+        "12-25",  # Christmas
+    }
+    
+    date_str = now.strftime("%m-%d")
+    if date_str in holidays_2026:
+        return False
+    
     open_  = now.replace(hour=9,  minute=45, second=0, microsecond=0)
     close_ = now.replace(hour=16, minute=0, second=0, microsecond=0)
     return open_ <= now <= close_
