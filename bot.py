@@ -54,6 +54,10 @@ _spy_cache = {"price": None, "prev_close": None, "pct_change": None, "ts": 0}
 # Sector/industry cache (24-hour TTL, rarely changes)
 _sector_cache = {}  # {symbol: {sector, industry, ts}}
 
+# Phase 2 caching (token optimization)
+_movers_trending_cache = {"movers": None, "trending": None, "ts": 0}  # 1-hour TTL
+_haiku_candidates_cache = {"candidates": None, "ts": 0}  # 1-hour TTL (caches Haiku screening result)
+
 # Run counter for throttling expensive operations
 _run_count = 0
 
@@ -1015,6 +1019,13 @@ def tool_fetch_market_data(symbol: str) -> dict:
 
 
 def tool_get_trending_stocks() -> dict:
+    global _movers_trending_cache
+    now = time.time()
+    
+    # Return cached if fresh (< 1 hour old)
+    if _movers_trending_cache["trending"] is not None and (now - _movers_trending_cache["ts"]) < 3600:
+        return {"trending": _movers_trending_cache["trending"]}
+    
     try:
         url  = "https://query1.finance.yahoo.com/v1/finance/trending/US"
         resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
@@ -1023,6 +1034,11 @@ def tool_get_trending_stocks() -> dict:
         syms   = [q["symbol"].upper() for q in quotes[:20]
                   if q.get("symbol", "").replace("-", "").isalpha()
                   and "-" not in q.get("symbol", "")]
+        
+        # Cache it
+        _movers_trending_cache["trending"] = syms
+        _movers_trending_cache["ts"] = now
+        
         return {"trending": syms}
     except Exception as exc:
         return {"error": str(exc), "trending": ["SOXL", "NVDL", "SPXL", "NVDA", "TSLA"]}
@@ -1031,14 +1047,14 @@ def tool_get_trending_stocks() -> dict:
 def tool_get_top_movers() -> dict:
     """Return today's biggest % gainers/losers with high volume — often earnings-driven moves.
     
-    Throttled to every 2 runs (20 min) to save API calls. Movers don't change significantly
-    in 10 minutes, so cache is safe.
+    Cached for 1 hour to save API calls. Movers don't change significantly in an hour.
     """
-    global _movers_cache
+    global _movers_trending_cache
+    now = time.time()
     
-    # Throttle: skip fetching if we have cached results from last run
-    if _movers_cache is not None and _run_count % 2 == 1:
-        return _movers_cache
+    # Return cached if fresh (< 1 hour old)
+    if _movers_trending_cache["movers"] is not None and (now - _movers_trending_cache["ts"]) < 3600:
+        return {"movers": _movers_trending_cache["movers"]}
     
     try:
         movers = []
@@ -1065,7 +1081,13 @@ def tool_get_top_movers() -> dict:
                 })
         # Sort by absolute % move, biggest first — surfaces extraordinary-earnings type moves
         movers.sort(key=lambda m: abs(m["pct_change"] or 0), reverse=True)
-        return {"movers": movers[:10]}
+        movers = movers[:10]
+        
+        # Cache it
+        _movers_trending_cache["movers"] = movers
+        _movers_trending_cache["ts"] = now
+        
+        return {"movers": movers}
     except Exception as exc:
         return {"error": str(exc), "movers": []}
 
@@ -1767,66 +1789,6 @@ def assess_news_sentiment(symbol: str) -> dict:
         return {"sentiment": "unknown", "reason": str(e), "skip_reversal": False}
 
 
-def get_vix_regime() -> dict:
-    """Get VIX-based market regime (cached 2 hours). Rules trading strategy.
-    
-    Returns: {
-        "regime": "crash" | "fearful" | "normal" | "complacent",
-        "vix_value": float,
-        "recommendation": "skip_all" | "prefer_reversals" | "normal" | "prefer_momentum"
-    }
-    """
-    global _vix_cache
-    now = time.time()
-    
-    # Return cached if < 2 hours old
-    if _vix_cache.get("regime") and (now - _vix_cache.get("ts", 0)) < 7200:
-        return _vix_cache.get("data", {})
-    
-    try:
-        vix_ticker = yf.Ticker("^VIX")
-        vix_value = vix_ticker.fast_info.get("regularMarketPrice", 20)
-        
-        if vix_value > 30:
-            regime = "crash"
-            recommendation = "skip_all"  # liquidity crisis
-            reason = f"VIX {vix_value:.1f} > 30 — liquidity drying up, SKIP all trades"
-        elif vix_value > 20:
-            regime = "fearful"
-            recommendation = "prefer_reversals"
-            reason = f"VIX {vix_value:.1f} (fearful) — reversals work, avoid momentum"
-        elif vix_value < 15:
-            regime = "complacent"
-            recommendation = "prefer_momentum"
-            reason = f"VIX {vix_value:.1f} (complacent) — momentum works, avoid reversals"
-        else:
-            regime = "normal"
-            recommendation = "normal"
-            reason = f"VIX {vix_value:.1f} (normal) — both strategies OK"
-        
-        result = {
-            "regime": regime,
-            "vix_value": round(vix_value, 1),
-            "recommendation": recommendation,
-            "reason": reason
-        }
-        
-        # Cache it
-        _vix_cache["regime"] = regime
-        _vix_cache["data"] = result
-        _vix_cache["ts"] = now
-        
-        return result
-    except Exception as e:
-        log.warning(f"Could not fetch VIX: {e}")
-        return {
-            "regime": "unknown",
-            "vix_value": None,
-            "recommendation": "normal",
-            "reason": "VIX data unavailable, use normal rules"
-        }
-
-
 def get_sector_momentum() -> dict:
     """Get today's strongest/weakest sectors using sector ETFs.
     
@@ -1883,9 +1845,18 @@ def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = No
     """Stage 1: Use Haiku to quickly filter candidates (cheap).
     
     Prioritizes candidates in top-performing sectors.
-    Returns: List of top 2-3 candidate symbols ranked by score.
-    Expected tokens: 300-400 (Haiku is 3-4x cheaper than Sonnet)
+    Cache: 1-hour TTL (saves ~1400 tokens/day by skipping re-screening within the hour).
+    Returns: List of top 1 candidate symbol (Haiku's top pick).
+    Expected tokens: 300-400 per screening (Haiku is 3-4x cheaper than Sonnet).
     """
+    global _haiku_candidates_cache
+    now = time.time()
+    
+    # Return cached if fresh (< 1 hour old)
+    if _haiku_candidates_cache["candidates"] is not None and (now - _haiku_candidates_cache["ts"]) < 3600:
+        log.info("HAIKU-SCREENING: Using cached result from %.0f min ago", (now - _haiku_candidates_cache["ts"]) / 60)
+        return _haiku_candidates_cache["candidates"]
+    
     if not movers and not trending:
         return []
     
@@ -1960,9 +1931,15 @@ Just the symbol, nothing else. Pick the highest-conviction setup."""
                 if parts and parts[0].isupper() and len(parts[0]) <= 4:
                     symbols.append(parts[0])
         
+        top_pick = symbols[:1]
         log.info("HAIKU-SCREENING: Filtered %d candidates → top pick: %s", 
-                 len(all_candidates), symbols[0] if symbols else "NONE")
-        return symbols[:1]  # Return ONLY top 1 (Sonnet will fetch data for it)
+                 len(all_candidates), top_pick[0] if top_pick else "NONE")
+        
+        # Cache the result
+        _haiku_candidates_cache["candidates"] = top_pick
+        _haiku_candidates_cache["ts"] = now
+        
+        return top_pick
         
     except Exception as e:
         log.warning("Haiku screening failed: %s — using all candidates", e)
@@ -2030,7 +2007,7 @@ def run_trading_loop():
     # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     # Build system prompt
-    movers_note = "(Get_top_movers is throttled to every other run — skip it on odd-numbered runs to save tokens.) " if _run_count % 2 == 1 else ""
+    movers_note = ""  # Get_top_movers is now cached for 1 hour (no need for per-run throttling)
     
     # Candidate ranking will be inserted here before API call
     ranked_candidates_summary = ""  # will be populated below
@@ -2047,26 +2024,6 @@ active day trading. Your job is to find 2-4 high-conviction setups per day and
 execute them decisively. Be aggressive on confirmed setups, not conservative.
 Size UP on high-conviction signals. Cut losers early (-1.5%) rather than riding
 to stop. Take profits at +2% when uncertain, let winners run when confirmed.
-
-VIX REGIME RULES (CRITICAL — filters strategy by market volatility):
-The current VIX regime determines which strategies work today:
-  - VIX > 20 (fearful/panic): REVERSALS work best. Buy RSI < 30, gap fills.
-    Panic sellers bounce fast. AVOID momentum (will reverse).
-    Example: NVDA -3% RSI 22 → BUY (panic bounce likely)
-  
-  - VIX < 15 (complacent/trending): MOMENTUM works best. Buy price > VWAP, MACD > 0.
-    Market trending, reversals fail. AVOID gap fills and oversold bounces.
-    Example: NVDA > VWAP rallying → BUY (momentum continues)
-  
-  - VIX 15-20 (normal): Both strategies work equally. Use full logic.
-  
-  - VIX > 30 (crash): DO NOT TRADE. Liquidity is drying up, spreads blow up.
-    This rule is MANDATORY — liquidity death = slippage hell.
-
-Strategy adjustment:
-  If VIX recommends reversal: prioritize RSI, gap fills, divergence
-  If VIX recommends momentum: prioritize price > VWAP, MACD, volume
-  If both recommended: follow the stronger signal (highest score)
 
 Each run you must:
 1. Call get_equity_positions (Robinhood MCP) to see current holdings and cash available.
@@ -2209,18 +2166,7 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
 {chr(10).join(forced_sells) if forced_sells else "No stop-loss or trailing-stop triggers right now."}
 {"These are MANDATORY — call review_equity_order then place_equity_order to SELL the full position for each symbol listed above, before doing anything else." if forced_sells else ""}{trading_clause}"""
 
-    # === VIX REGIME CHECK (first priority) ===
-    vix_regime = get_vix_regime()
-    log.info(f"VIX-REGIME: {vix_regime['reason']}")
-    
-    # If VIX >30, skip entire run (liquidity crisis)
-    if vix_regime["recommendation"] == "skip_all":
-        log.warning("VIX crash mode detected — skipping all trades this run")
-        # Still update state but no trading
-        _log_metrics_summary(load_state())
-        return
-    
-    # === STAGE 1: HAIKU SCREENING (cheap, fast filtering) ===
+# === STAGE 1: HAIKU SCREENING (cheap, fast filtering) ===
     # Get sector momentum first to prioritize hot sectors
     sector_momentum = get_sector_momentum()
     top_sectors = sector_momentum.get("strongest", [])
