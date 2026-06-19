@@ -1767,6 +1767,66 @@ def assess_news_sentiment(symbol: str) -> dict:
         return {"sentiment": "unknown", "reason": str(e), "skip_reversal": False}
 
 
+def get_vix_regime() -> dict:
+    """Get VIX-based market regime (cached 2 hours). Rules trading strategy.
+    
+    Returns: {
+        "regime": "crash" | "fearful" | "normal" | "complacent",
+        "vix_value": float,
+        "recommendation": "skip_all" | "prefer_reversals" | "normal" | "prefer_momentum"
+    }
+    """
+    global _vix_cache
+    now = time.time()
+    
+    # Return cached if < 2 hours old
+    if _vix_cache.get("regime") and (now - _vix_cache.get("ts", 0)) < 7200:
+        return _vix_cache.get("data", {})
+    
+    try:
+        vix_ticker = yf.Ticker("^VIX")
+        vix_value = vix_ticker.fast_info.get("regularMarketPrice", 20)
+        
+        if vix_value > 30:
+            regime = "crash"
+            recommendation = "skip_all"  # liquidity crisis
+            reason = f"VIX {vix_value:.1f} > 30 — liquidity drying up, SKIP all trades"
+        elif vix_value > 20:
+            regime = "fearful"
+            recommendation = "prefer_reversals"
+            reason = f"VIX {vix_value:.1f} (fearful) — reversals work, avoid momentum"
+        elif vix_value < 15:
+            regime = "complacent"
+            recommendation = "prefer_momentum"
+            reason = f"VIX {vix_value:.1f} (complacent) — momentum works, avoid reversals"
+        else:
+            regime = "normal"
+            recommendation = "normal"
+            reason = f"VIX {vix_value:.1f} (normal) — both strategies OK"
+        
+        result = {
+            "regime": regime,
+            "vix_value": round(vix_value, 1),
+            "recommendation": recommendation,
+            "reason": reason
+        }
+        
+        # Cache it
+        _vix_cache["regime"] = regime
+        _vix_cache["data"] = result
+        _vix_cache["ts"] = now
+        
+        return result
+    except Exception as e:
+        log.warning(f"Could not fetch VIX: {e}")
+        return {
+            "regime": "unknown",
+            "vix_value": None,
+            "recommendation": "normal",
+            "reason": "VIX data unavailable, use normal rules"
+        }
+
+
 def get_sector_momentum() -> dict:
     """Get today's strongest/weakest sectors using sector ETFs.
     
@@ -1988,6 +2048,26 @@ execute them decisively. Be aggressive on confirmed setups, not conservative.
 Size UP on high-conviction signals. Cut losers early (-1.5%) rather than riding
 to stop. Take profits at +2% when uncertain, let winners run when confirmed.
 
+VIX REGIME RULES (CRITICAL — filters strategy by market volatility):
+The current VIX regime determines which strategies work today:
+  - VIX > 20 (fearful/panic): REVERSALS work best. Buy RSI < 30, gap fills.
+    Panic sellers bounce fast. AVOID momentum (will reverse).
+    Example: NVDA -3% RSI 22 → BUY (panic bounce likely)
+  
+  - VIX < 15 (complacent/trending): MOMENTUM works best. Buy price > VWAP, MACD > 0.
+    Market trending, reversals fail. AVOID gap fills and oversold bounces.
+    Example: NVDA > VWAP rallying → BUY (momentum continues)
+  
+  - VIX 15-20 (normal): Both strategies work equally. Use full logic.
+  
+  - VIX > 30 (crash): DO NOT TRADE. Liquidity is drying up, spreads blow up.
+    This rule is MANDATORY — liquidity death = slippage hell.
+
+Strategy adjustment:
+  If VIX recommends reversal: prioritize RSI, gap fills, divergence
+  If VIX recommends momentum: prioritize price > VWAP, MACD, volume
+  If both recommended: follow the stronger signal (highest score)
+
 Each run you must:
 1. Call get_equity_positions (Robinhood MCP) to see current holdings and cash available.
    Also call get_macro_news to check for Fed/FOMC, rate, inflation (CPI/PPI), jobs, GDP,
@@ -2129,6 +2209,17 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
 {chr(10).join(forced_sells) if forced_sells else "No stop-loss or trailing-stop triggers right now."}
 {"These are MANDATORY — call review_equity_order then place_equity_order to SELL the full position for each symbol listed above, before doing anything else." if forced_sells else ""}{trading_clause}"""
 
+    # === VIX REGIME CHECK (first priority) ===
+    vix_regime = get_vix_regime()
+    log.info(f"VIX-REGIME: {vix_regime['reason']}")
+    
+    # If VIX >30, skip entire run (liquidity crisis)
+    if vix_regime["recommendation"] == "skip_all":
+        log.warning("VIX crash mode detected — skipping all trades this run")
+        # Still update state but no trading
+        _log_metrics_summary(load_state())
+        return
+    
     # === STAGE 1: HAIKU SCREENING (cheap, fast filtering) ===
     # Get sector momentum first to prioritize hot sectors
     sector_momentum = get_sector_momentum()
