@@ -1768,9 +1768,62 @@ def assess_news_sentiment(symbol: str) -> dict:
         return {"sentiment": "unknown", "reason": str(e), "skip_reversal": False}
 
 
-def haiku_screen_candidates(movers: list, trending: list) -> list:
+def get_sector_momentum() -> dict:
+    """Get today's strongest/weakest sectors using sector ETFs.
+    
+    Returns: {
+        "strongest": ["Technology", "Finance", ...],
+        "weakest": ["Energy", "Utilities"],
+        "details": {sector: pct_change, ...}
+    }
+    """
+    sector_etfs = {
+        "Technology": "XLK",
+        "Financials": "XLF",
+        "Healthcare": "XLV",
+        "Industrials": "XLI",
+        "Consumer Discretionary": "XLY",
+        "Energy": "XLE",
+        "Materials": "XLB",
+        "Utilities": "XLU",
+        "Real Estate": "XLRE",
+        "Communication": "XLC"
+    }
+    
+    sector_perf = {}
+    try:
+        for sector_name, etf in sector_etfs.items():
+            try:
+                ticker = yf.Ticker(etf)
+                hist = ticker.history(period="1d")
+                if not hist.empty:
+                    open_price = hist["Open"].iloc[0]
+                    close_price = hist["Close"].iloc[-1]
+                    pct_change = ((close_price - open_price) / open_price) * 100
+                    sector_perf[sector_name] = round(pct_change, 2)
+            except:
+                pass
+        
+        if not sector_perf:
+            return {"strongest": [], "weakest": [], "details": {}}
+        
+        sorted_sectors = sorted(sector_perf.items(), key=lambda x: x[1], reverse=True)
+        strongest = [s[0] for s in sorted_sectors[:3]]
+        weakest = [s[0] for s in sorted_sectors[-3:]]
+        
+        return {
+            "strongest": strongest,
+            "weakest": weakest,
+            "details": sector_perf
+        }
+    except Exception as e:
+        return {"strongest": [], "weakest": [], "details": {}}
+
+
+def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = None) -> list:
     """Stage 1: Use Haiku to quickly filter candidates (cheap).
     
+    Prioritizes candidates in top-performing sectors.
     Returns: List of top 2-3 candidate symbols ranked by score.
     Expected tokens: 300-400 (Haiku is 3-4x cheaper than Sonnet)
     """
@@ -1780,6 +1833,22 @@ def haiku_screen_candidates(movers: list, trending: list) -> list:
     # Combine and deduplicate
     all_candidates = list(set([m.get("symbol") for m in movers if m.get("symbol")] + 
                               trending[:15]))[:20]
+    
+    # Filter to prioritize top sectors
+    if top_sectors:
+        sector_map = {}
+        for m in movers:
+            try:
+                ticker = yf.Ticker(m.get("symbol"))
+                sector = ticker.info.get("sector") or "Unknown"
+                sector_map[m.get("symbol")] = sector
+            except:
+                pass
+        
+        # Prioritize candidates in strong sectors
+        candidates_in_top_sectors = [c for c in all_candidates if sector_map.get(c) in top_sectors]
+        if candidates_in_top_sectors:
+            all_candidates = candidates_in_top_sectors[:15]
     
     if not all_candidates:
         return []
@@ -2040,11 +2109,18 @@ Each run you must:
 Default posture: look for a reason TO trade, not a reason not to. If multiple
 candidates look reasonable, trade the best one rather than waiting for a perfect setup.
 
+SECTOR ROTATION (KEY STRATEGY):
+Bot prioritizes trading in today's strongest sectors (e.g., if Semis/Tech are up 2%+,
+prefer chip stocks). This leverages sector momentum as a tailwind.
+- Strong sectors: easier to find reversals and momentum trades
+- Weak sectors: avoid even if technicals look good (sector drag kills reversals)
+
 SECTOR DIVERSIFICATION:
 {sector_summary}
 fetch_market_data returns "sector"/"industry" for each candidate — use this to avoid
 overconcentrating the small ${TOTAL_BUDGET} budget in a single sector when choosing
-between otherwise-similar candidates.
+between otherwise-similar candidates. But within the diversification rule, prefer
+the strongest sectors of the day.
 
 RE-ENTRY COOLDOWN:
 {cooldown_msg or "No symbols currently in cooldown."}
@@ -2057,13 +2133,20 @@ MECHANICAL STOP-LOSS / TRAILING-STOP:
 {"These are MANDATORY — call review_equity_order then place_equity_order to SELL the full position for each symbol listed above, before doing anything else." if forced_sells else ""}{trading_clause}"""
 
     # === STAGE 1: HAIKU SCREENING (cheap, fast filtering) ===
+    # Get sector momentum first to prioritize hot sectors
+    sector_momentum = get_sector_momentum()
+    top_sectors = sector_momentum.get("strongest", [])
+    
     # Get movers and trending, then use Haiku to filter → top 3 candidates
     movers_data = tool_get_top_movers()
     trending_data = tool_get_trending_stocks()
     movers_list = movers_data.get("movers", [])
     trending_list = trending_data.get("trending", [])
     
-    finalists = haiku_screen_candidates(movers_list, trending_list)
+    log.info(f"SECTOR-MOMENTUM: Strongest: {', '.join(top_sectors)} | "
+            f"Details: {sector_momentum.get('details', {})}")
+    
+    finalists = haiku_screen_candidates(movers_list, trending_list, top_sectors=top_sectors)
     # Note: Haiku call tokens are recorded separately in haiku_screen_candidates
     
     if not finalists:
