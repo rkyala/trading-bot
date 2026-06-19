@@ -2114,7 +2114,7 @@ Market data: {str(market_data)[:2000]}  (truncated)
         try:
             resp = client.beta.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=4096,
+                max_tokens=2048,
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 timeout=90.0,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
