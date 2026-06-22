@@ -1923,14 +1923,18 @@ CANDIDATES (from movers + trending):
 {movers_text}
 {', '.join(trending[:10])}
 
-SCORING RULES (0-10 scale):
+DISQUALIFICATION RULES (automatic skip):
+- Daily move >10%: SKIP (too extended, mean-reversion risk)
+- Daily move <-5%: SKIP (capitulation, avoid reversal traps)
+
+SCORING RULES (0-10 scale, for remaining candidates only):
 - Gap fill (2-5% overnight): +3 pts
 - RSI extreme (<30 or >70): +2 pts
 - Volume spike (>2x avg): +2 pts
 - Sector momentum (in top 3 today): +2 pts
 - Relative strength vs SPY (>1%): +1 pt
 
-TASK: Score all, return ONLY #1 best trade today. Format:
+TASK: Apply disqualification rules first. Score remaining, return ONLY #1 best trade today. Format:
 SYMBOL
 
 Just the symbol, nothing else. Pick the highest-conviction setup."""
