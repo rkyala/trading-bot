@@ -58,6 +58,13 @@ _sector_cache = {}  # {symbol: {sector, industry, ts}}
 _movers_trending_cache = {"movers": None, "trending": None, "ts": 0}  # 1-hour TTL
 _haiku_candidates_cache = {"candidates": None, "ts": 0}  # 1-hour TTL (caches Haiku screening result)
 
+# Price and fundamental caches (1-24 hour TTL)
+_price_cache = {}  # {symbol: {"prices": [...], "last_close": price, "ts": time}}
+_fundamentals_cache = {}  # {symbol: {"market_cap": ..., "pe_ratio": ..., "ts": time}}
+_quality_cache = {}  # {symbol: {"passes": bool, "market_cap": ..., "avg_volume": ..., "ts": time}}
+_movers_cache = None  # throttled, replaced by _movers_trending_cache
+_vix_cache = {"regime": None, "data": None, "ts": 0}  # 2-hour TTL
+
 # Run counter for throttling expensive operations
 _run_count = 0
 
