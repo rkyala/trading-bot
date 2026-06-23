@@ -115,14 +115,20 @@ def call_with_retry(func, max_retries=3, base_delay=0.5):
                 time.sleep(delay)
             else:
                 raise
+        except anthropic.OverloadedError as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                log.warning(f"API overloaded (529), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                time.sleep(delay)
+            else:
+                raise
         except (anthropic.APIError, Exception) as e:
             error_str = str(e)
-            # Check for overload (529) or service unavailable (503)
-            if ("529" in error_str or "overloaded" in error_str.lower() or 
-                "503" in error_str or "service unavailable" in error_str.lower()):
+            # Check for service unavailable (503)
+            if ("503" in error_str or "service unavailable" in error_str.lower()):
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-                    log.warning(f"API overloaded ({error_str[:50]}...), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                    log.warning(f"Service unavailable (503), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
                     time.sleep(delay)
                 else:
                     raise
