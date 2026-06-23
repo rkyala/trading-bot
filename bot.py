@@ -11,6 +11,7 @@ import requests
 import schedule
 import smtplib
 import time
+import random
 import logging
 import os
 import sys
@@ -99,6 +100,36 @@ else:
     log.warning("No Robinhood credentials set — trades will fail auth.")
 
 client = anthropic.Anthropic(api_key=api_key)
+
+
+# Retry wrapper for API calls (handle 429, 503, 529 errors)
+def call_with_retry(func, max_retries=3, base_delay=0.5):
+    """Retry API calls with exponential backoff on transient errors (429, 503, 529)."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except anthropic.RateLimitError as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                log.warning(f"Rate limited (429), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                time.sleep(delay)
+            else:
+                raise
+        except (anthropic.APIError, Exception) as e:
+            error_str = str(e)
+            # Check for overload (529) or service unavailable (503)
+            if ("529" in error_str or "overloaded" in error_str.lower() or 
+                "503" in error_str or "service unavailable" in error_str.lower()):
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    log.warning(f"API overloaded ({error_str[:50]}...), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                    time.sleep(delay)
+                else:
+                    raise
+            else:
+                # Not a transient error, fail fast
+                raise
+    return None
 
 # Token usage tracking for ROI analysis
 _token_metrics = {
@@ -1272,7 +1303,7 @@ def _fetch_portfolio_field(label, question):
             log.warning("Could not fetch %s: no Robinhood access token", label)
             return None
         try:
-            resp = client.beta.messages.create(
+            resp = call_with_retry(lambda: client.beta.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=300,
                 betas=["mcp-client-2025-04-04"],
@@ -1290,7 +1321,7 @@ def _fetch_portfolio_field(label, question):
                     }
                 ],
                 messages=[{"role": "user", "content": f"What is {question}?"}],
-            )
+            ))
             text = " ".join(b.text for b in resp.content if hasattr(b, "text"))
             import re
             m = re.search(r"[\d,]+\.?\d*", text)
@@ -1939,11 +1970,11 @@ SYMBOL
 
 Just the symbol, nothing else. Pick the highest-conviction setup."""
 
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            messages=[{"role": "user", "content": screening_prompt}],
-        )
+        resp = call_with_retry(lambda: client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{"role": "user", "content": screening_prompt}],
+            ))
         
         # Track Haiku token usage (Haiku is 3-4x cheaper than Sonnet)
         if hasattr(resp, 'usage'):
