@@ -31,8 +31,51 @@ except ImportError:
 try:
     from market_cache import get_symbol_data as get_cached_symbol_data
 except ImportError:
-    def get_cached_symbol_data(symbol): 
-        return None  # Fallback: market_cache.py not found or cache expired
+    def get_cached_symbol_data(symbol):
+        """Load symbol data from hybrid cache (stable + price), or None if missing/stale."""
+        import json, time
+        cache_dir = os.environ.get("DATA_DIR", ".")
+        
+        # Try stable cache first (sector, quality, fundamentals)
+        stable_file = os.path.join(cache_dir, "market_stable_cache.json")
+        price_file = os.path.join(cache_dir, "market_price_cache.json")
+        
+        stable_data = {}
+        price_data = {}
+        
+        try:
+            if os.path.exists(stable_file):
+                with open(stable_file, "r") as f:
+                    stable_cache = json.load(f)
+                    symbols = stable_cache.get("symbols", {})
+                    if symbol in symbols:
+                        stable_data = symbols[symbol]
+        except Exception as e:
+            log.debug("Stable cache miss for %s: %s", symbol, e)
+        
+        try:
+            if os.path.exists(price_file):
+                with open(price_file, "r") as f:
+                    price_cache = json.load(f)
+                    symbols = price_cache.get("symbols", {})
+                    if symbol in symbols:
+                        # Check freshness (must be <30min old)
+                        ts = price_cache.get("timestamp", 0)
+                        age_min = (time.time() - ts) / 60
+                        if age_min < 30:
+                            price_data = symbols[symbol]
+                        else:
+                            log.debug("Price cache stale for %s: %.1fmin old", symbol, age_min)
+        except Exception as e:
+            log.debug("Price cache miss for %s: %s", symbol, e)
+        
+        # Return combined data if we have both (or at least some price data)
+        if price_data:
+            return {**stable_data, **price_data}
+        elif stable_data and not os.path.exists(price_file):
+            return stable_data  # Fallback to stable-only if price cache doesn't exist
+        
+        return None  # Cache miss or stale
 
 logging.basicConfig(
     level=logging.INFO,
