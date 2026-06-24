@@ -943,7 +943,7 @@ def get_sector_info(symbol: str) -> tuple:
 def tool_fetch_market_data(symbol: str) -> dict:
     # Return cached result if < 90 seconds old
     now = time.time()
-    if symbol in _market_cache and (now - _market_cache[symbol].get("_ts", 0)) < 90:
+    if symbol in _market_cache and (now - _market_cache[symbol].get("_ts", 0)) < 14400:
         return _market_cache[symbol]
     
     try:
@@ -1019,60 +1019,20 @@ def tool_fetch_market_data(symbol: str) -> dict:
         # Trading hours check
         trading_hours = is_optimal_trading_hours(datetime.now(ET))
         
+        # MINIMAL: Essential fields only (60% token reduction)
         result = {
-            "symbol":       symbol,
-            "price":        price,
-            "prev_close":   round(prices[-2], 2),
-            "quality_rating": quality_rating,
-            "avg_volume_20d": round(avg_volume, 0),
-            "shares_outstanding_M": round(shares_outstanding / 1e6, 1),
+            "symbol": symbol,
+            "price": price,
             "daily_pct_change": round(daily_pct_change, 2),
-            "gap_fill": gap_fill,
+            "quality_rating": quality_rating,
+            "rsi": rsi_val,
+            "vwap": vwap,
+            "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1,
+            "macd": round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
             "suggested_position_size": sizing["suggested_size"],
             "conviction_by_extension": sizing["conviction_by_extension"],
-            "confidence_position_sizing": calculate_position_size_by_confidence(
-                rsi_val,
-                volumes[-1] / avg_vol if avg_vol else 1,
-                relative_strength_placeholder,
-                gap_fill,
-                divergence
-            ),
-            "volatility_adjusted_stop": calculate_volatility_adjusted_stop(price, volatility_pct),
-            "news_sentiment": assess_news_sentiment(symbol),
-            "sector_context": assess_sector_context(symbol, sector),
-            "macro_regime": assess_macro_regime(),
-            "fib_levels": fib_levels,
-            "pivot_points": pivots,
-            "swing_high_20d": round(swings["swing_high"], 2),
-            "swing_low_20d": round(swings["swing_low"], 2),
-            "rsi":          rsi_val,
-            "divergence": divergence,
+            "gap_fill": gap_fill,
             "bollinger_bands": bbands,
-            "relative_strength_vs_spy": relative_strength_placeholder,
-            "volatility_20d_pct": round(volatility_pct, 1),
-            "volatility_ok": volatility_ok,
-            "trading_hours_status": trading_hours["status"],
-            "trading_hours_reason": trading_hours["reason"],
-            "macd":         round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
-            "vwap":         vwap,
-            "ema9":         calc_ema(prices, 9),
-            "ema20":        calc_ema(prices, 20),
-            "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1,
-            "sector":       sector,
-            "industry":     industry,
-            "market_cap":   getattr(info, "market_cap",  None),
-            "pe_ratio":     getattr(info, "pe_ratio",    None),
-            "52w_high":     getattr(info, "year_high",   None),
-            "52w_low":      getattr(info, "year_low",    None),
-            "tradable":     price >= MIN_PRICE,
-            "tradable_note": None if price >= MIN_PRICE else f"Below ${MIN_PRICE} — penny stock, do not trade",
-            "rl_signal":    rl_policy.get_rl_signal(
-                rsi=calc_rsi(prices),
-                macd=calc_ema(prices, 12) - calc_ema(prices, 26),
-                price=price,
-                vwap=vwap,
-                volume_ratio=volumes[-1] / avg_vol if avg_vol else 1,
-            ),
         }
         
         # Cache the result before returning
