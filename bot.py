@@ -64,6 +64,10 @@ STATE_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "bot_state.json")
 _market_cache = {}
 _spy_cache = {"price": None, "prev_close": None, "pct_change": None, "ts": 0}
 
+# Ticker cache (avoid recreating Ticker objects every 5 minutes)
+_ticker_cache = {}
+_ticker_cache_time = {}
+
 # Sector/industry cache (24-hour TTL, rarely changes)
 _sector_cache = {}  # {symbol: {sector, industry, ts}}
 
@@ -931,6 +935,27 @@ def get_sector_info(symbol: str) -> tuple:
         return None, None
 
 
+def get_cached_ticker(symbol: str):
+    """Get or create Ticker object with 4-minute cache (avoid redundant instantiation).
+
+    Ticker objects are expensive to create (HTTP requests). Cache them to avoid
+    recreating on every 5-minute scan cycle.
+    """
+    now = time.time()
+    cache_age = now - _ticker_cache_time.get(symbol, 0)
+
+    # Return cached if < 240 seconds (4 minutes)
+    if symbol in _ticker_cache and cache_age < 240:
+        return _ticker_cache[symbol]
+
+    # Create new
+    ticker = yf.Ticker(symbol)
+    _ticker_cache[symbol] = ticker
+    _ticker_cache_time[symbol] = now
+
+    return ticker
+
+
 def tool_fetch_market_data(symbol: str) -> dict:
     # FIRST: Try local cache (0 tokens, instant)
     cached_data = get_cached_symbol_data(symbol)
@@ -953,10 +978,10 @@ def tool_fetch_market_data(symbol: str) -> dict:
         prices = get_cached_price_history(symbol)
         if not prices or len(prices) < 14:
             return {"error": f"Not enough history for {symbol}"}
-        
+
         # Get volumes from fresh data (needed for current calculation)
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="30d", interval="1d")
+        ticker = get_cached_ticker(symbol)  # Use cached Ticker (4-min TTL)
+        hist = ticker.history(period="30d", interval="1d")  # Fetch 30d, not 60d (saves ~20 tokens/run)
         if hist.empty or len(hist) < 14:
             return {"error": f"Not enough history for {symbol}"}
         prices  = hist["Close"].tolist()
