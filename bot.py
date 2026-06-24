@@ -2624,7 +2624,7 @@ FEEDBACK: {perf_summary or "None yet"}
 COOLDOWNS: {cooldown_msg or "None"}
 STOPS: {chr(10).join(forced_sells) if forced_sells else "None"}{trading_clause}
 
-{macro_reuse_note}Execute decisively. Trade good setups, don't wait for perfect."""
+{macro_reuse_note}OUTPUT FORMAT: Return a JSON object with keys: "macro" (dict), "positions" (list), "candidates" (list), "decision" (string: "BUY"/"HOLD"/"SKIP"), "reasoning" (brief string). No markdown, tables, or prose — JSON only. Execute decisively."""
 
 # === STAGE 1: DUAL HAIKU SCREENING (cheap, fast filtering) ===
     # Get sector momentum first to prioritize hot sectors
@@ -2799,7 +2799,7 @@ STRATEGY: Pick the candidate with ACCUMULATION intent (institutions backing it)
           Medium confidence on NEUTRAL is OK if technicals are strong"""
 
     messages = [
-        {"role": "user", "content": f"Run your trading analysis now.{candidate_data_str}"}
+        {"role": "user", "content": f"Run your trading analysis now and return JSON format.{candidate_data_str}"}
     ]
 
     # === STAGE 2: SONNET DEEP ANALYSIS (expensive, final decision) ===
@@ -2847,7 +2847,7 @@ STRATEGY: Pick the candidate with ACCUMULATION intent (institutions backing it)
 
         for block in resp.content:
             # Cache macro analysis if it contains MACRO ENVIRONMENT (reuse for 60 min)
-            if hasattr(block, "text") and "MACRO ENVIRONMENT" in block.text:
+            if hasattr(block, "text") and ("macro" in block.text or "MACRO" in block.text):
                 _macro_analysis_cache["analysis"] = block.text
                 _macro_analysis_cache["ts"] = time.time()
                 log.info("MACRO: Cached fresh analysis (will reuse for next 60 min)")
