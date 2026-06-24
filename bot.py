@@ -135,6 +135,72 @@ SMTP_PORT    = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER    = os.environ.get("SMTP_USER", "")
 SMTP_PASS    = os.environ.get("SMTP_PASS", "")
 
+# ════════════════════════════════════════════════════════════════════════════════
+# TOKEN BURN CIRCUIT BREAKER — Critical safeguard against runaway API costs
+# ════════════════════════════════════════════════════════════════════════════════
+
+class TokenBurnCircuitBreaker:
+    """Monitor API token spend and halt bot if burn rate exceeds threshold."""
+    
+    def __init__(self, max_tokens_per_hour=2_000_000, max_tokens_per_day=15_000_000):
+        self.max_per_hour = max_tokens_per_hour  # ~$2/hour = ~$20/day max
+        self.max_per_day = max_tokens_per_day    # ~$15/day safety ceiling
+        self.tokens_this_hour = 0
+        self.tokens_today = 0
+        self.hour_start = time.time()
+        self.day_start = time.time()
+        self.breaker_tripped = False
+        self.trip_reason = None
+        self.bot_halted = False
+    
+    def check(self, tokens_in: int, tokens_out: int) -> bool:
+        """Check token burn after API call. Returns False if threshold exceeded."""
+        now = time.time()
+        total_tokens = tokens_in + tokens_out
+        
+        # Reset hourly counter if hour elapsed
+        if now - self.hour_start > 3600:
+            self.tokens_this_hour = 0
+            self.hour_start = now
+        
+        # Reset daily counter if day elapsed  
+        if now - self.day_start > 86400:
+            self.tokens_today = 0
+            self.day_start = now
+            self.breaker_tripped = False
+            self.bot_halted = False
+        
+        self.tokens_this_hour += total_tokens
+        self.tokens_today += total_tokens
+        
+        # Check hourly limit
+        if self.tokens_this_hour > self.max_per_hour:
+            self.bot_halted = True
+            self.trip_reason = f"Hourly: {self.tokens_this_hour:,} tokens"
+            log.critical("🚨 TOKEN BURN CIRCUIT BREAKER TRIGGERED — BOT HALTED")
+            log.critical("   %s", self.trip_reason)
+            return False
+        
+        # Check daily limit
+        if self.tokens_today > self.max_per_day:
+            self.bot_halted = True
+            self.trip_reason = f"Daily: {self.tokens_today:,} tokens"
+            log.critical("🚨 CIRCUIT BREAKER — BOT HALTED (daily limit)")
+            log.critical("   %s", self.trip_reason)
+            return False
+        
+        return True
+    
+    def is_bot_halted(self) -> bool:
+        """Check if bot is currently halted."""
+        return self.bot_halted
+
+# Initialize circuit breaker
+token_breaker = TokenBurnCircuitBreaker(
+    max_tokens_per_hour=2_000_000,
+    max_tokens_per_day=15_000_000
+)
+
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
     log.error("ANTHROPIC_API_KEY not set. Exiting.")
@@ -2459,6 +2525,11 @@ def run_trading_loop():
     
     if not is_market_hours():
         log.info("Outside market hours — skipping")
+        return
+
+    # Check circuit breaker halt status at start of run
+    if token_breaker.is_bot_halted():
+        log.critical("🚫 BOT HALTED — skipping run")
         return
 
     now = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
