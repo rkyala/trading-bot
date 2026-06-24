@@ -1954,10 +1954,10 @@ def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = No
     ])
     
     try:
-        screening_prompt = f"""Pick #1 best candidate TODAY.
-MOVERS: {movers_text[:200]}
+        screening_prompt = f"""Pick #1 QUALITY candidate TODAY (already filtered for <10% extension).
+CANDIDATES: {movers_text[:200]}
 TRENDING: {', '.join(trending[:5])}
-RULES: Skip if move>10% or move<-5%. Score by gap/RSI/volume/sector. Return SYMBOL only."""
+RULES: Skip negatives. Prefer: gap fill + volume + RSI extreme + sector strength. Return SYMBOL only."""
 
         resp = call_with_retry(lambda: client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -2085,10 +2085,18 @@ Execute decisively. Trade good setups, don't wait for perfect."""
     movers_list = movers_data.get("movers", [])
     trending_list = trending_data.get("trending", [])
     
+    # FILTER OUT EXTENDED MOVERS (>10% daily change) — focus on quality stocks only
+    quality_movers = [m for m in movers_list if abs(m[1]) <= 10]  # m[1] is pct_change
+    skipped_movers = len(movers_list) - len(quality_movers)
+    if skipped_movers > 0:
+        log.info("Filtered extended movers: skipped %d (>10%% change), kept %d quality movers", 
+                 skipped_movers, len(quality_movers))
+    
     log.info(f"SECTOR-MOMENTUM: Strongest: {', '.join(top_sectors)} | "
             f"Details: {sector_momentum.get('details', {})}")
     
-    finalists = haiku_screen_candidates(movers_list, trending_list, top_sectors=top_sectors)
+    # Pass only quality movers + trending to Haiku
+    finalists = haiku_screen_candidates(quality_movers, trending_list, top_sectors=top_sectors)
     # Note: Haiku call tokens are recorded separately in haiku_screen_candidates
     
     if not finalists or not finalists[0]:
