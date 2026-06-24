@@ -1910,7 +1910,7 @@ def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = No
     
     Prioritizes candidates in top-performing sectors.
     Cache: 1-hour TTL (saves ~1400 tokens/day by skipping re-screening within the hour).
-    Returns: List of top 3 candidates (primary + 2 fallback picks).
+    Returns: List of top 1 candidate symbol (Haiku's top pick).
     Expected tokens: 300-400 per screening (Haiku is 3-4x cheaper than Sonnet).
     """
     global _haiku_candidates_cache
@@ -1982,9 +1982,9 @@ RULES: Skip if move>10% or move<-5%. Score by gap/RSI/volume/sector. Return SYMB
                 if parts and parts[0].isupper() and len(parts[0]) <= 4:
                     symbols.append(parts[0])
         
-        top_pick = symbols[:3]  # Top 3 fallback candidates
-        log.info("HAIKU-SCREENING: Filtered %d candidates → top 3: %s", 
-                 len(all_candidates), ", ".join(top_pick) if top_pick else "NONE")
+        top_pick = symbols[:1]
+        log.info("HAIKU-SCREENING: Filtered %d candidates → top pick: %s", 
+                 len(all_candidates), top_pick[0] if top_pick else "NONE")
         
         # Cache the result
         _haiku_candidates_cache["candidates"] = top_pick
