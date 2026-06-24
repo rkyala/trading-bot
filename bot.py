@@ -1982,15 +1982,15 @@ RULES: Skip if move>10% or move<-5%. Score by gap/RSI/volume/sector. Return SYMB
                 if parts and parts[0].isupper() and len(parts[0]) <= 4:
                     symbols.append(parts[0])
         
-        top_pick = symbols[:1]
-        log.info("HAIKU-SCREENING: Filtered %d candidates → top pick: %s", 
-                 len(all_candidates), top_pick[0] if top_pick else "NONE")
+        top_candidates = symbols[:3]
+        log.info("HAIKU-SCREENING: Filtered %d candidates → top 3: %s", 
+                 len(all_candidates), " > ".join(top_candidates) if top_candidates else "NONE")
         
         # Cache the result
-        _haiku_candidates_cache["candidates"] = top_pick
+        _haiku_candidates_cache["candidates"] = top_candidates
         _haiku_candidates_cache["ts"] = now
         
-        return top_pick
+        return top_candidates
         
     except Exception as e:
         log.warning("Haiku screening failed: %s — using all candidates", e)
