@@ -46,9 +46,9 @@ log = logging.getLogger(__name__)
 ET           = ZoneInfo("America/New_York")
 ACCT         = "432591949"
 SCAN_MINUTES = 10
-MAX_POSITION = 250   # max $ per position
-TOTAL_BUDGET = 1000
-DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops this % from day-start
+MAX_POSITION = 500   # max $ per position (scaled from $250 for $2K budget)
+TOTAL_BUDGET = 2000  # doubled from $1000
+DAILY_LOSS_LIMIT_PCT = 5.0   # halt new buys if equity drops 5% from day-start (~$100 loss)
 MIN_PRICE = 5.0   # no penny stocks
 MIN_MARKET_CAP = 1e9   # min $1B market cap (was $500M, too many micro-caps)
 MIN_AVG_VOLUME = 1e6   # min 1M shares/day average volume (for liquidity)
@@ -2451,10 +2451,10 @@ def run_trading_loop():
     # Candidate ranking will be inserted here before API call
     ranked_candidates_summary = ""  # will be populated below
     
-    system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}|{now}|{status_msg}
-RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +2% 7.Trade 10-15 ET only 8.Exit immediately if gamma collapses
+    system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}/trade|{now}|{status_msg}
+RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +2% 7.Trade 10-15 ET only 8.Exit immediately if gamma collapses 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
 Strategies: GAP-FILL (oversold bounce, mean reversion, RSI<30) | MOMENTUM (trend follow, highest gainers, MACD+)
-Risk: GAMMA COLLAPSE = institutional exit signal → exit position immediately
+Risk: GAMMA COLLAPSE = institutional exit signal → exit position immediately | DAILY LOSS LIMIT = halt new buys
 
 SECTORS: {sector_summary}
 FEEDBACK: {perf_summary or "None yet"}
