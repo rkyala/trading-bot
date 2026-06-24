@@ -22,6 +22,11 @@ from zoneinfo import ZoneInfo
 
 import rl_policy
 
+try:
+    import yoptions  # Free options data library
+except ImportError:
+    yoptions = None
+
 # Optional: Use local market data cache if available
 try:
     from market_cache import get_symbol_data as get_cached_symbol_data
@@ -1953,6 +1958,148 @@ RULES: Prefer: gap down overnight + RSI<30 + high volume. Return SYMBOL only."""
         log.warning("Haiku gap-fill screening failed: %s — fallback", e)
         return all_candidates[:3]  # Fallback
 
+def fetch_options_summary(symbol: str) -> dict:
+    """Fetch options data for gamma collapse detection.
+
+    Returns summary of call/put activity (free CBOE data).
+    Uses yfinance as fallback if yoptions unavailable.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+
+        # Try to get options expirations and chains
+        expirations = ticker.options
+        if not expirations:
+            return None
+
+        # Get the nearest expiration (soonest = most active trading)
+        nearest_exp = expirations[0]
+        opts = ticker.option_chain(nearest_exp)
+
+        calls = opts.calls
+        puts = opts.puts
+
+        # Calculate volumes
+        call_volume = calls['volume'].sum() if not calls.empty else 0
+        put_volume = puts['volume'].sum() if not puts.empty else 0
+
+        # Calculate IV (implied volatility)
+        call_iv = calls['impliedVolatility'].mean() if not calls.empty else 0
+        put_iv = puts['impliedVolatility'].mean() if not puts.empty else 0
+
+        # Call/put ratio
+        ratio = call_volume / (put_volume or 1)
+
+        # Open interest for trend detection
+        call_oi = calls['openInterest'].sum() if not calls.empty else 0
+        put_oi = puts['openInterest'].sum() if not puts.empty else 0
+
+        return {
+            "symbol": symbol,
+            "call_volume": call_volume,
+            "put_volume": put_volume,
+            "call_put_ratio": round(ratio, 2),
+            "call_iv": round(call_iv, 4),
+            "put_iv": round(put_iv, 4),
+            "call_open_interest": call_oi,
+            "put_open_interest": put_oi,
+            "timestamp": time.time(),
+        }
+    except Exception as e:
+        log.debug(f"Options data fetch failed for {symbol}: {e}")
+        return None
+
+
+def detect_gamma_collapse(symbol: str, prev_ratio: float = None) -> dict:
+    """Detect gamma collapse (call buying exhaustion).
+
+    Uses Haiku to analyze options flow and recommend exit.
+    Returns: {
+        "collapsed": bool,
+        "reason": str,
+        "haiku_recommendation": str (EXIT or HOLD or UNKNOWN)
+    }
+    """
+    current_data = fetch_options_summary(symbol)
+
+    if not current_data:
+        return {"collapsed": False, "reason": "No options data", "haiku_recommendation": "HOLD"}
+
+    current_ratio = current_data["call_put_ratio"]
+    call_volume = current_data["call_volume"]
+    put_volume = current_data["put_volume"]
+    call_iv = current_data["call_iv"]
+    put_iv = current_data["put_iv"]
+
+    # Detect collapse signals
+    signals = []
+
+    if prev_ratio and (prev_ratio - current_ratio) / (prev_ratio or 1) > 0.25:
+        signals.append(f"Call/put ratio dropped 25%+ ({prev_ratio:.2f} → {current_ratio:.2f})")
+
+    if call_volume < 1000:
+        signals.append(f"Call volume critically low ({call_volume})")
+
+    if put_iv > call_iv * 1.2:
+        signals.append(f"Put IV > Call IV (downside hedging, {put_iv:.2f} vs {call_iv:.2f})")
+
+    if not signals:
+        return {"collapsed": False, "reason": "No collapse signals", "haiku_recommendation": "HOLD"}
+
+    # Use Haiku to interpret options flow (lightweight analysis)
+    try:
+        options_summary = f"""Stock: {symbol}
+Call/Put Ratio: {current_ratio:.2f}
+Call Volume: {call_volume}
+Put Volume: {put_volume}
+Call IV: {call_iv:.4f}
+Put IV: {put_iv:.4f}
+Call OI: {current_data['call_open_interest']}
+Put OI: {current_data['put_open_interest']}
+
+Signals: {'; '.join(signals)}
+
+Is this gamma collapse (institution exit)? EXIT or HOLD?
+Answer with one word only: EXIT or HOLD"""
+
+        resp = call_with_retry(lambda: client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            messages=[{"role": "user", "content": options_summary}],
+        ))
+
+        # Track token usage
+        if hasattr(resp, 'usage'):
+            haiku_cost = (resp.usage.input_tokens * 1 + resp.usage.output_tokens * 5) / 1_000_000
+            _run_tokens["input"] += resp.usage.input_tokens
+            _run_tokens["output"] += resp.usage.output_tokens
+            _run_tokens["cost_usd"] = round(_run_tokens["cost_usd"] + haiku_cost, 6)
+            log.info("Haiku (gamma) tokens: %d in + %d out ($.%.4f)",
+                    resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
+
+        recommendation = resp.content[0].text.strip().upper() if resp.content else "UNKNOWN"
+
+        collapsed = recommendation == "EXIT"
+
+        log.info("GAMMA-COLLAPSE: %s | Ratio: %.2f | Signals: %s | Haiku: %s",
+                symbol, current_ratio, "; ".join(signals)[:100], recommendation)
+
+        return {
+            "collapsed": collapsed,
+            "reason": "; ".join(signals),
+            "haiku_recommendation": recommendation,
+            "ratio": current_ratio,
+        }
+
+    except Exception as e:
+        log.warning("Gamma collapse analysis failed: %s", e)
+        return {
+            "collapsed": any("ratio dropped" in s for s in signals),
+            "reason": "; ".join(signals),
+            "haiku_recommendation": "UNKNOWN",
+        }
+
+
 def haiku_screen_momentum_candidates(movers: list, trending: list, top_sectors: list = None) -> list:
     """Stage 1b: Use Haiku to quickly filter MOMENTUM candidates (cheap).
 
@@ -2103,8 +2250,9 @@ def run_trading_loop():
     ranked_candidates_summary = ""  # will be populated below
     
     system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}|{now}|{status_msg}
-RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.BUY only if quality=PASS, <10% extended 5.Stop -3%, TP +2% 6.Trade 10-15 ET only
+RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +2% 7.Trade 10-15 ET only 8.Exit immediately if gamma collapses
 Strategies: GAP-FILL (oversold bounce, mean reversion, RSI<30) | MOMENTUM (trend follow, highest gainers, MACD+)
+Risk: GAMMA COLLAPSE = institutional exit signal → exit position immediately
 
 SECTORS: {sector_summary}
 FEEDBACK: {perf_summary or "None yet"}
@@ -2184,6 +2332,56 @@ Pick the BEST strategy for today's market and trade that candidate."""
 
         log.info("Fetched market data for: %s", ", ".join(candidates_data.keys()))
     
+    # Check for gamma collapse in candidates before analysis
+    gamma_status = {}
+    for candidate in all_candidates:
+        gamma_check = detect_gamma_collapse(candidate)
+        if gamma_check and gamma_check.get("collapsed"):
+            gamma_status[candidate] = "COLLAPSED - SKIP"
+            log.warning("GAMMA COLLAPSE detected in %s - skipping this candidate", candidate)
+        else:
+            gamma_status[candidate] = gamma_check.get("haiku_recommendation", "OK") if gamma_check else "OK"
+
+    # Filter out candidates with gamma collapse
+    safe_candidates = [c for c in all_candidates if gamma_status.get(c) != "COLLAPSED - SKIP"]
+
+    if not safe_candidates:
+        log.info("All candidates filtered due to gamma collapse — monitoring only")
+        return
+
+    # Update candidate data string to exclude collapsed candidates
+    if safe_candidates:
+        candidate_data_str = ""
+        gap_fill_str = ""
+        momentum_str = ""
+
+        if gap_fill_finalists:
+            safe_gap = [s for s in gap_fill_finalists if s in safe_candidates]
+            if safe_gap:
+                gap_fill_str = "GAP-FILL CANDIDATES: " + ", ".join([
+                    f"{s} (gamma: {gamma_status.get(s, 'OK')}, data: {str(candidates_data.get(s, {}))[:400]})"
+                    for s in safe_gap if s in candidates_data
+                ])
+
+        if momentum_finalists:
+            safe_momentum = [s for s in momentum_finalists if s in safe_candidates]
+            if safe_momentum:
+                momentum_str = "MOMENTUM CANDIDATES: " + ", ".join([
+                    f"{s} (gamma: {gamma_status.get(s, 'OK')}, data: {str(candidates_data.get(s, {}))[:400]})"
+                    for s in safe_momentum if s in candidates_data
+                ])
+
+        candidate_data_str = f"""
+TWO STRATEGIES TODAY (after gamma collapse filtering):
+1. GAP-FILL (oversold reversal, mean reversion)
+2. MOMENTUM (trend continuation, strongest gainers)
+
+{gap_fill_str}
+{momentum_str}
+
+Pick the BEST strategy for today's market and trade that candidate.
+Avoid any candidates marked as COLLAPSED."""
+
     messages = [
         {"role": "user", "content": f"Run your trading analysis now.{candidate_data_str}"}
     ]
