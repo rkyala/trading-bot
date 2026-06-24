@@ -22,6 +22,13 @@ from zoneinfo import ZoneInfo
 
 import rl_policy
 
+# Optional: Use local market data cache if available
+try:
+    from market_cache import get_symbol_data as get_cached_symbol_data
+except ImportError:
+    def get_cached_symbol_data(symbol): 
+        return None  # Fallback if market_cache.py not found
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -941,13 +948,24 @@ def get_sector_info(symbol: str) -> tuple:
 
 
 def tool_fetch_market_data(symbol: str) -> dict:
-    # Return cached result if < 90 seconds old
-    now = time.time()
-    if symbol in _market_cache and (now - _market_cache[symbol].get("_ts", 0)) < 14400:
-        return _market_cache[symbol]
+    # FIRST: Try local cache (0 tokens, instant)
+    cached_data = get_cached_symbol_data(symbol)
+    if cached_data:
+        # Add quality_rating and sizing from our rules
+        daily_pct = cached_data.get("daily_pct_change", 0)
+        quality_rating = "PASS" if abs(daily_pct) <= 40 else "CAUTION"
+        
+        sizing = scale_position_by_extension(daily_pct)
+        
+        return {
+            **cached_data,
+            "quality_rating": quality_rating,
+            "suggested_position_size": sizing["suggested_size"],
+            "conviction_by_extension": sizing["conviction_by_extension"],
+        }
     
+    # FALLBACK: Fetch fresh if cache miss
     try:
-        # Use cached price history (much faster than fetching fresh)
         prices = get_cached_price_history(symbol)
         if not prices or len(prices) < 14:
             return {"error": f"Not enough history for {symbol}"}
