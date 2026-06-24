@@ -2615,7 +2615,7 @@ Execute decisively. Trade good setups, don't wait for perfect."""
     trending_list = trending_data.get("trending", [])
 
     # FILTER OUT EXTENDED MOVERS (>10% daily change) — focus on quality stocks only
-    quality_movers = [m for m in movers_list if abs(m[1]) <= 10]  # m[1] is pct_change
+    quality_movers = [m for m in movers_list if abs(m.get("pct_change") or 0) <= 10]  # m[1] is pct_change
     skipped_movers = len(movers_list) - len(quality_movers)
     if skipped_movers > 0:
         log.info("Filtered extended movers: skipped %d (>10%% change), kept %d quality movers",
