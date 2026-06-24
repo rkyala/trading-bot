@@ -353,7 +353,7 @@ def record_trade(state: dict, trade: dict) -> None:
             )
         sector = None
         try:
-            sector = (yf.Ticker(sym).info or {}).get("sector")
+            sector = (get_cached_ticker(sym).info or {}).get("sector")
         except Exception:
             pass
         positions[sym] = {"entry_price": price, "high_water_mark": price,
@@ -383,7 +383,7 @@ def record_trade(state: dict, trade: dict) -> None:
 def get_indicators(symbol: str):
     """Lightweight indicator snapshot for RL state discretization (price, RSI, MACD, VWAP, volume ratio)."""
     try:
-        hist = yf.Ticker(symbol).history(period="30d", interval="1d")
+        hist = get_cached_ticker(symbol).history(period="30d", interval="1d")
         if hist.empty or len(hist) < 14:
             return None
         prices  = hist["Close"].tolist()
@@ -923,11 +923,11 @@ def get_sector_info(symbol: str) -> tuple:
     
     # Fetch fresh
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = get_cached_ticker(symbol)
         info = ticker.info or {}
         sector = info.get("sector")
         industry = info.get("industry")
-        
+
         # Cache the result
         _sector_cache[symbol] = {"sector": sector, "industry": industry, "ts": now}
         return sector, industry
@@ -1040,12 +1040,12 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "tradable": "TBD_vs_SPY",
         }
         
-        # Bollinger Bands for mean reversion context
-        bbands = calc_bollinger_bands(prices, period=20, num_std=2.0)
-        
+        # Bollinger Bands: Only compute for mean reversion candidates (RSI < 40)
+        bbands = calc_bollinger_bands(prices, period=20, num_std=2.0) if rsi_val < 40 else None
+
         # Trading hours check
         trading_hours = is_optimal_trading_hours(datetime.now(ET))
-        
+
         # MINIMAL: Essential fields only (60% token reduction)
         result = {
             "symbol": symbol,
@@ -1056,11 +1056,12 @@ def tool_fetch_market_data(symbol: str) -> dict:
             "vwap": vwap,
             "volume_ratio": round(volumes[-1] / avg_vol, 2) if avg_vol else 1,
             "macd": round(calc_ema(prices, 12) - calc_ema(prices, 26), 4),
-            "suggested_position_size": sizing["suggested_size"],
-            "conviction_by_extension": sizing["conviction_by_extension"],
             "gap_fill": gap_fill,
-            "bollinger_bands": bbands,
         }
+
+        # Add Bollinger Bands only for mean reversion candidates
+        if bbands is not None:
+            result["bollinger_bands"] = bbands
         
         # Cache the result before returning
         _market_cache[symbol] = {**result, "_ts": time.time()}
@@ -1203,7 +1204,7 @@ def tool_get_macro_news() -> dict:
 
 def tool_get_news(symbol: str) -> dict:
     try:
-        news = yf.Ticker(symbol).news or []
+        news = get_cached_ticker(symbol).news or []
         return {"symbol": symbol, "headlines": [n.get("title", "") for n in news[:5]]}
     except Exception as exc:
         return {"error": str(exc), "headlines": []}
@@ -1543,17 +1544,17 @@ def get_cached_fundamentals(symbol: str) -> dict:
     
     # Fetch fresh
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = get_cached_ticker(symbol)
         info = ticker.info or {}
         fast_info = ticker.fast_info or {}
-        
+
         fundamentals = {
             "market_cap": info.get("marketCap") or fast_info.get("marketCap"),
             "pe_ratio": info.get("trailingPE"),
             "dividend": info.get("dividendRate"),
             "ts": now
         }
-        
+
         # Cache it
         _fundamentals_cache[symbol] = fundamentals
         return fundamentals
