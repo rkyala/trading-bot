@@ -27,7 +27,7 @@ try:
     from market_cache import get_symbol_data as get_cached_symbol_data
 except ImportError:
     def get_cached_symbol_data(symbol): 
-        return None  # Fallback if market_cache.py not found
+        return None  # Fallback: market_cache.py not found or cache expired
 
 logging.basicConfig(
     level=logging.INFO,
