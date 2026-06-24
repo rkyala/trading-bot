@@ -412,6 +412,21 @@ def is_market_hours() -> bool:
     return open_ <= now <= close_
 
 
+def skip_recently_analyzed(candidate: str, state: dict, lookback_minutes: int = 30) -> bool:
+    """Check if candidate was analyzed recently (within lookback_minutes)."""
+    analyzed = state.get("analyzed_candidates", {})
+    if candidate in analyzed:
+        analyzed_at = analyzed[candidate]
+        age_minutes = (time.time() - analyzed_at) / 60
+        if age_minutes < lookback_minutes:
+            return True
+    return False
+
+def mark_candidate_analyzed(candidate: str, state: dict) -> None:
+    """Mark candidate as analyzed at current time."""
+    analyzed = state.setdefault("analyzed_candidates", {})
+    analyzed[candidate] = time.time()
+
 def load_state() -> dict:
     try:
         with open(STATE_PATH) as f:
@@ -2615,10 +2630,10 @@ Execute decisively. Trade good setups, don't wait for perfect."""
     trending_list = trending_data.get("trending", [])
 
     # FILTER OUT EXTENDED MOVERS (>10% daily change) — focus on quality stocks only
-    quality_movers = [m for m in movers_list if abs(m.get("pct_change") or 0) <= 10]  # m[1] is pct_change
+    quality_movers = [m for m in movers_list if abs(m.get("pct_change") or 0) <= 15]  # m[1] is pct_change
     skipped_movers = len(movers_list) - len(quality_movers)
     if skipped_movers > 0:
-        log.info("Filtered extended movers: skipped %d (>10%% change), kept %d quality movers",
+        log.info("Filtered extended movers: skipped %d (>15% change), kept %d quality movers",
                  skipped_movers, len(quality_movers))
 
     log.info(f"SECTOR-MOMENTUM: Strongest: {', '.join(top_sectors)} | "
@@ -2627,6 +2642,10 @@ Execute decisively. Trade good setups, don't wait for perfect."""
     # PARALLEL: Screen for both gap-fill AND momentum candidates
     gap_fill_finalists = haiku_screen_candidates(quality_movers, trending_list, top_sectors=top_sectors)
     momentum_finalists = haiku_screen_momentum_candidates(quality_movers, trending_list, top_sectors=top_sectors)
+
+    # Skip recently analyzed candidates (prevent looping on same stock within 30 min)
+    gap_fill_finalists = [c for c in (gap_fill_finalists or []) if not skip_recently_analyzed(c, state)]
+    momentum_finalists = [c for c in (momentum_finalists or []) if not skip_recently_analyzed(c, state)]
 
     log.info("Gap-fill candidates: %s | Momentum candidates: %s",
              " > ".join(gap_fill_finalists) if gap_fill_finalists else "NONE",
@@ -2674,6 +2693,10 @@ Pick the BEST strategy for today's market and trade that candidate."""
 
         log.info("Fetched market data for: %s", ", ".join(candidates_data.keys()))
     
+    # Mark all candidates as analyzed (prevent looping on same stocks)
+    for candidate in all_candidates:
+        mark_candidate_analyzed(candidate, state)
+
     # STAGE 2a: GAMMA COLLAPSE + INSTITUTIONAL INTENT ANALYSIS
     candidate_analysis = {}
     safe_candidates = []
