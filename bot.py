@@ -117,6 +117,7 @@ _sector_cache = {}  # {symbol: {sector, industry, ts}}
 # Phase 2 caching (token optimization)
 _movers_trending_cache = {"movers": None, "trending": None, "ts": 0}  # 1-hour TTL
 _haiku_candidates_cache = {"candidates": None, "ts": 0}  # 1-hour TTL (caches Haiku screening result)
+_macro_analysis_cache = {"analysis": None, "ts": 0}  # 60-min TTL (caches macro environment analysis)
 
 # Price and fundamental caches (1-24 hour TTL)
 _price_cache = {}  # {symbol: {"prices": [...], "last_close": price, "ts": time}}
@@ -2606,6 +2607,13 @@ def run_trading_loop():
     # Candidate ranking will be inserted here before API call
     ranked_candidates_summary = ""  # will be populated below
     
+    # Check if macro analysis is cached and fresh (60-min TTL)
+    macro_reuse_note = ""
+    if _macro_analysis_cache["analysis"] and (time.time() - _macro_analysis_cache["ts"]) < 3600:
+        age_min = int((time.time() - _macro_analysis_cache["ts"]) / 60)
+        macro_reuse_note = f"\n🔄 MACRO CACHED ({age_min} min old): If analysis hasn't changed, reuse the previous macro context."
+        log.info("MACRO: Using cached analysis from %d min ago (skip regeneration)", age_min)
+    
     system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}/trade|{now}|{status_msg}
 RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +2% 7.Trade 10-15 ET only 8.Exit immediately if gamma collapses 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
 Strategies: GAP-FILL (oversold bounce, mean reversion, RSI<30) | MOMENTUM (trend follow, highest gainers, MACD+)
@@ -2616,7 +2624,7 @@ FEEDBACK: {perf_summary or "None yet"}
 COOLDOWNS: {cooldown_msg or "None"}
 STOPS: {chr(10).join(forced_sells) if forced_sells else "None"}{trading_clause}
 
-Execute decisively. Trade good setups, don't wait for perfect."""
+{macro_reuse_note}Execute decisively. Trade good setups, don't wait for perfect."""
 
 # === STAGE 1: DUAL HAIKU SCREENING (cheap, fast filtering) ===
     # Get sector momentum first to prioritize hot sectors
@@ -2838,6 +2846,11 @@ STRATEGY: Pick the candidate with ACCUMULATION intent (institutions backing it)
             _record_token_usage(resp.usage.input_tokens, resp.usage.output_tokens)
 
         for block in resp.content:
+            # Cache macro analysis if it contains MACRO ENVIRONMENT (reuse for 60 min)
+            if "MACRO ENVIRONMENT" in block.text:
+                _macro_analysis_cache["analysis"] = block.text
+                _macro_analysis_cache["ts"] = time.time()
+                log.info("MACRO: Cached fresh analysis (will reuse for next 60 min)")
             if hasattr(block, "text") and block.text:
                 log.info("Claude: %s", block.text[:800])
             if getattr(block, "type", "") == "mcp_tool_use" and block.name == "place_equity_order":
