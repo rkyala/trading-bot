@@ -103,7 +103,7 @@ client = anthropic.Anthropic(api_key=api_key)
 
 
 # Retry wrapper for API calls (handle 429, 503, 529 errors)
-def call_with_retry(func, max_retries=3, base_delay=0.5):
+def call_with_retry(func, max_retries=1, base_delay=2.0):
     """Retry API calls with exponential backoff on transient errors (429, 503, 529)."""
     for attempt in range(max_retries):
         try:
@@ -111,14 +111,14 @@ def call_with_retry(func, max_retries=3, base_delay=0.5):
         except anthropic.RateLimitError as e:
             if attempt < max_retries - 1:
                 delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-                log.warning(f"Rate limited (429), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                log.warning(f"Rate limited (429), retrying in {delay:.1f}s...")
                 time.sleep(delay)
             else:
                 raise
         except anthropic.OverloadedError as e:
             if attempt < max_retries - 1:
                 delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-                log.warning(f"API overloaded (529), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                log.warning(f"API overloaded (529), retrying in {delay:.1f}s...")
                 time.sleep(delay)
             else:
                 raise
@@ -128,7 +128,7 @@ def call_with_retry(func, max_retries=3, base_delay=0.5):
             if ("503" in error_str or "service unavailable" in error_str.lower()):
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-                    log.warning(f"Service unavailable (503), retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                    log.warning(f"Service unavailable (503), retrying in {delay:.1f}s...")
                     time.sleep(delay)
                 else:
                     raise
@@ -1954,27 +1954,10 @@ def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = No
     ])
     
     try:
-        screening_prompt = f"""You are a decisive stock screener. Pick the #1 best candidate TODAY.
-
-CANDIDATES (from movers + trending):
-{movers_text}
-{', '.join(trending[:10])}
-
-DISQUALIFICATION RULES (automatic skip):
-- Daily move >10%: SKIP (too extended, mean-reversion risk)
-- Daily move <-5%: SKIP (capitulation, avoid reversal traps)
-
-SCORING RULES (0-10 scale, for remaining candidates only):
-- Gap fill (2-5% overnight): +3 pts
-- RSI extreme (<30 or >70): +2 pts
-- Volume spike (>2x avg): +2 pts
-- Sector momentum (in top 3 today): +2 pts
-- Relative strength vs SPY (>1%): +1 pt
-
-TASK: Apply disqualification rules first. Score remaining, return ONLY #1 best trade today. Format:
-SYMBOL
-
-Just the symbol, nothing else. Pick the highest-conviction setup."""
+        screening_prompt = f"""Pick #1 best candidate TODAY.
+MOVERS: {movers_text[:200]}
+TRENDING: {', '.join(trending[:5])}
+RULES: Skip if move>10% or move<-5%. Score by gap/RSI/volume/sector. Return SYMBOL only."""
 
         resp = call_with_retry(lambda: client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -2080,21 +2063,9 @@ def run_trading_loop():
     # Candidate ranking will be inserted here before API call
     ranked_candidates_summary = ""  # will be populated below
     
-    system = f"""You are an autonomous day-trading agent. Account: {ACCT} | Budget: ${TOTAL_BUDGET} | Max/pos: ${MAX_POSITION}
-Time: {now} | {status_msg}
-
-CORE RULES:
-1. Check positions → call get_macro_news (Fed/inflation/jobs/tariffs)
-2. Haiku pre-screened ONE candidate. Validate: news/sector/technicals, then BUY or SKIP.
-   BUY if: positive news + sector momentum + chart confirms + quality_rating=PASS
-   SKIP if: negative news OR sector weak OR technicals don't confirm OR extended (>10%)
-3. Entry signals:
-   Momentum: price > VWAP, MACD > 0, 2x volume
-   Reversal: RSI < 30, gap fill, bullish divergence at support
-   Breakout: breaks resistance + volume surge
-4. Risk: Trade 10 ET-15 ET only. Stop -3% (or -1.5% if signal fails). Take profit +2%, scale out 50%.
-5. Quality check: Only quality_rating=PASS. Skip if daily_pct_change > 10%.
-6. Context (reversals only): Validate news + sector strength + macro backdrop.
+    system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}|{now}|{status_msg}
+RULES: 1.Check macro + positions 2.Validate Haiku pick (news/sector/chart/quality) 3.BUY only if quality=PASS, <10% extended 4.Stop -3%, TP +2% 5.Trade 10-15 ET only
+Signals: Momentum(>VWAP, MACD+, 2xvol) | Reversal(RSI<30) | Breakout(+volume)
 
 SECTORS: {sector_summary}
 FEEDBACK: {perf_summary or "None yet"}
