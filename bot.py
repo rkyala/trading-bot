@@ -2641,7 +2641,7 @@ STOPS: {chr(10).join(forced_sells) if forced_sells else "None"}{trading_clause}
     quality_movers = [m for m in movers_list if abs(m.get("pct_change") or 0) <= 15]  # m[1] is pct_change
     skipped_movers = len(movers_list) - len(quality_movers)
     if skipped_movers > 0:
-        log.info("Filtered extended movers: skipped %d (>15% change), kept %d quality movers",
+        log.info("Filtered extended movers: skipped %d (>15%% change), kept %d quality movers",
                  skipped_movers, len(quality_movers))
 
     log.info(f"SECTOR-MOMENTUM: Strongest: {', '.join(top_sectors)} | "
@@ -2847,7 +2847,7 @@ STRATEGY: Pick the candidate with ACCUMULATION intent (institutions backing it)
 
         for block in resp.content:
             # Cache macro analysis if it contains MACRO ENVIRONMENT (reuse for 60 min)
-            if "MACRO ENVIRONMENT" in block.text:
+            if hasattr(block, "text") and "MACRO ENVIRONMENT" in block.text:
                 _macro_analysis_cache["analysis"] = block.text
                 _macro_analysis_cache["ts"] = time.time()
                 log.info("MACRO: Cached fresh analysis (will reuse for next 60 min)")
