@@ -166,34 +166,13 @@ _tok = {"access": None, "expires_at": 0.0, "refresh": None}
 def _record_token_usage(input_tokens, output_tokens):
     """Record token usage for ROI analysis. Sonnet 4.6: $3/1M input, $15/1M output."""
     cost = (input_tokens * 3 + output_tokens * 15) / 1_000_000
-    _last_run_tokens["input"] = input_tokens
-    _last_run_tokens["output"] = output_tokens
-    _last_run_tokens["cost_usd"] = round(cost, 6)
+    _run_tokens["input"] = input_tokens
+    _run_tokens["output"] = output_tokens
+    _run_tokens["cost_usd"] = round(cost, 6)
     _token_metrics["total_input_tokens"] += input_tokens
     _token_metrics["total_output_tokens"] += output_tokens
     _token_metrics["token_cost_usd"] = round(_token_metrics["token_cost_usd"] + cost, 6)
     return cost
-
-def _log_metrics_summary(state):
-    """Log token/ROI metrics at end of run."""
-    # Calculate daily P&L from trades
-    daily_pnl = 0.0
-    today = datetime.now().strftime("%Y-%m-%d")
-    for trade in state.get("trade_history", [])[-100:]:  # Recent trades
-        if trade.get("date", "")[:10] == today:
-            daily_pnl += trade.get("realized_pnl", 0.0)
-    
-    _token_metrics["daily_pnl"] = round(daily_pnl, 2)
-    _token_metrics["date"] = today
-    _token_metrics["runs"] += 1
-    
-    # Check if profitable
-    roi = (daily_pnl / _token_metrics["token_cost_usd"]) if _token_metrics["token_cost_usd"] > 0 else 0
-    logging.info(f"METRICS — Tokens: {_last_run_tokens['input']+_last_run_tokens['output']} "
-                f"(${_last_run_tokens['cost_usd']:.4f}) | "
-                f"Daily P&L: ${daily_pnl:+.2f} | "
-                f"Token Cost Today: ${_token_metrics['token_cost_usd']:.2f} | "
-                f"ROI: {roi:+.1f}x")
 
 def _can_refresh():
     return bool(RH_CLIENT_ID and (RH_REFRESH_TOKEN or _tok["refresh"]))
@@ -1474,7 +1453,7 @@ def _log_metrics_summary(state):
     _token_metrics["date"] = today
     _token_metrics["daily_pnl"] = daily_pnl
     _token_metrics["runs"] += 1
-    
+
     roi = (daily_pnl / _token_metrics["token_cost_usd"]) if _token_metrics["token_cost_usd"] > 0 else 0
     roi_pct = 100 * roi if _token_metrics["token_cost_usd"] > 0 else 0
     log.info(f"TOKEN-METRICS || Tokens: {_run_tokens['input']+_run_tokens['output']} "
@@ -1884,28 +1863,28 @@ def get_sector_momentum() -> dict:
 
 
 def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = None) -> list:
-    """Stage 1: Use Haiku to quickly filter candidates (cheap).
-    
+    """Stage 1a: Use Haiku to quickly filter GAP-FILL candidates (cheap).
+
     Prioritizes candidates in top-performing sectors.
     Cache: 1-hour TTL (saves ~1400 tokens/day by skipping re-screening within the hour).
-    Returns: List of top 1 candidate symbol (Haiku's top pick).
-    Expected tokens: 300-400 per screening (Haiku is 3-4x cheaper than Sonnet).
+    Returns: List of top 1-3 candidate symbols (Haiku's picks for gap-fill reversal).
+    Expected tokens: 170 per screening (Haiku is 3-4x cheaper than Sonnet).
     """
     global _haiku_candidates_cache
     now = time.time()
-    
+
     # Return cached if fresh (< 1 hour old)
     if _haiku_candidates_cache["candidates"] is not None and (now - _haiku_candidates_cache["ts"]) < 3600:
-        log.info("HAIKU-SCREENING: Using cached result from %.0f min ago", (now - _haiku_candidates_cache["ts"]) / 60)
+        log.info("HAIKU-GAP-FILL: Using cached result from %.0f min ago", (now - _haiku_candidates_cache["ts"]) / 60)
         return _haiku_candidates_cache["candidates"]
-    
+
     if not movers and not trending:
         return []
-    
+
     # Combine and deduplicate
-    all_candidates = list(set([m.get("symbol") for m in movers if m.get("symbol")] + 
+    all_candidates = list(set([m.get("symbol") for m in movers if m.get("symbol")] +
                               trending[:15]))[:20]
-    
+
     # Filter to prioritize top sectors
     if top_sectors:
         sector_map = {}
@@ -1916,41 +1895,41 @@ def haiku_screen_candidates(movers: list, trending: list, top_sectors: list = No
                 sector_map[m.get("symbol")] = sector
             except:
                 pass
-        
+
         # Prioritize candidates in strong sectors
         candidates_in_top_sectors = [c for c in all_candidates if sector_map.get(c) in top_sectors]
         if candidates_in_top_sectors:
             all_candidates = candidates_in_top_sectors[:15]
-    
+
     if not all_candidates:
         return []
-    
+
     # Build a simple context for Haiku to screen
     movers_text = "\n".join([
         f"  {m['symbol']}: {m.get('pct_change', 0):+.1f}%, vol {m.get('volume_vs_avg', 0):.1f}x"
         for m in movers[:10]
     ])
-    
+
     try:
-        screening_prompt = f"""Pick #1 QUALITY candidate TODAY (already filtered for <10% extension).
+        screening_prompt = f"""Pick BEST GAP-FILL reversal candidate TODAY (oversold bounce, overnight gap down).
 CANDIDATES: {movers_text[:200]}
 TRENDING: {', '.join(trending[:5])}
-RULES: Skip negatives. Prefer: gap fill + volume + RSI extreme + sector strength. Return SYMBOL only."""
+RULES: Prefer: gap down overnight + RSI<30 + high volume. Return SYMBOL only."""
 
         resp = call_with_retry(lambda: client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=200,
+                max_tokens=100,
                 messages=[{"role": "user", "content": screening_prompt}],
             ))
-        
+
         # Track Haiku token usage (Haiku is 3-4x cheaper than Sonnet)
         if hasattr(resp, 'usage'):
             haiku_cost = (resp.usage.input_tokens * 1 + resp.usage.output_tokens * 5) / 1_000_000
             _run_tokens["input"] += resp.usage.input_tokens
             _run_tokens["output"] += resp.usage.output_tokens
             _run_tokens["cost_usd"] = round(_run_tokens["cost_usd"] + haiku_cost, 6)
-            log.info("Haiku tokens: %d in + %d out ($.%.4f)", resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
-        
+            log.info("Haiku (gap-fill) tokens: %d in + %d out ($.%.4f)", resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
+
         # Parse response to extract symbols
         text = resp.content[0].text if resp.content else ""
         symbols = []
@@ -1959,20 +1938,102 @@ RULES: Skip negatives. Prefer: gap fill + volume + RSI extreme + sector strength
                 parts = line.split()
                 if parts and parts[0].isupper() and len(parts[0]) <= 4:
                     symbols.append(parts[0])
-        
+
         top_candidates = symbols[:3]
-        log.info("HAIKU-SCREENING: Filtered %d candidates → top 3: %s", 
+        log.info("HAIKU-GAP-FILL: Filtered %d candidates → top 3: %s",
                  len(all_candidates), " > ".join(top_candidates) if top_candidates else "NONE")
-        
+
         # Cache the result
         _haiku_candidates_cache["candidates"] = top_candidates
         _haiku_candidates_cache["ts"] = now
-        
+
         return top_candidates
-        
+
     except Exception as e:
-        log.warning("Haiku screening failed: %s — using all candidates", e)
-        return all_candidates[:5]  # Fallback
+        log.warning("Haiku gap-fill screening failed: %s — fallback", e)
+        return all_candidates[:3]  # Fallback
+
+def haiku_screen_momentum_candidates(movers: list, trending: list, top_sectors: list = None) -> list:
+    """Stage 1b: Use Haiku to quickly filter MOMENTUM candidates (cheap).
+
+    Identifies strongest trend-following opportunities.
+    Cache: 1-hour TTL (same cache as gap-fill, different screening logic).
+    Returns: List of top 1-3 candidate symbols (Haiku's picks for momentum/trend following).
+    Expected tokens: 170 per screening (Haiku is 3-4x cheaper than Sonnet).
+    """
+    if not movers and not trending:
+        return []
+
+    # Combine and deduplicate (prioritize high % gainers for momentum)
+    # Sort movers by % change descending for momentum screening
+    sorted_movers = sorted([m for m in movers if m.get("symbol")],
+                          key=lambda m: m.get("pct_change", 0), reverse=True)
+    all_candidates = list(set([m.get("symbol") for m in sorted_movers[:15]] +
+                              trending[:10]))[:20]
+
+    # Filter to prioritize top sectors
+    if top_sectors:
+        sector_map = {}
+        for m in sorted_movers:
+            try:
+                ticker = yf.Ticker(m.get("symbol"))
+                sector = ticker.info.get("sector") or "Unknown"
+                sector_map[m.get("symbol")] = sector
+            except:
+                pass
+
+        # Prioritize candidates in strong sectors
+        candidates_in_top_sectors = [c for c in all_candidates if sector_map.get(c) in top_sectors]
+        if candidates_in_top_sectors:
+            all_candidates = candidates_in_top_sectors[:15]
+
+    if not all_candidates:
+        return []
+
+    # Build context for momentum screening (focus on strongest gainers)
+    movers_text = "\n".join([
+        f"  {m['symbol']}: {m.get('pct_change', 0):+.1f}%, vol {m.get('volume_vs_avg', 0):.1f}x"
+        for m in sorted_movers[:10]
+    ])
+
+    try:
+        screening_prompt = f"""Pick BEST MOMENTUM candidate TODAY (trend continuation, strongest % gain).
+CANDIDATES: {movers_text[:200]}
+TRENDING: {', '.join(trending[:5])}
+RULES: Prefer: highest % gain + MACD bullish + price>VWAP + volume surge. Return SYMBOL only."""
+
+        resp = call_with_retry(lambda: client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[{"role": "user", "content": screening_prompt}],
+            ))
+
+        # Track Haiku token usage
+        if hasattr(resp, 'usage'):
+            haiku_cost = (resp.usage.input_tokens * 1 + resp.usage.output_tokens * 5) / 1_000_000
+            _run_tokens["input"] += resp.usage.input_tokens
+            _run_tokens["output"] += resp.usage.output_tokens
+            _run_tokens["cost_usd"] = round(_run_tokens["cost_usd"] + haiku_cost, 6)
+            log.info("Haiku (momentum) tokens: %d in + %d out ($.%.4f)", resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
+
+        # Parse response to extract symbols
+        text = resp.content[0].text if resp.content else ""
+        symbols = []
+        for line in text.split("\n"):
+            if line.strip() and any(c.isalpha() for c in line):
+                parts = line.split()
+                if parts and parts[0].isupper() and len(parts[0]) <= 4:
+                    symbols.append(parts[0])
+
+        top_candidates = symbols[:3]
+        log.info("HAIKU-MOMENTUM: Filtered %d candidates → top 3: %s",
+                 len(all_candidates), " > ".join(top_candidates) if top_candidates else "NONE")
+
+        return top_candidates
+
+    except Exception as e:
+        log.warning("Haiku momentum screening failed: %s — fallback", e)
+        return all_candidates[:3]  # Fallback
 
 def run_trading_loop():
     global _run_count
@@ -2042,8 +2103,8 @@ def run_trading_loop():
     ranked_candidates_summary = ""  # will be populated below
     
     system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}|{now}|{status_msg}
-RULES: 1.Check macro + positions 2.Validate Haiku pick (news/sector/chart/quality) 3.BUY only if quality=PASS, <10% extended 4.Stop -3%, TP +2% 5.Trade 10-15 ET only
-Signals: Momentum(>VWAP, MACD+, 2xvol) | Reversal(RSI<30) | Breakout(+volume)
+RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.BUY only if quality=PASS, <10% extended 5.Stop -3%, TP +2% 6.Trade 10-15 ET only
+Strategies: GAP-FILL (oversold bounce, mean reversion, RSI<30) | MOMENTUM (trend follow, highest gainers, MACD+)
 
 SECTORS: {sector_summary}
 FEEDBACK: {perf_summary or "None yet"}
@@ -2052,53 +2113,76 @@ STOPS: {chr(10).join(forced_sells) if forced_sells else "None"}{trading_clause}
 
 Execute decisively. Trade good setups, don't wait for perfect."""
 
-# === STAGE 1: HAIKU SCREENING (cheap, fast filtering) ===
+# === STAGE 1: DUAL HAIKU SCREENING (cheap, fast filtering) ===
     # Get sector momentum first to prioritize hot sectors
     sector_momentum = get_sector_momentum()
     top_sectors = sector_momentum.get("strongest", [])
-    
-    # Get movers and trending, then use Haiku to filter → top 3 candidates
+
+    # Get movers and trending, then use Haiku to filter → candidates
     movers_data = tool_get_top_movers()
     trending_data = tool_get_trending_stocks()
     movers_list = movers_data.get("movers", [])
     trending_list = trending_data.get("trending", [])
-    
+
     # FILTER OUT EXTENDED MOVERS (>10% daily change) — focus on quality stocks only
     quality_movers = [m for m in movers_list if abs(m[1]) <= 10]  # m[1] is pct_change
     skipped_movers = len(movers_list) - len(quality_movers)
     if skipped_movers > 0:
-        log.info("Filtered extended movers: skipped %d (>10%% change), kept %d quality movers", 
+        log.info("Filtered extended movers: skipped %d (>10%% change), kept %d quality movers",
                  skipped_movers, len(quality_movers))
-    
+
     log.info(f"SECTOR-MOMENTUM: Strongest: {', '.join(top_sectors)} | "
             f"Details: {sector_momentum.get('details', {})}")
-    
-    # Pass only quality movers + trending to Haiku
-    finalists = haiku_screen_candidates(quality_movers, trending_list, top_sectors=top_sectors)
-    # Note: Haiku call tokens are recorded separately in haiku_screen_candidates
-    
-    if not finalists or not finalists[0]:
-        log.info("No compelling candidates passed Haiku screening — monitoring only")
-        top_candidate = None
-    else:
-        top_candidate = finalists[0]
-        log.info("Haiku picked top candidate: %s", top_candidate)
-    
-    # Only fetch market data for the top candidate (massive token savings)
-    candidate_data_str = ""
-    if top_candidate:
+
+    # PARALLEL: Screen for both gap-fill AND momentum candidates
+    gap_fill_finalists = haiku_screen_candidates(quality_movers, trending_list, top_sectors=top_sectors)
+    momentum_finalists = haiku_screen_momentum_candidates(quality_movers, trending_list, top_sectors=top_sectors)
+
+    log.info("Gap-fill candidates: %s | Momentum candidates: %s",
+             " > ".join(gap_fill_finalists) if gap_fill_finalists else "NONE",
+             " > ".join(momentum_finalists) if momentum_finalists else "NONE")
+
+    # Fetch market data for top candidates from both strategies (for Sonnet to compare)
+    candidates_data = {}
+    all_candidates = list(set((gap_fill_finalists or []) + (momentum_finalists or [])))[:5]
+
+    for candidate in all_candidates:
         try:
-            market_data = tool_fetch_market_data(top_candidate)
+            market_data = tool_fetch_market_data(candidate)
             if market_data and "error" not in market_data:
-                candidate_data_str = f"""
-TOP CANDIDATE (picked by Haiku): {top_candidate}
-Market data: {str(market_data)[:2000]}  (truncated)
-"""
-                log.info("Fetched market data for: %s", top_candidate)
-            else:
-                log.warning("Could not fetch data for %s", top_candidate)
+                candidates_data[candidate] = market_data
         except Exception as e:
-            log.warning("Error fetching data for %s: %s", top_candidate, e)
+            log.warning("Error fetching data for %s: %s", candidate, e)
+
+    # Build context for Sonnet: both strategies available
+    candidate_data_str = ""
+    if candidates_data:
+        gap_fill_str = ""
+        momentum_str = ""
+
+        if gap_fill_finalists:
+            gap_fill_str = "GAP-FILL CANDIDATES: " + ", ".join([
+                f"{s} (data: {str(candidates_data.get(s, {}))[:500]})"
+                for s in gap_fill_finalists if s in candidates_data
+            ])
+
+        if momentum_finalists:
+            momentum_str = "MOMENTUM CANDIDATES: " + ", ".join([
+                f"{s} (data: {str(candidates_data.get(s, {}))[:500]})"
+                for s in momentum_finalists if s in candidates_data
+            ])
+
+        candidate_data_str = f"""
+TWO STRATEGIES TODAY:
+1. GAP-FILL (oversold reversal, mean reversion)
+2. MOMENTUM (trend continuation, strongest gainers)
+
+{gap_fill_str}
+{momentum_str}
+
+Pick the BEST strategy for today's market and trade that candidate."""
+
+        log.info("Fetched market data for: %s", ", ".join(candidates_data.keys()))
     
     messages = [
         {"role": "user", "content": f"Run your trading analysis now.{candidate_data_str}"}
