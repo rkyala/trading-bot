@@ -2817,7 +2817,7 @@ STRATEGY: Pick the candidate with ACCUMULATION intent (institutions backing it)
         try:
             resp = client.beta.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=1024,
+                max_tokens=1536,
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 timeout=90.0,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
