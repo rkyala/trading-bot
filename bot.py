@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-TIERED + CACHED TRADING BOT
-3-Stage Architecture:
+TIERED + CACHED TRADING BOT (with Claude Learning Loop)
+3-Stage Architecture + Weekly Performance Analysis:
   Stage 1: Haiku screening (anomaly detection on top 100 movers, cached)
-  Stage 2: Sonnet analysis (regime-aware confidence scoring, adaptive interval, cached)
+  Stage 2: Sonnet analysis (regime-aware confidence scoring, learns from past week, cached)
   Stage 3: Execute trades if confidence >= 75 (auto-execution)
+  Weekly: Claude analyzes win rates and recommends confidence threshold adjustments
 
-Token cost: ~$1.61/year
-Expected trades: 10-15/week at 58-62% win rate
+Token cost: ~$1.61/year (base) + $0.62/year (weekly learning) = $186/year
+Expected trades: 10-15/week at 58-62% win rate (improving as Claude learns)
 Screening interval: Adaptive based on market regime (Claude recommends)
 """
 
@@ -78,11 +79,15 @@ def load_state():
             return json.load(f)
     return {
         "trades": [],
-        "analyzed_candidates": [],  # {symbol, timestamp}
+        "analyzed_candidates": [],
         "daily_pnl": 0.0,
         "token_usage": {"input": 0, "output": 0, "hourly_calls": []},
         "bot_halted": False,
-        "next_interval_seconds": 1800,  # Default 30 min, Claude can override
+        "next_interval_seconds": 1800,
+        "performance_analytics": {
+            "last_weekly_analysis": None,
+            "confidence_calibration": None,
+        },
     }
 
 def save_state(state):
@@ -178,7 +183,7 @@ def check_daily_loss_limit(state):
                    if t.get("date", "").startswith(today))
     
     if today_pnl < 0 and abs(today_pnl) >= (TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100):
-        return True  # Halted
+        return True
     return False
 
 def is_market_hours():
@@ -186,8 +191,7 @@ def is_market_hours():
     et = pytz.timezone('US/Eastern')
     now = datetime.now(et)
     
-    # Market hours: 9:30 AM - 4:00 PM ET, Monday-Friday
-    if now.weekday() >= 5:  # Saturday or Sunday
+    if now.weekday() >= 5:
         return False
     if now.hour < 9 or (now.hour == 9 and now.minute < 30):
         return False
@@ -197,20 +201,137 @@ def is_market_hours():
     return True
 
 # ============================================================================
+# LEARNING LOOP: Weekly Performance Analysis
+# ============================================================================
+
+def analyze_weekly_performance(client, state):
+    """
+    Analyze performance from past 7 days.
+    Returns performance summary for Claude to use in confidence calibration.
+    """
+    now = datetime.now()
+    week_ago = now - timedelta(days=7)
+    
+    # Get trades from past week (closed trades only)
+    weekly_trades = [
+        t for t in state.get("trades", [])
+        if datetime.fromisoformat(t.get("date", "2000-01-01")) >= week_ago
+    ]
+    
+    if len(weekly_trades) < 3:
+        log.info("Not enough trades this week (%d) for learning", len(weekly_trades))
+        return None
+    
+    # Group by confidence bracket
+    brackets = {
+        "70-75": [],
+        "75-80": [],
+        "80-85": [],
+        "85-90": [],
+        "90-95": [],
+        "95-100": [],
+    }
+    
+    for trade in weekly_trades:
+        conf = trade.get("confidence", 75)
+        won = trade.get("realized_pnl", 0) > 0
+        
+        if conf < 75:
+            brackets["70-75"].append(won)
+        elif conf < 80:
+            brackets["75-80"].append(won)
+        elif conf < 85:
+            brackets["80-85"].append(won)
+        elif conf < 90:
+            brackets["85-90"].append(won)
+        elif conf < 95:
+            brackets["90-95"].append(won)
+        else:
+            brackets["95-100"].append(won)
+    
+    # Calculate win rates
+    summary = "Weekly Performance Analysis (past 7 days):\n"
+    summary += f"Total trades: {len(weekly_trades)}\n\n"
+    
+    for bracket, results in brackets.items():
+        if len(results) == 0:
+            continue
+        win_rate = sum(results) / len(results) * 100
+        summary += f"Confidence {bracket}: {len(results)} trades, {win_rate:.0f}% win rate\n"
+    
+    log.info("\n%s", summary)
+    
+    # Ask Claude to recommend adjustments
+    try:
+        resp = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=400,
+            system=[{
+                "type": "text",
+                "text": "Analyze trading performance and recommend confidence calibration adjustments.",
+                "cache_control": {"type": "ephemeral"}
+            }],
+            messages=[{
+                "role": "user",
+                "content": f"""{summary}
+
+Based on this performance, provide:
+1. Which confidence brackets are working well?
+2. Which are underperforming?
+3. Should we adjust the confidence threshold (currently 75)?
+4. Any patterns you notice?
+
+Return JSON only:
+{{"analysis": "...", "recommendations": "...", "confidence_adjustment": "+5/-5/none"}}"""
+            }],
+            betas=["prompt-caching-2024-07-31"]
+        )
+        
+        record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
+        
+        try:
+            text = resp.content[0].text
+            start = text.find('{')
+            if start >= 0:
+                result = json.loads(text[start:])
+                log.info("\nClaude's Learning Recommendations:\n%s", result.get("recommendations"))
+                return result
+        except:
+            pass
+    except Exception as e:
+        log.error("Weekly analysis error: %s", e)
+    
+    return None
+
+def should_run_weekly_analysis(state):
+    """Check if it's time for weekly analysis (Sunday 4 PM ET)."""
+    et = pytz.timezone('US/Eastern')
+    now = datetime.now(et)
+    
+    # Run on Sunday at 4 PM (after market close)
+    if now.weekday() != 6:  # Not Sunday
+        return False
+    if now.hour != 16:  # Not 4 PM
+        return False
+    
+    # Check if we already ran this hour
+    last_analysis = state.get("performance_analytics", {}).get("last_weekly_analysis")
+    if last_analysis:
+        last_time = datetime.fromisoformat(last_analysis.get("timestamp", "2000-01-01"))
+        if (now - last_time).total_seconds() < 3600:  # Run once per hour max
+            return False
+    
+    return True
+
+# ============================================================================
 # STAGE 1: HAIKU SCREENING (Anomaly Detection)
 # ============================================================================
 
 def stage1_haiku_screening(client, state, movers):
-    """
-    Stage 1: Identify anomalies in top movers.
-    
-    Uses Haiku with cached prompt (90% cost reduction on calls 2-4).
-    Returns list of {symbol, anomaly_score, reason}
-    """
+    """Stage 1: Identify anomalies in top movers."""
     if not movers or len(movers) == 0:
         return []
     
-    # Format movers summary
     movers_text = "\n".join([
         f"{m['symbol']}: {m['price']:.2f} ({m['pct_change']:+.1f}%)"
         for m in movers[:30]
@@ -252,22 +373,27 @@ Rate top anomalies 0-100. Return JSON only:
     return []
 
 # ============================================================================
-# STAGE 2: SONNET ANALYSIS (Confidence Scoring + Interval Recommendation)
+# STAGE 2: SONNET ANALYSIS (Confidence Scoring + Learning)
 # ============================================================================
 
 def stage2_sonnet_analysis(client, state, candidates):
     """
-    Stage 2: Deep analysis with regime-aware confidence scoring + interval recommendation.
-    
+    Stage 2: Deep analysis with regime-aware confidence scoring + learning from past week.
     Returns tuple: (decisions list, recommended_interval_seconds)
     """
     if not candidates or len(candidates) == 0:
-        return [], 1800  # Default to 30 min
+        return [], 1800
     
     candidates_text = "\n".join([
         f"{c['symbol']}: +{c.get('pct_change', 0):.1f}% (anomaly={c.get('score', 0)})"
         for c in candidates[:5]
     ])
+    
+    # Include learning context if available
+    learning_context = ""
+    calibration = state.get("performance_analytics", {}).get("confidence_calibration")
+    if calibration:
+        learning_context = f"\n\nLast week's learning: {calibration.get('recommendations', '')}"
     
     try:
         resp = client.messages.create(
@@ -275,14 +401,14 @@ def stage2_sonnet_analysis(client, state, candidates):
             max_tokens=800,
             system=[{
                 "type": "text",
-                "text": "Rate trade confidence 0-100 based on technical + regime analysis. Recommend optimal screening frequency for next interval.",
+                "text": "Rate trade confidence 0-100 based on technical + regime analysis. Use past performance to calibrate confidence scores.",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
                 "content": f"""Analyze these candidates. Rate confidence 0-100 each will hit +3% in 1-2 days:
 
-{candidates_text}
+{candidates_text}{learning_context}
 
 What type of market day? Bull/bear/choppy/rotation?
 Which strategy wins best today (gap-fill, momentum, reversal)?
@@ -325,11 +451,7 @@ Return JSON only:
 # ============================================================================
 
 def stage3_execute(state, decisions):
-    """
-    Stage 3: Execute trades if confidence >= 75.
-    
-    Sets stop at -3%, target at +3%.
-    """
+    """Stage 3: Execute trades if confidence >= 75."""
     executed = []
     
     for decision in decisions:
@@ -400,6 +522,16 @@ def run_trading_loop():
     
     client = get_anthropic_client()
     
+    # Run weekly learning analysis if it's time
+    if should_run_weekly_analysis(state):
+        log.info("=== Weekly Learning Analysis ===")
+        analysis = analyze_weekly_performance(client, state)
+        if analysis:
+            state["performance_analytics"]["confidence_calibration"] = analysis
+            state["performance_analytics"]["last_weekly_analysis"] = {
+                "timestamp": datetime.now().isoformat()
+            }
+    
     log.info("=== Stage 1: Haiku Screening ===")
     movers = get_top_movers(100)
     anomalies = stage1_haiku_screening(client, state, movers)
@@ -435,9 +567,10 @@ def run_trading_loop():
     return next_interval
 
 def main():
-    log.info("Starting Tiered Trading Bot (Adaptive Interval)...")
+    log.info("Starting Tiered Trading Bot (with Claude Learning Loop)...")
+    log.info("Weekly learning analysis runs every Sunday 4 PM ET")
     
-    current_interval = 1800  # Start with 30 min default
+    current_interval = 1800
     
     while True:
         try:
