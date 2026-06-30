@@ -2606,8 +2606,8 @@ def run_trading_loop():
     
     system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}/trade|{now}|{status_msg}
 RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.SKIP REMOVED (technical-only mode) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +3% (1:1 risk-reward) 7.Trade 9:30-16 ET (full market hours) 8.Use trailing stops (-3%) for exits 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
-Strategies: MOMENTUM (70% weight) | GAP-FILL (30% weight, extreme oversold only) (trend follow, highest gainers, MACD+)
-Risk: Pure technical analysis - no options data| DAILY LOSS LIMIT = halt new buys
+Strategies: MOMENTUM (70%) | GAP-FILL (20%) | FIB-REVERSAL (10%) (30% weight, extreme oversold only) (trend follow, highest gainers, MACD+)
+Risk: Pure technical analysis | Fib levels: Price bounces from 38.2%/50%/61.8% with technical confirmation - no options data| DAILY LOSS LIMIT = halt new buys
 
 SECTORS: {sector_summary}
 FEEDBACK: {perf_summary or "None yet"}
