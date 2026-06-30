@@ -2712,8 +2712,6 @@ Pick the BEST strategy for today's market and trade that candidate."""
 
     # Build candidate context with technical data only
     if safe_candidates:
-    # Build candidate context with full analysis
-    if safe_candidates:
         gap_fill_str = ""
         momentum_str = ""
 
