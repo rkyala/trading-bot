@@ -1374,16 +1374,6 @@ TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
-    {
-        "name": "get_news",
-        "description": "Return recent news headlines for a stock symbol.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"symbol": {"type": "string"}},
-            "required": ["symbol"],
-        },
-        "cache_control": {"type": "ephemeral"},
-    },
 ]
 
 
