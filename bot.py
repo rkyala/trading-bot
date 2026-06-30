@@ -986,7 +986,7 @@ def calculate_position_size_by_confidence(rsi, volume_ratio, relative_strength, 
     elif confidence_points >= 2:
         return {"size": 100, "confidence_level": "low"}
     else:
-        return {"size": 75, "confidence_level": "very_low"}
+        return {"size": 50, "confidence_level": "very_low"}
 
 
 def calculate_volatility_adjusted_stop(entry_price: float, volatility_pct: float) -> dict:
@@ -2409,7 +2409,7 @@ def analyze_institutional_intent(symbol: str) -> dict:
             confidence -= 0.15
 
         # Combine signals into intent
-        if confidence > 0.6:
+        if confidence > 0.5:
             intent = "ACCUMULATION"
             risk = "LOW"
         elif confidence < -0.6:
@@ -2605,7 +2605,7 @@ def run_trading_loop():
         log.info("MACRO: Using cached analysis from %d min ago (skip regeneration)", age_min)
     
     system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}/trade|{now}|{status_msg}
-RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +2% 7.Trade 10-15 ET only 8.Exit immediately if gamma collapses 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
+RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +3% (1:1 risk-reward) 7.Trade 9:30-16 ET (full market hours) 8.Exit immediately if gamma collapses 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
 Strategies: GAP-FILL (oversold bounce, mean reversion, RSI<30) | MOMENTUM (trend follow, highest gainers, MACD+)
 Risk: GAMMA COLLAPSE = institutional exit signal → exit position immediately | DAILY LOSS LIMIT = halt new buys
 
