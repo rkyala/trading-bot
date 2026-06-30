@@ -2099,350 +2099,350 @@ RULES: Prefer: gap down overnight + RSI<30 + high volume. Return SYMBOL only."""
         log.warning("Haiku gap-fill screening failed: %s — fallback", e)
         return all_candidates[:3]  # Fallback
 
-def fetch_options_summary(symbol: str) -> dict:
-    """Fetch options data for gamma collapse detection.
-
-    Returns summary of call/put activity (free CBOE data).
-    Uses yfinance as fallback if yoptions unavailable.
-    """
-    try:
-        ticker = yf.Ticker(symbol)
-
-        # Try to get options expirations and chains
-        expirations = ticker.options
-        if not expirations:
-            return None
-
-        # Get the nearest expiration (soonest = most active trading)
-        nearest_exp = expirations[0]
-        opts = ticker.option_chain(nearest_exp)
-
-        calls = opts.calls
-        puts = opts.puts
-
-        # Calculate volumes
-        call_volume = calls['volume'].sum() if not calls.empty else 0
-        put_volume = puts['volume'].sum() if not puts.empty else 0
-
-        # Calculate IV (implied volatility)
-        call_iv = calls['impliedVolatility'].mean() if not calls.empty else 0
-        put_iv = puts['impliedVolatility'].mean() if not puts.empty else 0
-
-        # Call/put ratio
-        ratio = call_volume / (put_volume or 1)
-
-        # Open interest for trend detection
-        call_oi = calls['openInterest'].sum() if not calls.empty else 0
-        put_oi = puts['openInterest'].sum() if not puts.empty else 0
-
-        return {
-            "symbol": symbol,
-            "call_volume": call_volume,
-            "put_volume": put_volume,
-            "call_put_ratio": round(ratio, 2),
-            "call_iv": round(call_iv, 4),
-            "put_iv": round(put_iv, 4),
-            "call_open_interest": call_oi,
-            "put_open_interest": put_oi,
-            "timestamp": time.time(),
-        }
-    except Exception as e:
-        log.debug(f"Options data fetch failed for {symbol}: {e}")
-        return None
-
-
-def get_dark_pool_blocks(symbol: str, minutes: int = 60) -> list:
-    """Fetch recent large block trades (dark pool signals).
-
-    Block trades are pre-arranged institutional trades reported after execution.
-    Free data source: parsed from yfinance + broker alerts.
-
-    Returns: List of blocks [{symbol, size, price, time}, ...]
-    """
-    try:
-        ticker = yf.Ticker(symbol)
-
-        # Get recent historical data to infer block patterns
-        hist = ticker.history(period="5d", interval="1m")
-
-        if hist.empty or len(hist) < 60:
-            return []
-
-        # Get current price for comparison
-        current_price = hist["Close"].iloc[-1]
-
-        # Detect large volume spikes (proxy for block trades)
-        # Block trades show as volume spikes often at different prices
-        avg_volume = hist["Volume"].tail(100).mean()
-
-        blocks = []
-        for i in range(len(hist) - minutes, len(hist)):
-            if i < 0:
-                continue
-
-            vol = hist["Volume"].iloc[i]
-            price = hist["Close"].iloc[i]
-            time_str = hist.index[i].strftime("%H:%M")
-
-            # Large volume spike = potential block trade
-            if vol > avg_volume * 3:
-                # Infer direction: above or below current market
-                direction = "BUY" if price >= current_price else "SELL"
-
-                blocks.append({
-                    "symbol": symbol,
-                    "size": int(vol),
-                    "price": round(price, 2),
-                    "time": time_str,
-                    "direction": direction,
-                    "volume_ratio": round(vol / avg_volume, 1),
-                })
-
-        return blocks[-5:]  # Return last 5 blocks (most recent)
-
-    except Exception as e:
-        log.debug(f"Dark pool block detection failed for {symbol}: {e}")
-        return []
-
-
-def analyze_dark_pool_pressure(symbol: str) -> dict:
-    """Analyze dark pool blocks to determine buyer vs seller pressure.
-
-    Returns: {
-        "blocks_detected": int,
-        "pressure": "BUYING" | "SELLING" | "NEUTRAL",
-        "summary": str
-    }
-    """
-    blocks = get_dark_pool_blocks(symbol, minutes=60)
-
-    if not blocks:
-        return {
-            "blocks_detected": 0,
-            "pressure": "NEUTRAL",
-            "summary": "No recent block trades detected"
-        }
-
-    buy_blocks = sum(1 for b in blocks if b["direction"] == "BUY")
-    sell_blocks = sum(1 for b in blocks if b["direction"] == "SELL")
-
-    if buy_blocks > sell_blocks * 1.5:
-        pressure = "BUYING"
-        reason = f"{buy_blocks} buy blocks vs {sell_blocks} sell blocks"
-    elif sell_blocks > buy_blocks * 1.5:
-        pressure = "SELLING"
-        reason = f"{sell_blocks} sell blocks vs {buy_blocks} buy blocks"
-    else:
-        pressure = "NEUTRAL"
-        reason = f"Mixed: {buy_blocks} buy, {sell_blocks} sell"
-
-    # Get average price vs current
-    avg_block_price = sum(b["price"] for b in blocks) / len(blocks)
-    current_price = blocks[0]["price"]  # Most recent
-    price_diff = ((avg_block_price - current_price) / current_price) * 100
-
-    summary = f"{reason} | Avg block price {price_diff:+.2f}% vs market"
-
-    return {
-        "blocks_detected": len(blocks),
-        "pressure": pressure,
-        "summary": summary,
-        "recent_blocks": blocks[-3:],  # Last 3 blocks
-    }
-
-
-def detect_gamma_collapse(symbol: str, prev_ratio: float = None) -> dict:
-    """Detect gamma collapse (call buying exhaustion).
-
-    Uses Haiku to analyze options flow and recommend exit.
-    Returns: {
-        "collapsed": bool,
-        "reason": str,
-        "haiku_recommendation": str (EXIT or HOLD or UNKNOWN)
-    }
-    """
-    current_data = fetch_options_summary(symbol)
-
-    if not current_data:
-        return {"collapsed": False, "reason": "No options data", "haiku_recommendation": "HOLD"}
-
-    current_ratio = current_data["call_put_ratio"]
-    call_volume = current_data["call_volume"]
-    put_volume = current_data["put_volume"]
-    call_iv = current_data["call_iv"]
-    put_iv = current_data["put_iv"]
-
-    # Detect collapse signals
-    signals = []
-
-    if prev_ratio and (prev_ratio - current_ratio) / (prev_ratio or 1) > 0.25:
-        signals.append(f"Call/put ratio dropped 25%+ ({prev_ratio:.2f} → {current_ratio:.2f})")
-
-    if call_volume < 1000:
-        signals.append(f"Call volume critically low ({call_volume})")
-
-    if put_iv > call_iv * 1.2:
-        signals.append(f"Put IV > Call IV (downside hedging, {put_iv:.2f} vs {call_iv:.2f})")
-
-    if not signals:
-        return {"collapsed": False, "reason": "No collapse signals", "haiku_recommendation": "HOLD"}
-
-    # Use Haiku to interpret options flow (lightweight analysis)
-    try:
-        options_summary = f"""Stock: {symbol}
-Call/Put Ratio: {current_ratio:.2f}
-Call Volume: {call_volume}
-Put Volume: {put_volume}
-Call IV: {call_iv:.4f}
-Put IV: {put_iv:.4f}
-Call OI: {current_data['call_open_interest']}
-Put OI: {current_data['put_open_interest']}
-
-Signals: {'; '.join(signals)}
-
-Is this gamma collapse (institution exit)? EXIT or HOLD?
-Answer with one word only: EXIT or HOLD"""
-
-        resp = call_with_retry(lambda: client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=20,
-            messages=[{"role": "user", "content": options_summary}],
-        ))
-
-        # Track token usage
-        if hasattr(resp, 'usage'):
-            haiku_cost = (resp.usage.input_tokens * 1 + resp.usage.output_tokens * 5) / 1_000_000
-            _run_tokens["input"] += resp.usage.input_tokens
-            _run_tokens["output"] += resp.usage.output_tokens
-            _run_tokens["cost_usd"] = round(_run_tokens["cost_usd"] + haiku_cost, 6)
-            log.info("Haiku (gamma) tokens: %d in + %d out ($.%.4f)",
-                    resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
-
-        recommendation = resp.content[0].text.strip().upper() if resp.content else "UNKNOWN"
-
-        collapsed = recommendation == "EXIT"
-
-        log.info("GAMMA-COLLAPSE: %s | Ratio: %.2f | Signals: %s | Haiku: %s",
-                symbol, current_ratio, "; ".join(signals)[:100], recommendation)
-
-        return {
-            "collapsed": collapsed,
-            "reason": "; ".join(signals),
-            "haiku_recommendation": recommendation,
-            "ratio": current_ratio,
-        }
-
-    except Exception as e:
-        log.warning("Gamma collapse analysis failed: %s", e)
-        return {
-            "collapsed": any("ratio dropped" in s for s in signals),
-            "reason": "; ".join(signals),
-            "haiku_recommendation": "UNKNOWN",
-        }
-
-
-def analyze_institutional_intent(symbol: str) -> dict:
-    """Comprehensive institutional intent analysis using CBOE + dark pools.
-
-    Combines:
-    1. CBOE options flow (call/put ratio, IV)
-    2. Dark pool blocks (buying/selling pressure)
-    3. Price/technical data
-
-    Returns: {
-        "symbol": str,
-        "intent": "ACCUMULATION" | "EXIT" | "NEUTRAL",
-        "confidence": float (0-1),
-        "summary": str,
-        "signals": [str, ...],
-        "risk": str
-    }
-    """
-    try:
-        # Get all data sources
-        cboe_data = fetch_options_summary(symbol)
-        dark_pool_data = analyze_dark_pool_pressure(symbol)
-        price_data = tool_fetch_market_data(symbol) if symbol else None
-
-        if not cboe_data or not price_data:
-            return {
-                "symbol": symbol,
-                "intent": "NEUTRAL",
-                "confidence": 0,
-                "summary": "Insufficient data",
-                "signals": [],
-                "risk": "UNKNOWN"
-            }
-
-        # Analyze signals
-        signals = []
-        confidence = 0.5  # Start at neutral
-
-        # CBOE Signal Analysis
-        call_put_ratio = cboe_data["call_put_ratio"]
-        call_iv = cboe_data["call_iv"]
-        put_iv = cboe_data["put_iv"]
-
-        if call_put_ratio > 1.5:
-            signals.append(f"High call/put ratio ({call_put_ratio:.2f}) = accumulation bias")
-            confidence += 0.15
-        elif call_put_ratio < 0.8:
-            signals.append(f"Low call/put ratio ({call_put_ratio:.2f}) = exit bias")
-            confidence -= 0.15
-
-        if put_iv > call_iv * 1.15:
-            signals.append(f"Put IV spiking (put={put_iv:.4f}, call={call_iv:.4f}) = hedging stress")
-            confidence -= 0.10
-        elif put_iv < call_iv * 0.95:
-            signals.append(f"Call IV > put IV = confidence building")
-            confidence += 0.10
-
-        # Dark Pool Signal Analysis
-        dp_pressure = dark_pool_data["pressure"]
-        dp_summary = dark_pool_data["summary"]
-
-        if dp_pressure == "BUYING":
-            signals.append(f"Dark pool blocks show buying pressure ({dp_summary})")
-            confidence += 0.15
-        elif dp_pressure == "SELLING":
-            signals.append(f"Dark pool blocks show selling pressure ({dp_summary})")
-            confidence -= 0.15
-
-        # Combine signals into intent
-        if confidence > 0.5:
-            intent = "ACCUMULATION"
-            risk = "LOW"
-        elif confidence < -0.6:
-            intent = "EXIT"
-            risk = "HIGH"
-        else:
-            intent = "NEUTRAL"
-            risk = "MEDIUM"
-
-        # Build summary
-        summary = " | ".join(signals) if signals else "Mixed signals"
-
-        return {
-            "symbol": symbol,
-            "intent": intent,
-            "confidence": round(max(0, min(1, confidence)), 2),
-            "summary": summary,
-            "signals": signals,
-            "risk": risk,
-        }
-
-    except Exception as e:
-        log.debug(f"Institutional intent analysis failed for {symbol}: {e}")
-        return {
-            "symbol": symbol,
-            "intent": "NEUTRAL",
-            "confidence": 0,
-            "summary": f"Analysis error: {e}",
-            "signals": [],
-            "risk": "UNKNOWN"
-        }
-
-
+# def fetch_options_summary(symbol: str) -> dict:
+#     """Fetch options data for gamma collapse detection.
+# 
+#     Returns summary of call/put activity (free CBOE data).
+#     Uses yfinance as fallback if yoptions unavailable.
+#     """
+#     try:
+#         ticker = yf.Ticker(symbol)
+# 
+#         # Try to get options expirations and chains
+#         expirations = ticker.options
+#         if not expirations:
+#             return None
+# 
+#         # Get the nearest expiration (soonest = most active trading)
+#         nearest_exp = expirations[0]
+#         opts = ticker.option_chain(nearest_exp)
+# 
+#         calls = opts.calls
+#         puts = opts.puts
+# 
+#         # Calculate volumes
+#         call_volume = calls['volume'].sum() if not calls.empty else 0
+#         put_volume = puts['volume'].sum() if not puts.empty else 0
+# 
+#         # Calculate IV (implied volatility)
+#         call_iv = calls['impliedVolatility'].mean() if not calls.empty else 0
+#         put_iv = puts['impliedVolatility'].mean() if not puts.empty else 0
+# 
+#         # Call/put ratio
+#         ratio = call_volume / (put_volume or 1)
+# 
+#         # Open interest for trend detection
+#         call_oi = calls['openInterest'].sum() if not calls.empty else 0
+#         put_oi = puts['openInterest'].sum() if not puts.empty else 0
+# 
+#         return {
+#             "symbol": symbol,
+#             "call_volume": call_volume,
+#             "put_volume": put_volume,
+#             "call_put_ratio": round(ratio, 2),
+#             "call_iv": round(call_iv, 4),
+#             "put_iv": round(put_iv, 4),
+#             "call_open_interest": call_oi,
+#             "put_open_interest": put_oi,
+#             "timestamp": time.time(),
+#         }
+#     except Exception as e:
+#         log.debug(f"Options data fetch failed for {symbol}: {e}")
+#         return None
+# 
+# 
+# def get_dark_pool_blocks(symbol: str, minutes: int = 60) -> list:
+#     """Fetch recent large block trades (dark pool signals).
+# 
+#     Block trades are pre-arranged institutional trades reported after execution.
+#     Free data source: parsed from yfinance + broker alerts.
+# 
+#     Returns: List of blocks [{symbol, size, price, time}, ...]
+#     """
+#     try:
+#         ticker = yf.Ticker(symbol)
+# 
+#         # Get recent historical data to infer block patterns
+#         hist = ticker.history(period="5d", interval="1m")
+# 
+#         if hist.empty or len(hist) < 60:
+#             return []
+# 
+#         # Get current price for comparison
+#         current_price = hist["Close"].iloc[-1]
+# 
+#         # Detect large volume spikes (proxy for block trades)
+#         # Block trades show as volume spikes often at different prices
+#         avg_volume = hist["Volume"].tail(100).mean()
+# 
+#         blocks = []
+#         for i in range(len(hist) - minutes, len(hist)):
+#             if i < 0:
+#                 continue
+# 
+#             vol = hist["Volume"].iloc[i]
+#             price = hist["Close"].iloc[i]
+#             time_str = hist.index[i].strftime("%H:%M")
+# 
+#             # Large volume spike = potential block trade
+#             if vol > avg_volume * 3:
+#                 # Infer direction: above or below current market
+#                 direction = "BUY" if price >= current_price else "SELL"
+# 
+#                 blocks.append({
+#                     "symbol": symbol,
+#                     "size": int(vol),
+#                     "price": round(price, 2),
+#                     "time": time_str,
+#                     "direction": direction,
+#                     "volume_ratio": round(vol / avg_volume, 1),
+#                 })
+# 
+#         return blocks[-5:]  # Return last 5 blocks (most recent)
+# 
+#     except Exception as e:
+#         log.debug(f"Dark pool block detection failed for {symbol}: {e}")
+#         return []
+# 
+# 
+# def analyze_dark_pool_pressure(symbol: str) -> dict:
+#     """Analyze dark pool blocks to determine buyer vs seller pressure.
+# 
+#     Returns: {
+#         "blocks_detected": int,
+#         "pressure": "BUYING" | "SELLING" | "NEUTRAL",
+#         "summary": str
+#     }
+#     """
+#     blocks = get_dark_pool_blocks(symbol, minutes=60)
+# 
+#     if not blocks:
+#         return {
+#             "blocks_detected": 0,
+#             "pressure": "NEUTRAL",
+#             "summary": "No recent block trades detected"
+#         }
+# 
+#     buy_blocks = sum(1 for b in blocks if b["direction"] == "BUY")
+#     sell_blocks = sum(1 for b in blocks if b["direction"] == "SELL")
+# 
+#     if buy_blocks > sell_blocks * 1.5:
+#         pressure = "BUYING"
+#         reason = f"{buy_blocks} buy blocks vs {sell_blocks} sell blocks"
+#     elif sell_blocks > buy_blocks * 1.5:
+#         pressure = "SELLING"
+#         reason = f"{sell_blocks} sell blocks vs {buy_blocks} buy blocks"
+#     else:
+#         pressure = "NEUTRAL"
+#         reason = f"Mixed: {buy_blocks} buy, {sell_blocks} sell"
+# 
+#     # Get average price vs current
+#     avg_block_price = sum(b["price"] for b in blocks) / len(blocks)
+#     current_price = blocks[0]["price"]  # Most recent
+#     price_diff = ((avg_block_price - current_price) / current_price) * 100
+# 
+#     summary = f"{reason} | Avg block price {price_diff:+.2f}% vs market"
+# 
+#     return {
+#         "blocks_detected": len(blocks),
+#         "pressure": pressure,
+#         "summary": summary,
+#         "recent_blocks": blocks[-3:],  # Last 3 blocks
+#     }
+# 
+# 
+# def detect_gamma_collapse(symbol: str, prev_ratio: float = None) -> dict:
+#     """Detect gamma collapse (call buying exhaustion).
+# 
+#     Uses Haiku to analyze options flow and recommend exit.
+#     Returns: {
+#         "collapsed": bool,
+#         "reason": str,
+#         "haiku_recommendation": str (EXIT or HOLD or UNKNOWN)
+#     }
+#     """
+#     current_data = fetch_options_summary(symbol)
+# 
+#     if not current_data:
+#         return {"collapsed": False, "reason": "No options data", "haiku_recommendation": "HOLD"}
+# 
+#     current_ratio = current_data["call_put_ratio"]
+#     call_volume = current_data["call_volume"]
+#     put_volume = current_data["put_volume"]
+#     call_iv = current_data["call_iv"]
+#     put_iv = current_data["put_iv"]
+# 
+#     # Detect collapse signals
+#     signals = []
+# 
+#     if prev_ratio and (prev_ratio - current_ratio) / (prev_ratio or 1) > 0.25:
+#         signals.append(f"Call/put ratio dropped 25%+ ({prev_ratio:.2f} → {current_ratio:.2f})")
+# 
+#     if call_volume < 1000:
+#         signals.append(f"Call volume critically low ({call_volume})")
+# 
+#     if put_iv > call_iv * 1.2:
+#         signals.append(f"Put IV > Call IV (downside hedging, {put_iv:.2f} vs {call_iv:.2f})")
+# 
+#     if not signals:
+#         return {"collapsed": False, "reason": "No collapse signals", "haiku_recommendation": "HOLD"}
+# 
+#     # Use Haiku to interpret options flow (lightweight analysis)
+#     try:
+#         options_summary = f"""Stock: {symbol}
+# Call/Put Ratio: {current_ratio:.2f}
+# Call Volume: {call_volume}
+# Put Volume: {put_volume}
+# Call IV: {call_iv:.4f}
+# Put IV: {put_iv:.4f}
+# Call OI: {current_data['call_open_interest']}
+# Put OI: {current_data['put_open_interest']}
+# 
+# Signals: {'; '.join(signals)}
+# 
+# Is this gamma collapse (institution exit)? EXIT or HOLD?
+# Answer with one word only: EXIT or HOLD"""
+# 
+#         resp = call_with_retry(lambda: client.messages.create(
+#             model="claude-haiku-4-5-20251001",
+#             max_tokens=20,
+#             messages=[{"role": "user", "content": options_summary}],
+#         ))
+# 
+#         # Track token usage
+#         if hasattr(resp, 'usage'):
+#             haiku_cost = (resp.usage.input_tokens * 1 + resp.usage.output_tokens * 5) / 1_000_000
+#             _run_tokens["input"] += resp.usage.input_tokens
+#             _run_tokens["output"] += resp.usage.output_tokens
+#             _run_tokens["cost_usd"] = round(_run_tokens["cost_usd"] + haiku_cost, 6)
+#             log.info("Haiku (gamma) tokens: %d in + %d out ($.%.4f)",
+#                     resp.usage.input_tokens, resp.usage.output_tokens, haiku_cost)
+# 
+#         recommendation = resp.content[0].text.strip().upper() if resp.content else "UNKNOWN"
+# 
+#         collapsed = recommendation == "EXIT"
+# 
+#         log.info("GAMMA-COLLAPSE: %s | Ratio: %.2f | Signals: %s | Haiku: %s",
+#                 symbol, current_ratio, "; ".join(signals)[:100], recommendation)
+# 
+#         return {
+#             "collapsed": collapsed,
+#             "reason": "; ".join(signals),
+#             "haiku_recommendation": recommendation,
+#             "ratio": current_ratio,
+#         }
+# 
+#     except Exception as e:
+#         log.warning("Gamma collapse analysis failed: %s", e)
+#         return {
+#             "collapsed": any("ratio dropped" in s for s in signals),
+#             "reason": "; ".join(signals),
+#             "haiku_recommendation": "UNKNOWN",
+#         }
+# 
+# 
+# def analyze_institutional_intent(symbol: str) -> dict:
+#     """Comprehensive institutional intent analysis using CBOE + dark pools.
+# 
+#     Combines:
+#     1. CBOE options flow (call/put ratio, IV)
+#     2. Dark pool blocks (buying/selling pressure)
+#     3. Price/technical data
+# 
+#     Returns: {
+#         "symbol": str,
+#         "intent": "ACCUMULATION" | "EXIT" | "NEUTRAL",
+#         "confidence": float (0-1),
+#         "summary": str,
+#         "signals": [str, ...],
+#         "risk": str
+#     }
+#     """
+#     try:
+#         # Get all data sources
+#         cboe_data = fetch_options_summary(symbol)
+#         dark_pool_data = analyze_dark_pool_pressure(symbol)
+#         price_data = tool_fetch_market_data(symbol) if symbol else None
+# 
+#         if not cboe_data or not price_data:
+#             return {
+#                 "symbol": symbol,
+#                 "intent": "NEUTRAL",
+#                 "confidence": 0,
+#                 "summary": "Insufficient data",
+#                 "signals": [],
+#                 "risk": "UNKNOWN"
+#             }
+# 
+#         # Analyze signals
+#         signals = []
+#         confidence = 0.5  # Start at neutral
+# 
+#         # CBOE Signal Analysis
+#         call_put_ratio = cboe_data["call_put_ratio"]
+#         call_iv = cboe_data["call_iv"]
+#         put_iv = cboe_data["put_iv"]
+# 
+#         if call_put_ratio > 1.5:
+#             signals.append(f"High call/put ratio ({call_put_ratio:.2f}) = accumulation bias")
+#             confidence += 0.15
+#         elif call_put_ratio < 0.8:
+#             signals.append(f"Low call/put ratio ({call_put_ratio:.2f}) = exit bias")
+#             confidence -= 0.15
+# 
+#         if put_iv > call_iv * 1.15:
+#             signals.append(f"Put IV spiking (put={put_iv:.4f}, call={call_iv:.4f}) = hedging stress")
+#             confidence -= 0.10
+#         elif put_iv < call_iv * 0.95:
+#             signals.append(f"Call IV > put IV = confidence building")
+#             confidence += 0.10
+# 
+#         # Dark Pool Signal Analysis
+#         dp_pressure = dark_pool_data["pressure"]
+#         dp_summary = dark_pool_data["summary"]
+# 
+#         if dp_pressure == "BUYING":
+#             signals.append(f"Dark pool blocks show buying pressure ({dp_summary})")
+#             confidence += 0.15
+#         elif dp_pressure == "SELLING":
+#             signals.append(f"Dark pool blocks show selling pressure ({dp_summary})")
+#             confidence -= 0.15
+# 
+#         # Combine signals into intent
+#         if confidence > 0.5:
+#             intent = "ACCUMULATION"
+#             risk = "LOW"
+#         elif confidence < -0.6:
+#             intent = "EXIT"
+#             risk = "HIGH"
+#         else:
+#             intent = "NEUTRAL"
+#             risk = "MEDIUM"
+# 
+#         # Build summary
+#         summary = " | ".join(signals) if signals else "Mixed signals"
+# 
+#         return {
+#             "symbol": symbol,
+#             "intent": intent,
+#             "confidence": round(max(0, min(1, confidence)), 2),
+#             "summary": summary,
+#             "signals": signals,
+#             "risk": risk,
+#         }
+# 
+#     except Exception as e:
+#         log.debug(f"Institutional intent analysis failed for {symbol}: {e}")
+#         return {
+#             "symbol": symbol,
+#             "intent": "NEUTRAL",
+#             "confidence": 0,
+#             "summary": f"Analysis error: {e}",
+#             "signals": [],
+#             "risk": "UNKNOWN"
+#         }
+# 
+# 
 def haiku_screen_momentum_candidates(movers: list, trending: list, top_sectors: list = None) -> list:
     """Stage 1b: Use Haiku to quickly filter MOMENTUM candidates (cheap).
 
@@ -2605,9 +2605,9 @@ def run_trading_loop():
         log.info("MACRO: Using cached analysis from %d min ago (skip regeneration)", age_min)
     
     system = f"""Account {ACCT}|Budget ${TOTAL_BUDGET}|Max ${MAX_POSITION}/trade|{now}|{status_msg}
-RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.Skip any COLLAPSED (gamma dump signal) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +3% (1:1 risk-reward) 7.Trade 9:30-16 ET (full market hours) 8.Exit immediately if gamma collapses 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
+RULES: 1.Check macro + positions 2.Pick STRATEGY (gap-fill reversal OR momentum trend) 3.Validate candidate 4.SKIP REMOVED (technical-only mode) 5.BUY only if quality=PASS, <10% extended 6.Stop -3%, TP +3% (1:1 risk-reward) 7.Trade 9:30-16 ET (full market hours) 8.Use trailing stops (-3%) for exits 9.Daily loss limit: {DAILY_LOSS_LIMIT_PCT}% = ${TOTAL_BUDGET * DAILY_LOSS_LIMIT_PCT / 100:.0f}
 Strategies: GAP-FILL (oversold bounce, mean reversion, RSI<30) | MOMENTUM (trend follow, highest gainers, MACD+)
-Risk: GAMMA COLLAPSE = institutional exit signal → exit position immediately | DAILY LOSS LIMIT = halt new buys
+Risk: Pure technical analysis - no options data| DAILY LOSS LIMIT = halt new buys
 
 SECTORS: {sector_summary}
 FEEDBACK: {perf_summary or "None yet"}
@@ -2700,37 +2700,18 @@ Pick the BEST strategy for today's market and trade that candidate."""
     safe_candidates = []
 
     for candidate in all_candidates:
-        # Check gamma collapse (CBOE options)
-        gamma_check = detect_gamma_collapse(candidate)
-        gamma_collapsed = gamma_check and gamma_check.get("collapsed")
-
-        # Check institutional intent (CBOE + dark pools)
-        inst_intent = analyze_institutional_intent(candidate)
-
-        candidate_analysis[candidate] = {
-            "gamma": gamma_check,
-            "intent": inst_intent,
-        }
-
-        # Filter logic
-        if gamma_collapsed:
-            log.warning("GAMMA COLLAPSE in %s - skipping (institutional exit)", candidate)
-            continue
-
-        if inst_intent.get("intent") == "EXIT":
-            log.warning("INSTITUTIONAL EXIT signal in %s - skipping", candidate)
-            continue
-
+        # SIMPLIFIED: Pass all candidates with technical analysis only
+        # (removed: gamma collapse detection, CBOE analysis, dark pool pressure)
         safe_candidates.append(candidate)
-        log.info("CANDIDATE %s: Gamma=OK, Intent=%s (confidence %.2f)",
-                candidate,
-                inst_intent.get("intent"),
-                inst_intent.get("confidence", 0))
+        log.info("CANDIDATE %s: Technical screening complete (pure technicals mode)",
+                candidate)
 
     if not safe_candidates:
-        log.info("All candidates filtered due to gamma collapse — monitoring only")
+        log.info("No candidates found — monitoring only")
         return
 
+    # Build candidate context with technical data only
+    if safe_candidates:
     # Build candidate context with full analysis
     if safe_candidates:
         gap_fill_str = ""
@@ -2756,8 +2737,8 @@ Pick the BEST strategy for today's market and trade that candidate."""
                 momentum_lines = []
                 for s in safe_momentum:
                     if s in candidates_data:
-                        intent = candidate_analysis.get(s, {}).get("intent", {})
-                        intent_msg = f"{intent.get('intent')} (conf: {intent.get('confidence')}, risk: {intent.get('risk')})"
+                        # intent removed
+                        # (removed institutional intent for technical-only mode)
                         momentum_lines.append(
                             f"{s}: {intent_msg} | {intent.get('summary', '')[:100]}"
                         )
@@ -2765,12 +2746,12 @@ Pick the BEST strategy for today's market and trade that candidate."""
                     momentum_str = "MOMENTUM CANDIDATES:\n" + "\n".join(momentum_lines)
 
         candidate_data_str = f"""
-TWO STRATEGIES TODAY (CBOE + Dark Pool Analysis Applied):
+TWO STRATEGIES TODAY (Technical Indicators Analysis):
 
 INSTITUTIONAL CONTEXT:
-- Gamma collapse detection: Active (exit signals detected)
-- Dark pool monitoring: Active (buying/selling pressure tracked)
-- Options flow analysis: Active (call/put ratio, IV trends)
+- RSI Divergence: Monitoring (exit signals detected)
+- MACD Trends: Monitoring (buying/selling pressure tracked)
+- Bollinger Bands: Monitoring (call/put ratio, IV trends)
 
 1. GAP-FILL (oversold reversal, mean reversion)
 {gap_fill_str}
