@@ -3,11 +3,12 @@
 TIERED + CACHED TRADING BOT
 3-Stage Architecture:
   Stage 1: Haiku screening (anomaly detection on top 100 movers, cached)
-  Stage 2: Sonnet analysis (regime-aware confidence scoring, cached)
+  Stage 2: Sonnet analysis (regime-aware confidence scoring, adaptive interval, cached)
   Stage 3: Execute trades if confidence >= 75 (auto-execution)
 
 Token cost: ~$1.61/year
 Expected trades: 10-15/week at 58-62% win rate
+Screening interval: Adaptive based on market regime (Claude recommends)
 """
 
 import os
@@ -81,6 +82,7 @@ def load_state():
         "daily_pnl": 0.0,
         "token_usage": {"input": 0, "output": 0, "hourly_calls": []},
         "bot_halted": False,
+        "next_interval_seconds": 1800,  # Default 30 min, Claude can override
     }
 
 def save_state(state):
@@ -250,17 +252,17 @@ Rate top anomalies 0-100. Return JSON only:
     return []
 
 # ============================================================================
-# STAGE 2: SONNET ANALYSIS (Confidence Scoring)
+# STAGE 2: SONNET ANALYSIS (Confidence Scoring + Interval Recommendation)
 # ============================================================================
 
 def stage2_sonnet_analysis(client, state, candidates):
     """
-    Stage 2: Deep analysis with regime-aware confidence scoring.
+    Stage 2: Deep analysis with regime-aware confidence scoring + interval recommendation.
     
-    Returns list of {symbol, confidence 0-100, reason, action}
+    Returns tuple: (decisions list, recommended_interval_seconds)
     """
     if not candidates or len(candidates) == 0:
-        return []
+        return [], 1800  # Default to 30 min
     
     candidates_text = "\n".join([
         f"{c['symbol']}: +{c.get('pct_change', 0):.1f}% (anomaly={c.get('score', 0)})"
@@ -273,7 +275,7 @@ def stage2_sonnet_analysis(client, state, candidates):
             max_tokens=800,
             system=[{
                 "type": "text",
-                "text": "Rate trade confidence 0-100 based on technical + regime analysis.",
+                "text": "Rate trade confidence 0-100 based on technical + regime analysis. Recommend optimal screening frequency for next interval.",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -282,11 +284,14 @@ def stage2_sonnet_analysis(client, state, candidates):
 
 {candidates_text}
 
-What type of market day? Bull/bear/choppy? Which strategy wins?
-Only recommend if confidence >= 75.
+What type of market day? Bull/bear/choppy/rotation?
+Which strategy wins best today (gap-fill, momentum, reversal)?
+How often should we screen? (bull market=fast 600-900s, normal=1200-1800s, choppy=slow 3600s)
+
+Only recommend trades if confidence >= 75.
 
 Return JSON only:
-{{"decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}]}}"""
+{{"decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
             }],
             betas=["prompt-caching-2024-07-31"]
         )
@@ -298,13 +303,22 @@ Return JSON only:
             start = text.find('{')
             if start >= 0:
                 result = json.loads(text[start:])
-                return result.get("decisions", [])
+                decisions = result.get("decisions", [])
+                interval = result.get("next_interval_seconds", 1800)
+                
+                # Bound interval: 5 min to 60 min
+                interval = max(300, min(3600, int(interval)))
+                
+                log.info("Claude recommended next interval: %d seconds (%.1f min)", 
+                        interval, interval / 60.0)
+                
+                return decisions, interval
         except:
             pass
     except Exception as e:
         log.error("Stage 2 error: %s", e)
     
-    return []
+    return [], 1800
 
 # ============================================================================
 # STAGE 3: EXECUTION
@@ -370,19 +384,19 @@ def stage3_execute(state, decisions):
 def run_trading_loop():
     if not is_market_hours():
         log.info("Outside market hours — skipping")
-        return
+        return None
     
     state = load_state()
     
     # Check if halted
     if state.get("bot_halted"):
         log.warning("BOT HALTED — circuit breaker triggered")
-        return
+        return None
     
     # Check daily loss limit
     if check_daily_loss_limit(state):
         log.warning("Daily loss limit hit — stopping new trades")
-        return
+        return None
     
     client = get_anthropic_client()
     
@@ -393,17 +407,18 @@ def run_trading_loop():
     if not anomalies or len(anomalies) == 0:
         log.info("No anomalies detected")
         save_state(state)
-        return
+        return None
     
     log.info("Found %d anomalies", len(anomalies))
     
     log.info("=== Stage 2: Sonnet Analysis ===")
-    decisions = stage2_sonnet_analysis(client, state, anomalies)
+    decisions, next_interval = stage2_sonnet_analysis(client, state, anomalies)
     
     if not decisions or len(decisions) == 0:
         log.info("No high-confidence trades identified")
+        state["next_interval_seconds"] = next_interval
         save_state(state)
-        return
+        return next_interval
     
     high_confidence = [d for d in decisions if d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     log.info("High-confidence trades: %d", len(high_confidence))
@@ -415,21 +430,28 @@ def run_trading_loop():
         state["trades"].extend(executed)
         log.info("Executed %d trades", len(executed))
     
+    state["next_interval_seconds"] = next_interval
     save_state(state)
+    return next_interval
 
 def main():
-    log.info("Starting Tiered Trading Bot...")
+    log.info("Starting Tiered Trading Bot (Adaptive Interval)...")
+    
+    current_interval = 1800  # Start with 30 min default
     
     while True:
         try:
-            run_trading_loop()
+            returned_interval = run_trading_loop()
+            if returned_interval is not None:
+                current_interval = returned_interval
+                log.info("Next interval: %d seconds (%.1f min)", 
+                        current_interval, current_interval / 60.0)
         except Exception as e:
             log.error("Error in trading loop: %s", e, exc_info=True)
         
-        # Run every 30 minutes
-        log.info("Sleeping 30 minutes until next run...")
-        time.sleep(1800)
+        log.info("Sleeping %d seconds (%.1f min) until next run...", 
+                current_interval, current_interval / 60.0)
+        time.sleep(current_interval)
 
 if __name__ == "__main__":
     main()
-
