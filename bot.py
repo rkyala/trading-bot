@@ -247,8 +247,13 @@ def get_top_movers(access_token, limit=100, cache=None):
             return cached_movers or []
         
         data = resp.json()
+        log.info("Movers API response keys: %s", list(data.keys()))
         results = data.get("results", [])
-        
+        log.info("Results count: %d", len(results))
+
+        if len(results) > 0:
+            log.info("First result sample: %s", json.dumps(results[0], indent=2)[:300])
+
         movers = []
         for item in results[:limit]:
             try:
