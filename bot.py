@@ -211,25 +211,32 @@ def record_token_usage(state, input_tokens, output_tokens):
 # MARKET DATA
 # ============================================================================
 
+TOP_SP500 = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "BRK.B", "META", "JNJ", "V",
+    "WMT", "JPM", "MA", "XOM", "HD", "PG", "LLY", "CVX", "MRK", "ABBV",
+    "COST", "KO", "PEP", "AVGO", "ACN", "AMD", "CSCO", "CMCSA", "COP", "DHR",
+    "INTC", "NFLX", "MCD", "TXN", "AXP", "CRM", "SO", "VZ", "CAT", "NOW",
+    "ADBE", "IBM", "AZO", "GILD", "INTU", "ELV", "AMAT", "RTX", "BA", "TMUS",
+    "BKNG", "AMGN", "LRCX", "KEYS", "SNPS", "CDNS", "ADI", "PCAR", "ENPH", "GE",
+]
+
 def get_top_movers(access_token, limit=100, cache=None):
-    """Get top movers from Robinhood with caching."""
+    """Get top movers from Robinhood (with fallback to quotes scan)."""
     if cache is None:
         cache = load_cache()
-    
+
     cached_movers = cache_get(cache, "movers", MOVERS_CACHE_TTL)
     if cached_movers:
         return cached_movers
-    
+
     if not access_token:
         log.error("No access token for market data")
         return []
-    
+
     try:
         resp = requests.get(
             RH_MOVERS_URL,
-            params={
-                "count": limit,
-            },
+            params={"count": limit},
             timeout=10,
             headers={
                 "Authorization": f"Bearer {access_token}",
@@ -237,45 +244,83 @@ def get_top_movers(access_token, limit=100, cache=None):
                 "Accept": "application/json"
             }
         )
-        
-        if resp.status_code != 200:
-            try:
-                error_data = resp.json()
-                log.error("Movers API error %s: %s", resp.status_code, error_data)
-            except:
-                log.error("Movers API error %s: %s", resp.status_code, resp.text)
-            return cached_movers or []
-        
-        data = resp.json()
-        log.info("Movers API response keys: %s", list(data.keys()))
-        results = data.get("results", [])
-        log.info("Results count: %d", len(results))
 
-        if len(results) > 0:
-            log.info("First result sample: %s", json.dumps(results[0], indent=2)[:300])
+        if resp.status_code == 200:
+            data = resp.json()
+            results = data.get("results", [])
+            if results:
+                movers = []
+                for item in results[:limit]:
+                    try:
+                        movers.append({
+                            "symbol": item.get("symbol", ""),
+                            "price": float(item.get("last_extended_hours_trade_price") or
+                                          item.get("last_trade_price", 0)),
+                            "pct_change": float(item.get("pct_change", 0)),
+                            "volume": int(item.get("volume", 0)),
+                        })
+                    except (KeyError, ValueError):
+                        continue
 
-        movers = []
-        for item in results[:limit]:
-            try:
-                movers.append({
-                    "symbol": item.get("symbol", ""),
-                    "price": float(item.get("last_extended_hours_trade_price") or 
-                                  item.get("last_trade_price", 0)),
-                    "pct_change": float(item.get("pct_change", 0)),
-                    "volume": int(item.get("volume", 0)),
-                })
-            except (KeyError, ValueError):
-                continue
-        
-        movers = sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
-        cache_set(cache, "movers", movers)
-        save_cache(cache)
-        
-        log.info("✓ Fetched %d movers (cached for 30 min)", len(movers))
-        return movers
+                movers = sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
+                cache_set(cache, "movers", movers)
+                save_cache(cache)
+                log.info("✓ Fetched %d movers from RH API", len(movers))
+                return movers
     except Exception as e:
-        log.error("Error fetching movers: %s", e)
-        return cached_movers or []
+        log.debug("RH movers API error (fallback): %s", e)
+
+    log.info("Using fallback: fetching quotes for top S&P 500 stocks")
+    return get_top_movers_fallback(access_token, limit, cache)
+
+def get_top_movers_fallback(access_token, limit=100, cache=None):
+    """Fallback: fetch quotes for top S&P 500 stocks to find movers."""
+    if cache is None:
+        cache = load_cache()
+
+    try:
+        symbols = ",".join(TOP_SP500[:limit])
+        resp = requests.get(
+            RH_QUOTES_URL,
+            params={"symbols": symbols},
+            timeout=10,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json"
+            }
+        )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            results = data.get("results", [])
+
+            movers = []
+            for item in results:
+                try:
+                    pct_change = float(item.get("last_trade_price", 0)) / float(item.get("previous_close", 1)) - 1
+                    pct_change = pct_change * 100
+
+                    movers.append({
+                        "symbol": item.get("symbol", ""),
+                        "price": float(item.get("last_trade_price", 0)),
+                        "pct_change": pct_change,
+                        "volume": int(item.get("volume", 0)),
+                    })
+                except (KeyError, ValueError, ZeroDivisionError):
+                    continue
+
+            movers = sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
+            cache_set(cache, "movers", movers)
+            save_cache(cache)
+            log.info("✓ Fetched %d movers from quotes (fallback)", len(movers))
+            return movers
+        else:
+            log.error("Quotes API error: %s", resp.status_code)
+    except Exception as e:
+        log.error("get_top_movers_fallback error: %s", e)
+
+    return cached_movers or []
 
 def get_current_price(symbol, access_token):
     """Get current price for a symbol."""
