@@ -145,7 +145,11 @@ def get_rh_access_token():
                 log.debug("✓ Got Robinhood access token")
                 return access_token
         else:
-            log.error("RH auth failed: %s", resp.status_code)
+            try:
+                error_data = resp.json()
+                log.error("RH auth failed %s: %s", resp.status_code, error_data)
+            except:
+                log.error("RH auth failed %s: %s", resp.status_code, resp.text)
     except Exception as e:
         log.error("RH token refresh error: %s", e)
     
