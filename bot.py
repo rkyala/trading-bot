@@ -150,56 +150,6 @@ def get_rh_access_token():
         log.error("RH token refresh error: %s", e)
     
     return None
-        
-        resp = requests.post(
-            RH_AUTH_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS",
-                "scope": "internal",
-                "device_token": device_token,
-            },
-            timeout=10
-        )
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            access_token = data.get("access_token")
-            if access_token:
-                log.debug("✓ Got Robinhood access token")
-                return access_token
-        else:
-            log.error("RH auth failed: %s", resp.status_code)
-    except FileNotFoundError:
-        log.error("Robinhood pickle file not found at ~/.tokens/robinhood.pickle")
-    except Exception as e:
-        log.error("RH token refresh error: %s", e)
-    
-    return None
-    
-    try:
-        resp = requests.post(
-            RH_AUTH_URL,
-            json={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "scope": "internal"
-            },
-            timeout=10
-        )
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            access_token = data.get("access_token")
-            if access_token:
-                return access_token
-        else:
-            log.error("RH auth failed: %s", resp.status_code)
-    except Exception as e:
-        log.error("RH token refresh error: %s", e)
-    
-    return None
 
 # ============================================================================
 # STATE MANAGEMENT
