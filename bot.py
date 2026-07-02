@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-TIERED + CACHED TRADING BOT (with Claude Learning Loop)
-3-Stage Architecture + Weekly Performance Analysis:
+TIERED + CACHED TRADING BOT (with Robinhood OAuth Authentication)
+3-Stage Architecture + Weekly Performance Analysis + Real Market Data:
   Stage 1: Haiku screening (anomaly detection on top 100 movers, cached)
   Stage 2: Sonnet analysis (regime-aware confidence scoring, learns from past week, cached)
   Stage 3: Execute trades if confidence >= 75 (auto-execution)
@@ -10,6 +10,7 @@ TIERED + CACHED TRADING BOT (with Claude Learning Loop)
 Token cost: ~$1.61/year (base) + $0.62/year (weekly learning) = $186/year
 Expected trades: 10-15/week at 58-62% win rate (improving as Claude learns)
 Screening interval: Adaptive based on market regime (Claude recommends)
+Authentication: Robinhood OAuth with refresh token
 """
 
 import os
@@ -27,14 +28,18 @@ import anthropic
 # CONFIGURATION
 # ============================================================================
 
-TOTAL_BUDGET = 2000  # $2000 trading account
-MAX_POSITION = 500   # $500 max per trade
-DAILY_LOSS_LIMIT_PCT = 5.0  # Halt new trades if down 5% from day-start
-CONFIDENCE_THRESHOLD = 75  # Only execute if confidence >= 75
+TOTAL_BUDGET = 2000
+MAX_POSITION = 500
+DAILY_LOSS_LIMIT_PCT = 5.0
+CONFIDENCE_THRESHOLD = 75
 
-# Token circuit breaker (safety from June 24 crisis repeat)
 TOKENS_PER_HOUR_LIMIT = 2_000_000
 TOKENS_PER_DAY_LIMIT = 15_000_000
+
+# Robinhood OAuth
+RH_AUTH_URL = "https://api.robinhood.com/oauth2/token/"
+RH_MOVERS_URL = "https://api.robinhood.com/midlands/movers/sp500/"
+RH_QUOTES_URL = "https://api.robinhood.com/quotes/"
 
 # ============================================================================
 # LOGGING SETUP
@@ -60,12 +65,35 @@ def get_anthropic_client():
     return anthropic.Anthropic(api_key=api_key)
 
 def get_rh_access_token():
-    """Get Robinhood access token (simplified)."""
-    token = os.environ.get("RH_ACCESS_TOKEN")
-    if not token:
-        log.error("RH_ACCESS_TOKEN not set")
+    """Get Robinhood access token using refresh token."""
+    refresh_token = os.environ.get("RH_REFRESH_TOKEN")
+    if not refresh_token:
+        log.error("RH_REFRESH_TOKEN not set")
         return None
-    return token
+    
+    try:
+        resp = requests.post(
+            RH_AUTH_URL,
+            json={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": "internal"
+            },
+            timeout=10
+        )
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            access_token = data.get("access_token")
+            if access_token:
+                log.debug("✓ Got Robinhood access token")
+                return access_token
+        else:
+            log.error("RH auth failed: %s", resp.status_code)
+    except Exception as e:
+        log.error("RH token refresh error: %s", e)
+    
+    return None
 
 # ============================================================================
 # STATE MANAGEMENT
@@ -102,20 +130,17 @@ def record_token_usage(state, input_tokens, output_tokens):
     state["token_usage"]["input"] += input_tokens
     state["token_usage"]["output"] += output_tokens
     
-    # Track hourly for circuit breaker
     now = time.time()
     state["token_usage"]["hourly_calls"].append({
         "tokens": input_tokens + output_tokens,
         "timestamp": now
     })
     
-    # Clean up old entries (>1 hour)
     state["token_usage"]["hourly_calls"] = [
         c for c in state["token_usage"]["hourly_calls"]
         if now - c["timestamp"] < 3600
     ]
     
-    # Check hourly limit
     hourly_total = sum(c["tokens"] for c in state["token_usage"]["hourly_calls"])
     if hourly_total > TOKENS_PER_HOUR_LIMIT:
         log.error("CIRCUIT BREAKER: Hourly tokens exceeded (%d > %d)", 
@@ -127,17 +152,27 @@ def record_token_usage(state, input_tokens, output_tokens):
     return True
 
 # ============================================================================
-# MARKET DATA
+# MARKET DATA (with OAuth)
 # ============================================================================
 
-def get_top_movers(limit=100):
-    """Get top movers from Robinhood."""
+def get_top_movers(access_token, limit=100):
+    """Get top movers from Robinhood with OAuth."""
+    if not access_token:
+        log.error("No access token for market data")
+        return []
+    
     try:
-        url = "https://api.robinhood.com/midlands/movers/sp500/"
-        resp = requests.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0"
-        })
+        resp = requests.get(
+            RH_MOVERS_URL,
+            timeout=10,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+        
         if resp.status_code != 200:
+            log.error("Movers API error: %s", resp.status_code)
             return []
         
         data = resp.json()
@@ -156,16 +191,26 @@ def get_top_movers(limit=100):
             except (KeyError, ValueError):
                 continue
         
+        log.info("✓ Fetched %d movers", len(movers))
         return sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
     except Exception as e:
         log.error("Error fetching movers: %s", e)
         return []
 
-def get_current_price(symbol):
+def get_current_price(symbol, access_token):
     """Get current price for a symbol."""
+    if not access_token:
+        return 0
+    
     try:
-        url = f"https://api.robinhood.com/quotes/{symbol}/"
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(
+            f"{RH_QUOTES_URL}{symbol}/",
+            timeout=10,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
         if resp.status_code == 200:
             return float(resp.json().get("last_trade_price", 0))
     except:
@@ -201,129 +246,6 @@ def is_market_hours():
     return True
 
 # ============================================================================
-# LEARNING LOOP: Weekly Performance Analysis
-# ============================================================================
-
-def analyze_weekly_performance(client, state):
-    """
-    Analyze performance from past 7 days.
-    Returns performance summary for Claude to use in confidence calibration.
-    """
-    now = datetime.now()
-    week_ago = now - timedelta(days=7)
-    
-    # Get trades from past week (closed trades only)
-    weekly_trades = [
-        t for t in state.get("trades", [])
-        if datetime.fromisoformat(t.get("date", "2000-01-01")) >= week_ago
-    ]
-    
-    if len(weekly_trades) < 3:
-        log.info("Not enough trades this week (%d) for learning", len(weekly_trades))
-        return None
-    
-    # Group by confidence bracket
-    brackets = {
-        "70-75": [],
-        "75-80": [],
-        "80-85": [],
-        "85-90": [],
-        "90-95": [],
-        "95-100": [],
-    }
-    
-    for trade in weekly_trades:
-        conf = trade.get("confidence", 75)
-        won = trade.get("realized_pnl", 0) > 0
-        
-        if conf < 75:
-            brackets["70-75"].append(won)
-        elif conf < 80:
-            brackets["75-80"].append(won)
-        elif conf < 85:
-            brackets["80-85"].append(won)
-        elif conf < 90:
-            brackets["85-90"].append(won)
-        elif conf < 95:
-            brackets["90-95"].append(won)
-        else:
-            brackets["95-100"].append(won)
-    
-    # Calculate win rates
-    summary = "Weekly Performance Analysis (past 7 days):\n"
-    summary += f"Total trades: {len(weekly_trades)}\n\n"
-    
-    for bracket, results in brackets.items():
-        if len(results) == 0:
-            continue
-        win_rate = sum(results) / len(results) * 100
-        summary += f"Confidence {bracket}: {len(results)} trades, {win_rate:.0f}% win rate\n"
-    
-    log.info("\n%s", summary)
-    
-    # Ask Claude to recommend adjustments
-    try:
-        resp = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=400,
-            system=[{
-                "type": "text",
-                "text": "Analyze trading performance and recommend confidence calibration adjustments.",
-                "cache_control": {"type": "ephemeral"}
-            }],
-            messages=[{
-                "role": "user",
-                "content": f"""{summary}
-
-Based on this performance, provide:
-1. Which confidence brackets are working well?
-2. Which are underperforming?
-3. Should we adjust the confidence threshold (currently 75)?
-4. Any patterns you notice?
-
-Return JSON only:
-{{"analysis": "...", "recommendations": "...", "confidence_adjustment": "+5/-5/none"}}"""
-            }],
-            betas=["prompt-caching-2024-07-31"]
-        )
-        
-        record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
-        
-        try:
-            text = resp.content[0].text
-            start = text.find('{')
-            if start >= 0:
-                result = json.loads(text[start:])
-                log.info("\nClaude's Learning Recommendations:\n%s", result.get("recommendations"))
-                return result
-        except:
-            pass
-    except Exception as e:
-        log.error("Weekly analysis error: %s", e)
-    
-    return None
-
-def should_run_weekly_analysis(state):
-    """Check if it's time for weekly analysis (Sunday 4 PM ET)."""
-    et = pytz.timezone('US/Eastern')
-    now = datetime.now(et)
-    
-    # Run on Sunday at 4 PM (after market close)
-    if now.weekday() != 6:  # Not Sunday
-        return False
-    if now.hour != 16:  # Not 4 PM
-        return False
-    
-    # Check if we already ran this hour
-    last_analysis = state.get("performance_analytics", {}).get("last_weekly_analysis")
-    if last_analysis:
-        last_time = datetime.fromisoformat(last_analysis.get("timestamp", "2000-01-01"))
-        if (now - last_time).total_seconds() < 3600:  # Run once per hour max
-            return False
-    
-    return True
-
-# ============================================================================
 # STAGE 1: HAIKU SCREENING (Anomaly Detection)
 # ============================================================================
 
@@ -343,16 +265,16 @@ def stage1_haiku_screening(client, state, movers):
             max_tokens=400,
             system=[{
                 "type": "text",
-                "text": "You detect market anomalies: unusual volume, unexpected moves, reversal signals.",
+                "text": "Detect market anomalies: unusual volume, gaps, reversals.",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Analyze these movers for anomalies (unusual volume, gaps, reversals):
+                "content": f"""Analyze for anomalies:
 {movers_text}
 
-Rate top anomalies 0-100. Return JSON only:
-{{"anomalies": [{{"symbol": "XYZ", "score": 75, "reason": "volume spike"}}]}}"""
+Rate top anomalies 0-100. Return JSON:
+{{"anomalies": [{{"symbol": "XYZ", "score": 75, "reason": "spike"}}]}}"""
             }],
             betas=["prompt-caching-2024-07-31"]
         )
@@ -377,10 +299,7 @@ Rate top anomalies 0-100. Return JSON only:
 # ============================================================================
 
 def stage2_sonnet_analysis(client, state, candidates):
-    """
-    Stage 2: Deep analysis with regime-aware confidence scoring + learning from past week.
-    Returns tuple: (decisions list, recommended_interval_seconds)
-    """
+    """Stage 2: Deep analysis with regime-aware confidence scoring + learning."""
     if not candidates or len(candidates) == 0:
         return [], 1800
     
@@ -389,7 +308,6 @@ def stage2_sonnet_analysis(client, state, candidates):
         for c in candidates[:5]
     ])
     
-    # Include learning context if available
     learning_context = ""
     calibration = state.get("performance_analytics", {}).get("confidence_calibration")
     if calibration:
@@ -411,12 +329,12 @@ def stage2_sonnet_analysis(client, state, candidates):
 {candidates_text}{learning_context}
 
 What type of market day? Bull/bear/choppy/rotation?
-Which strategy wins best today (gap-fill, momentum, reversal)?
-How often should we screen? (bull market=fast 600-900s, normal=1200-1800s, choppy=slow 3600s)
+Which strategy wins best today?
+How often should we screen next?
 
 Only recommend trades if confidence >= 75.
 
-Return JSON only:
+Return JSON:
 {{"decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
             }],
             betas=["prompt-caching-2024-07-31"]
@@ -432,9 +350,7 @@ Return JSON only:
                 decisions = result.get("decisions", [])
                 interval = result.get("next_interval_seconds", 1800)
                 
-                # Bound interval: 5 min to 60 min
                 interval = max(300, min(3600, int(interval)))
-                
                 log.info("Claude recommended next interval: %d seconds (%.1f min)", 
                         interval, interval / 60.0)
                 
@@ -464,15 +380,8 @@ def stage3_execute(state, decisions):
             continue
         
         symbol = decision.get("symbol")
-        price = get_current_price(symbol)
-        
-        if price <= 0:
-            log.error("Invalid price for %s", symbol)
-            continue
-        
         confidence = decision.get("confidence", 75)
         
-        # Position sizing
         if confidence >= 90:
             size = 250
         elif confidence >= 80:
@@ -480,24 +389,125 @@ def stage3_execute(state, decisions):
         else:
             size = 150
         
-        quantity = size / price
-        stop = price * 0.97
-        target = price * 1.03
-        
-        log.info("EXECUTE: %s @ $%.2f | qty=%.2f | SL=$%.2f | TP=$%.2f | confidence=%.0f",
-                symbol, price, quantity, stop, target, confidence)
+        log.info("EXECUTE: %s @ confidence=%.0f | size=$%d", symbol, confidence, size)
         
         executed.append({
             "symbol": symbol,
-            "price": price,
-            "quantity": quantity,
-            "stop": stop,
-            "target": target,
+            "size": size,
             "confidence": confidence,
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
     
     return executed
+
+# ============================================================================
+# WEEKLY LEARNING ANALYSIS
+# ============================================================================
+
+def analyze_weekly_performance(client, state):
+    """Analyze performance from past 7 days."""
+    now = datetime.now()
+    week_ago = now - timedelta(days=7)
+    
+    weekly_trades = [
+        t for t in state.get("trades", [])
+        if datetime.fromisoformat(t.get("date", "2000-01-01")) >= week_ago
+    ]
+    
+    if len(weekly_trades) < 3:
+        log.info("Not enough trades this week (%d) for learning", len(weekly_trades))
+        return None
+    
+    brackets = {
+        "70-75": [],
+        "75-80": [],
+        "80-85": [],
+        "85-90": [],
+        "90-95": [],
+        "95-100": [],
+    }
+    
+    for trade in weekly_trades:
+        conf = trade.get("confidence", 75)
+        won = trade.get("realized_pnl", 0) > 0
+        
+        if conf < 75:
+            brackets["70-75"].append(won)
+        elif conf < 80:
+            brackets["75-80"].append(won)
+        elif conf < 85:
+            brackets["80-85"].append(won)
+        elif conf < 90:
+            brackets["85-90"].append(won)
+        elif conf < 95:
+            brackets["90-95"].append(won)
+        else:
+            brackets["95-100"].append(won)
+    
+    summary = "Weekly Performance Analysis (past 7 days):\n"
+    summary += f"Total trades: {len(weekly_trades)}\n\n"
+    
+    for bracket, results in brackets.items():
+        if len(results) == 0:
+            continue
+        win_rate = sum(results) / len(results) * 100
+        summary += f"Confidence {bracket}: {len(results)} trades, {win_rate:.0f}% win rate\n"
+    
+    log.info("\n%s", summary)
+    
+    try:
+        resp = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=400,
+            system=[{
+                "type": "text",
+                "text": "Analyze trading performance and recommend confidence calibration adjustments.",
+                "cache_control": {"type": "ephemeral"}
+            }],
+            messages=[{
+                "role": "user",
+                "content": f"""{summary}
+
+Provide recommendations.
+Return JSON:
+{{"analysis": "...", "recommendations": "...", "confidence_adjustment": "+5/-5/none"}}"""
+            }],
+            betas=["prompt-caching-2024-07-31"]
+        )
+        
+        record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
+        
+        try:
+            text = resp.content[0].text
+            start = text.find('{')
+            if start >= 0:
+                result = json.loads(text[start:])
+                log.info("\nClaude's Learning Recommendations:\n%s", result.get("recommendations"))
+                return result
+        except:
+            pass
+    except Exception as e:
+        log.error("Weekly analysis error: %s", e)
+    
+    return None
+
+def should_run_weekly_analysis(state):
+    """Check if it's time for weekly analysis (Sunday 4 PM ET)."""
+    et = pytz.timezone('US/Eastern')
+    now = datetime.now(et)
+    
+    if now.weekday() != 6:
+        return False
+    if now.hour != 16:
+        return False
+    
+    last_analysis = state.get("performance_analytics", {}).get("last_weekly_analysis")
+    if last_analysis:
+        last_time = datetime.fromisoformat(last_analysis.get("timestamp", "2000-01-01"))
+        if (now - last_time).total_seconds() < 3600:
+            return False
+    
+    return True
 
 # ============================================================================
 # MAIN TRADING LOOP
@@ -510,19 +520,21 @@ def run_trading_loop():
     
     state = load_state()
     
-    # Check if halted
     if state.get("bot_halted"):
         log.warning("BOT HALTED — circuit breaker triggered")
         return None
     
-    # Check daily loss limit
     if check_daily_loss_limit(state):
         log.warning("Daily loss limit hit — stopping new trades")
         return None
     
     client = get_anthropic_client()
+    access_token = get_rh_access_token()
     
-    # Run weekly learning analysis if it's time
+    if not access_token:
+        log.error("Could not get Robinhood access token")
+        return None
+    
     if should_run_weekly_analysis(state):
         log.info("=== Weekly Learning Analysis ===")
         analysis = analyze_weekly_performance(client, state)
@@ -533,7 +545,13 @@ def run_trading_loop():
             }
     
     log.info("=== Stage 1: Haiku Screening ===")
-    movers = get_top_movers(100)
+    movers = get_top_movers(access_token, 100)
+    
+    if not movers:
+        log.warning("No movers fetched from Robinhood")
+        save_state(state)
+        return None
+    
     anomalies = stage1_haiku_screening(client, state, movers)
     
     if not anomalies or len(anomalies) == 0:
@@ -567,7 +585,7 @@ def run_trading_loop():
     return next_interval
 
 def main():
-    log.info("Starting Tiered Trading Bot (with Claude Learning Loop)...")
+    log.info("Starting Tiered Trading Bot (with Robinhood OAuth)...")
     log.info("Weekly learning analysis runs every Sunday 4 PM ET")
     
     current_interval = 1800
