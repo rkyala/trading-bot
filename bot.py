@@ -117,21 +117,39 @@ def get_anthropic_client():
     return anthropic.Anthropic(api_key=api_key)
 
 def get_rh_access_token():
-    """Get Robinhood access token using refresh token from pickle file."""
+    """Get Robinhood access token using env variables."""
     try:
-        import pickle
-        import pathlib
-        
-        # Load credentials from pickle file
-        p = pathlib.Path.home() / ".tokens" / "robinhood.pickle"
-        token_data = pickle.loads(p.read_bytes())
-        
-        refresh_token = token_data.get("refresh_token")
-        device_token = token_data.get("device_token")
+        refresh_token = os.environ.get("RH_REFRESH_TOKEN")
+        device_token = os.environ.get("RH_DEVICE_TOKEN")
         
         if not refresh_token or not device_token:
-            log.error("Missing refresh_token or device_token in pickle file")
+            log.error("Missing RH_REFRESH_TOKEN or RH_DEVICE_TOKEN env variables")
             return None
+        
+        resp = requests.post(
+            RH_AUTH_URL,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS",
+                "scope": "internal",
+                "device_token": device_token,
+            },
+            timeout=10
+        )
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            access_token = data.get("access_token")
+            if access_token:
+                log.debug("✓ Got Robinhood access token")
+                return access_token
+        else:
+            log.error("RH auth failed: %s", resp.status_code)
+    except Exception as e:
+        log.error("RH token refresh error: %s", e)
+    
+    return None
         
         resp = requests.post(
             RH_AUTH_URL,
