@@ -26,6 +26,7 @@ import time
 import requests
 
 import anthropic
+import yfinance as yf
 
 # ============================================================================
 # CONFIGURATION
@@ -224,8 +225,8 @@ TOP_SP500 = [
     "BKNG", "AMGN", "LRCX", "KEYS", "SNPS", "CDNS", "ADI", "PCAR", "ENPH", "GE",
 ]
 
-def get_top_movers(access_token, limit=100, cache=None):
-    """Get top movers from Robinhood (with fallback to quotes scan)."""
+def get_top_movers(access_token=None, limit=100, cache=None):
+    """Get top movers using yfinance (no auth needed)."""
     if cache is None:
         cache = load_cache()
 
@@ -233,117 +234,52 @@ def get_top_movers(access_token, limit=100, cache=None):
     if cached_movers:
         return cached_movers
 
-    if not access_token:
-        log.error("No access token for market data")
-        return []
-
     try:
-        resp = requests.get(
-            RH_MOVERS_URL,
-            params={"count": limit},
-            timeout=10,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json"
-            }
-        )
+        log.info("Fetching movers from yfinance (top %d S&P 500)", len(TOP_SP500[:limit]))
+        symbols = TOP_SP500[:limit]
 
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-            if results:
-                movers = []
-                for item in results[:limit]:
-                    try:
-                        movers.append({
-                            "symbol": item.get("symbol", ""),
-                            "price": float(item.get("last_extended_hours_trade_price") or
-                                          item.get("last_trade_price", 0)),
-                            "pct_change": float(item.get("pct_change", 0)),
-                            "volume": int(item.get("volume", 0)),
-                        })
-                    except (KeyError, ValueError):
-                        continue
+        movers = []
+        for symbol in symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
 
-                movers = sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
-                cache_set(cache, "movers", movers)
-                save_cache(cache)
-                log.info("✓ Fetched %d movers from RH API", len(movers))
-                return movers
-    except Exception as e:
-        log.debug("RH movers API error (fallback): %s", e)
+                current = info.get("currentPrice") or info.get("regularMarketPrice", 0)
+                prev_close = info.get("previousClose", current)
 
-    log.info("Using fallback: fetching quotes for top S&P 500 stocks")
-    return get_top_movers_fallback(access_token, limit, cache)
-
-def get_top_movers_fallback(access_token, limit=100, cache=None):
-    """Fallback: fetch quotes for top S&P 500 stocks to find movers."""
-    if cache is None:
-        cache = load_cache()
-
-    try:
-        symbols = ",".join(TOP_SP500[:limit])
-        resp = requests.get(
-            RH_QUOTES_URL,
-            params={"symbols": symbols},
-            timeout=10,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json"
-            }
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-
-            movers = []
-            for item in results:
-                try:
-                    pct_change = float(item.get("last_trade_price", 0)) / float(item.get("previous_close", 1)) - 1
-                    pct_change = pct_change * 100
+                if current > 0 and prev_close > 0:
+                    pct_change = ((current - prev_close) / prev_close) * 100
 
                     movers.append({
-                        "symbol": item.get("symbol", ""),
-                        "price": float(item.get("last_trade_price", 0)),
+                        "symbol": symbol,
+                        "price": current,
                         "pct_change": pct_change,
-                        "volume": int(item.get("volume", 0)),
+                        "volume": info.get("volume", 0),
                     })
-                except (KeyError, ValueError, ZeroDivisionError):
-                    continue
+            except Exception as e:
+                log.debug("Error fetching %s: %s", symbol, e)
+                continue
 
-            movers = sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
-            cache_set(cache, "movers", movers)
-            save_cache(cache)
-            log.info("✓ Fetched %d movers from quotes (fallback)", len(movers))
-            return movers
-        else:
-            log.error("Quotes API error: %s", resp.status_code)
+        movers = sorted(movers, key=lambda x: abs(x["pct_change"]), reverse=True)
+        cache_set(cache, "movers", movers)
+        save_cache(cache)
+
+        log.info("✓ Fetched %d movers from yfinance", len(movers))
+        return movers
     except Exception as e:
-        log.error("get_top_movers_fallback error: %s", e)
+        log.error("get_top_movers error: %s", e)
+        return cached_movers or []
 
-    return cached_movers or []
-
-def get_current_price(symbol, access_token):
-    """Get current price for a symbol."""
-    if not access_token:
-        return 0
-    
+def get_current_price(symbol, access_token=None):
+    """Get current price for a symbol using yfinance."""
     try:
-        resp = requests.get(
-            f"{RH_QUOTES_URL}{symbol}/",
-            timeout=10,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "User-Agent": "Mozilla/5.0"
-            }
-        )
-        if resp.status_code == 200:
-            return float(resp.json().get("last_trade_price", 0))
-    except:
-        pass
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        price = info.get("currentPrice") or info.get("regularMarketPrice", 0)
+        if price > 0:
+            return float(price)
+    except Exception as e:
+        log.debug("Error fetching price for %s: %s", symbol, e)
     return 0
 
 # ============================================================================
