@@ -227,15 +227,23 @@ def get_top_movers(access_token, limit=100, cache=None):
     try:
         resp = requests.get(
             RH_MOVERS_URL,
+            params={
+                "count": limit,
+            },
             timeout=10,
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "Mozilla/5.0"
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json"
             }
         )
         
         if resp.status_code != 200:
-            log.error("Movers API error: %s", resp.status_code)
+            try:
+                error_data = resp.json()
+                log.error("Movers API error %s: %s", resp.status_code, error_data)
+            except:
+                log.error("Movers API error %s: %s", resp.status_code, resp.text)
             return cached_movers or []
         
         data = resp.json()
