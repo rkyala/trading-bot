@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-TIERED + CACHED TRADING BOT (with Robinhood OAuth Authentication)
-3-Stage Architecture + Weekly Performance Analysis + Real Market Data:
-  Stage 1: Haiku screening (anomaly detection on top 100 movers, cached)
-  Stage 2: Sonnet analysis (regime-aware confidence scoring, learns from past week, cached)
-  Stage 3: Execute trades if confidence >= 75 (auto-execution)
-  Weekly: Claude analyzes win rates and recommends confidence threshold adjustments
+TIERED + CACHED TRADING BOT (Opus 4.8 with Adaptive Thinking)
+Enhanced reasoning for market regime analysis + confidence calibration
 
-Token cost: ~$1.61/year (base) + $0.62/year (weekly learning) = $186/year
-Expected trades: 10-15/week at 58-62% win rate (improving as Claude learns)
-Screening interval: Adaptive based on market regime (Claude recommends)
-Authentication: Robinhood OAuth with refresh token
+Stage 2 now shows its thinking:
+  - Market regime analysis (bull/bear/choppy/rotation)
+  - Candidate quality reasoning (why this anomaly matters)
+  - Confidence calibration (how sure am I of +3% target)
+  - Interval optimization (how often to check)
 """
 
 import os
@@ -36,7 +33,6 @@ CONFIDENCE_THRESHOLD = 75
 TOKENS_PER_HOUR_LIMIT = 2_000_000
 TOKENS_PER_DAY_LIMIT = 15_000_000
 
-# Robinhood OAuth
 RH_AUTH_URL = "https://api.robinhood.com/oauth2/token/"
 RH_MOVERS_URL = "https://api.robinhood.com/midlands/movers/sp500/"
 RH_QUOTES_URL = "https://api.robinhood.com/quotes/"
@@ -295,11 +291,20 @@ Rate top anomalies 0-100. Return JSON:
     return []
 
 # ============================================================================
-# STAGE 2: SONNET ANALYSIS (Confidence Scoring + Learning)
+# STAGE 2: OPUS 4.8 WITH ADAPTIVE THINKING
 # ============================================================================
 
 def stage2_sonnet_analysis(client, state, candidates):
-    """Stage 2: Deep analysis with regime-aware confidence scoring + learning."""
+    """
+    Stage 2: Opus 4.8 with adaptive thinking for regime analysis + confidence scoring.
+    
+    Opus 4.8 thinks through:
+    1. What is the market regime? (bull/bear/choppy)
+    2. How do these candidates fit the regime?
+    3. What's the probability each hits +3% in 1-2 days?
+    4. How confident am I? (0-100 with reasoning)
+    5. When should we check again?
+    """
     if not candidates or len(candidates) == 0:
         return [], 1800
     
@@ -311,52 +316,83 @@ def stage2_sonnet_analysis(client, state, candidates):
     learning_context = ""
     calibration = state.get("performance_analytics", {}).get("confidence_calibration")
     if calibration:
-        learning_context = f"\n\nLast week's learning: {calibration.get('recommendations', '')}"
+        learning_context = f"\n\nLast week's calibration: {calibration.get('recommendations', '')}"
     
     try:
         resp = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=800,
+            model="claude-opus-4-8",
+            max_tokens=1500,
+            thinking={
+                "type": "adaptive",
+                "display": "summarized"
+            },
             system=[{
                 "type": "text",
-                "text": "Rate trade confidence 0-100 based on technical + regime analysis. Use past performance to calibrate confidence scores.",
+                "text": """You are a market regime analyst with adaptive thinking.
+
+Your job:
+1. Identify the current market regime by analyzing the movers
+2. Assess how each candidate fits that regime
+3. Rate confidence 0-100 for each hitting +3% in 1-2 days
+4. Explain your reasoning
+5. Recommend optimal scanning frequency
+
+Think deeply about:
+- Trend direction and strength (bull/bear/choppy)
+- Sector rotation patterns
+- Volatility regime (high/low)
+- Mean reversion vs momentum signals
+- Which strategy wins today (gap-fill/momentum/reversal)""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Analyze these candidates. Rate confidence 0-100 each will hit +3% in 1-2 days:
+                "content": f"""Analyze these anomalies for trading confidence:
 
 {candidates_text}{learning_context}
 
-What type of market day? Bull/bear/choppy/rotation?
-Which strategy wins best today?
-How often should we screen next?
+Your analysis should show your thinking:
+1. Market Regime: What type of day is this? (bull=strong uptrend, bear=downtrend, choppy=range, rotation=sector shift)
+2. Candidate Assessment: For each symbol, why does it fit (or not fit) the regime?
+3. Confidence Scoring: Rate each 0-100 for hitting +3% in 1-2 days. Include your reasoning.
+4. Strategy: Which wins today - gap-fill reversals, momentum, or mean reversion?
+5. Interval: How often should we check? (bull=fast 600-900s, normal=1200-1800s, choppy=slow 3600s)
 
 Only recommend trades if confidence >= 75.
 
 Return JSON:
-{{"decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
+{{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
             }],
             betas=["prompt-caching-2024-07-31"]
         )
         
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
         
+        # Log the thinking process
+        for block in resp.content:
+            if block.type == "thinking":
+                log.info("\n[OPUS THINKING]\n%s\n", block.thinking[:500])  # First 500 chars
+        
         try:
-            text = resp.content[0].text
-            start = text.find('{')
-            if start >= 0:
-                result = json.loads(text[start:])
-                decisions = result.get("decisions", [])
-                interval = result.get("next_interval_seconds", 1800)
-                
-                interval = max(300, min(3600, int(interval)))
-                log.info("Claude recommended next interval: %d seconds (%.1f min)", 
-                        interval, interval / 60.0)
-                
-                return decisions, interval
-        except:
-            pass
+            for block in resp.content:
+                if block.type == "text":
+                    text = block.text
+                    start = text.find('{')
+                    if start >= 0:
+                        result = json.loads(text[start:])
+                        regime = result.get("regime", "unknown")
+                        strategy = result.get("strategy", "unknown")
+                        decisions = result.get("decisions", [])
+                        interval = result.get("next_interval_seconds", 1800)
+                        
+                        interval = max(300, min(3600, int(interval)))
+                        
+                        log.info("Regime: %s | Strategy: %s | Interval: %d sec (%.1f min)", 
+                                regime, strategy, interval, interval / 60.0)
+                        
+                        return decisions, interval
+        except Exception as e:
+            log.error("JSON parse error: %s", e)
     except Exception as e:
         log.error("Stage 2 error: %s", e)
     
@@ -401,11 +437,11 @@ def stage3_execute(state, decisions):
     return executed
 
 # ============================================================================
-# WEEKLY LEARNING ANALYSIS
+# WEEKLY LEARNING ANALYSIS (Opus 4.8)
 # ============================================================================
 
 def analyze_weekly_performance(client, state):
-    """Analyze performance from past 7 days."""
+    """Analyze performance from past 7 days using Opus 4.8 thinking."""
     now = datetime.now()
     week_ago = now - timedelta(days=7)
     
@@ -457,8 +493,9 @@ def analyze_weekly_performance(client, state):
     
     try:
         resp = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=400,
+            model="claude-opus-4-8",
+            max_tokens=800,
+            thinking={"type": "adaptive"},
             system=[{
                 "type": "text",
                 "text": "Analyze trading performance and recommend confidence calibration adjustments.",
@@ -468,7 +505,11 @@ def analyze_weekly_performance(client, state):
                 "role": "user",
                 "content": f"""{summary}
 
-Provide recommendations.
+Analyze:
+1. Which confidence brackets overperform vs underperform?
+2. Should we adjust the 75 confidence threshold?
+3. Any patterns in win/loss clustering?
+
 Return JSON:
 {{"analysis": "...", "recommendations": "...", "confidence_adjustment": "+5/-5/none"}}"""
             }],
@@ -478,12 +519,14 @@ Return JSON:
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
         
         try:
-            text = resp.content[0].text
-            start = text.find('{')
-            if start >= 0:
-                result = json.loads(text[start:])
-                log.info("\nClaude's Learning Recommendations:\n%s", result.get("recommendations"))
-                return result
+            for block in resp.content:
+                if block.type == "text":
+                    text = block.text
+                    start = text.find('{')
+                    if start >= 0:
+                        result = json.loads(text[start:])
+                        log.info("\nClaude's Learning Recommendations:\n%s", result.get("recommendations"))
+                        return result
         except:
             pass
     except Exception as e:
@@ -536,7 +579,7 @@ def run_trading_loop():
         return None
     
     if should_run_weekly_analysis(state):
-        log.info("=== Weekly Learning Analysis ===")
+        log.info("=== Weekly Learning Analysis (Opus 4.8) ===")
         analysis = analyze_weekly_performance(client, state)
         if analysis:
             state["performance_analytics"]["confidence_calibration"] = analysis
@@ -561,7 +604,7 @@ def run_trading_loop():
     
     log.info("Found %d anomalies", len(anomalies))
     
-    log.info("=== Stage 2: Sonnet Analysis ===")
+    log.info("=== Stage 2: Opus 4.8 Regime Analysis ===")
     decisions, next_interval = stage2_sonnet_analysis(client, state, anomalies)
     
     if not decisions or len(decisions) == 0:
@@ -585,8 +628,9 @@ def run_trading_loop():
     return next_interval
 
 def main():
-    log.info("Starting Tiered Trading Bot (with Robinhood OAuth)...")
-    log.info("Weekly learning analysis runs every Sunday 4 PM ET")
+    log.info("Starting Tiered Trading Bot (Opus 4.8 with Adaptive Thinking)...")
+    log.info("Stage 2: Uses Opus 4.8 thinking to analyze market regime + confidence")
+    log.info("Weekly learning: Sunday 4 PM ET")
     
     current_interval = 1800
     
