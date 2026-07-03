@@ -702,12 +702,7 @@ def run_trading_loop():
         return None
     
     client = get_anthropic_client()
-    access_token = get_rh_access_token()
-    
-    if not access_token:
-        log.error("Could not get Robinhood access token")
-        return None
-    
+
     if should_run_weekly_analysis(state):
         log.info("=== Weekly Learning Analysis ===")
         analysis = analyze_weekly_performance(client, state, cache)
@@ -716,9 +711,9 @@ def run_trading_loop():
             state["performance_analytics"]["last_weekly_analysis"] = {
                 "timestamp": datetime.now().isoformat()
             }
-    
+
     log.info("=== Stage 1: Haiku Screening ===")
-    movers = get_top_movers(access_token, 100, cache)
+    movers = get_top_movers(None, 100, cache)
     
     if not movers:
         log.warning("No movers fetched from Robinhood")
@@ -745,8 +740,15 @@ def run_trading_loop():
     
     high_confidence = [d for d in decisions if d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     log.info("High-confidence trades: %d", len(high_confidence))
-    
+
     log.info("=== Stage 3: Execution (Split Exits) ===")
+    access_token = get_rh_access_token()
+    if not access_token:
+        log.error("Cannot execute: Robinhood auth failed")
+        log.info("Trades identified but not executed: %s", [t.get("symbol") for t in high_confidence])
+        save_state(state)
+        return next_interval
+
     executed = stage3_execute(state, high_confidence, access_token)
     
     if executed:
