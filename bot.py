@@ -341,7 +341,6 @@ def stage1_haiku_screening(client, state, movers):
 Rate top anomalies 0-100. Return JSON:
 {{"anomalies": [{{"symbol": "XYZ", "score": 75, "reason": "spike"}}]}}"""
             }],
-            betas=["prompt-caching-2024-07-31"]
         )
         
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
@@ -426,7 +425,6 @@ Only recommend trades if confidence >= 75.
 Return JSON:
 {{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
             }],
-            betas=["prompt-caching-2024-07-31"]
         )
         
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
@@ -640,7 +638,6 @@ Analyze:
 Return JSON:
 {{"analysis": "...", "recommendations": "...", "confidence_adjustment": "+5/-5/none"}}"""
             }],
-            betas=["prompt-caching-2024-07-31"]
         )
         
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
