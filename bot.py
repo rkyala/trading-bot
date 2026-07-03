@@ -297,17 +297,38 @@ def check_daily_loss_limit(state):
     return False
 
 def is_market_hours():
-    """Check if market is open."""
+    """Check if market is open (excludes weekends and US market holidays)."""
     et = pytz.timezone('US/Eastern')
     now = datetime.now(et)
-    
+
+    # US market holidays (month, day)
+    holidays = [
+        (1, 1),    # New Year's Day
+        (1, 20),   # MLK Day (3rd Monday)
+        (2, 17),   # Presidents Day (3rd Monday)
+        (3, 29),   # Good Friday
+        (5, 27),   # Memorial Day (last Monday)
+        (6, 19),   # Juneteenth
+        (7, 4),    # Independence Day
+        (9, 2),    # Labor Day (1st Monday)
+        (11, 27),  # Thanksgiving (4th Thursday)
+        (12, 25),  # Christmas
+    ]
+
+    # Check weekends
     if now.weekday() >= 5:
         return False
+
+    # Check holidays (simplified - doesn't handle observed dates)
+    if (now.month, now.day) in holidays:
+        return False
+
+    # Check market hours (9:30 AM - 4:00 PM ET)
     if now.hour < 9 or (now.hour == 9 and now.minute < 30):
         return False
     if now.hour >= 16:
         return False
-    
+
     return True
 
 # ============================================================================
