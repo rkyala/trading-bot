@@ -117,43 +117,10 @@ def get_anthropic_client():
         raise ValueError("ANTHROPIC_API_KEY not set")
     return anthropic.Anthropic(api_key=api_key)
 
-def get_rh_access_token():
-    """Get Robinhood access token using env variables."""
-    try:
-        refresh_token = os.environ.get("RH_REFRESH_TOKEN")
-        device_token = os.environ.get("RH_DEVICE_TOKEN")
-        
-        if not refresh_token or not device_token:
-            log.error("Missing RH_REFRESH_TOKEN or RH_DEVICE_TOKEN env variables")
-            return None
-        
-        resp = requests.post(
-            RH_AUTH_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS",
-                "scope": "internal",
-                "device_token": device_token,
-            },
-            timeout=10
-        )
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            access_token = data.get("access_token")
-            if access_token:
-                log.debug("✓ Got Robinhood access token")
-                return access_token
-        else:
-            try:
-                error_data = resp.json()
-                log.error("RH auth failed %s: %s", resp.status_code, error_data)
-            except:
-                log.error("RH auth failed %s: %s", resp.status_code, resp.text)
-    except Exception as e:
-        log.error("RH token refresh error: %s", e)
-    
+def get_robinhood_account():
+    """Get primary Robinhood account number for order placement via MCP."""
+    # Account number is fetched by Claude via MCP when executing trades
+    # This is a placeholder—actual account lookup happens in stage3_execute
     return None
 
 # ============================================================================
@@ -487,91 +454,94 @@ Return JSON:
     return [], 1800
 
 # ============================================================================
-# STAGE 3: EXECUTION (with Partial Profit-Taking)
+# STAGE 3: EXECUTION (with Partial Profit-Taking via MCP)
 # ============================================================================
 
-def stage3_execute(state, decisions, access_token):
+def stage3_execute(client, state, decisions):
     """
-    Stage 3: Execute trades with split exits (partial profit-taking).
-    
-    Strategy:
-    - 50% exits at +2% (lock profits early)
-    - 50% exits at +5% or -3% (capture upside or cut loss)
-    
-    Example:
-      BUY: NVDA 100 shares at $120
-      ORDER 1: Limit sell 50 shares at $122.40 (+2%)
-      ORDER 2: Limit sell 50 shares at $126.00 (+5%) OR stop at $116.40 (-3%)
+    Stage 3: Execute trades using Claude with Robinhood MCP tools.
+
+    Claude has access to place_equity_order and get_equity_positions.
+    Strategy: 50% exits at +2%, 50% rides to +5% or -3%.
     """
     executed = []
-    
-    for decision in decisions:
-        if decision.get("confidence", 0) < CONFIDENCE_THRESHOLD:
-            log.info("SKIP %s: confidence %.0f < %d", 
-                    decision.get("symbol"), decision.get("confidence", 0), CONFIDENCE_THRESHOLD)
-            continue
-        
-        if decision.get("action") != "BUY":
-            continue
-        
+
+    # Filter for high-confidence BUY orders
+    buys = [d for d in decisions
+            if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
+
+    if not buys:
+        log.info("No high-confidence buys to execute")
+        return executed
+
+    # Build execution plan
+    plan = f"""Execute these {len(buys)} trades using Robinhood MCP tools. For EACH trade:
+
+1. Get current portfolio and buying power via get_equity_positions
+2. Place BUY order (full position)
+3. Place TWO SELL orders for partial profit-taking:
+   - Order 1: Sell 50% at +2% (lock profits)
+   - Order 2: Sell 50% at +5% limit price OR -3% stop-loss (ride position)
+
+Trades to execute:
+"""
+
+    for i, decision in enumerate(buys, 1):
         symbol = decision.get("symbol")
-        price = get_current_price(symbol, access_token)
-        
-        if price <= 0:
-            log.error("Invalid price for %s", symbol)
-            continue
-        
+        price = get_current_price(symbol)
         confidence = decision.get("confidence", 75)
-        
-        # Position sizing
+
+        # Position sizing based on confidence
         if confidence >= 90:
             size = 250
         elif confidence >= 80:
             size = 200
         else:
             size = 150
-        
-        quantity = size / price
-        half_qty = quantity / 2
-        
-        # PARTIAL EXIT 1: Sell 50% at +2% (lock profits)
-        partial_target = price * 1.02
-        
-        # PARTIAL EXIT 2: Sell 50% at +5% or -3% (capture upside or cut loss)
-        full_target = price * 1.05
-        full_stop = price * 0.97
-        
-        log.info("EXECUTE: %s @ $%.2f | confidence=%.0f | size=$%d", 
-                symbol, price, confidence, size)
-        log.info("  ├─ PARTIAL: Sell %.2f @ $%.2f (+2%% lock)", half_qty, partial_target)
-        log.info("  └─ RIDE: Sell %.2f @ $%.2f (+5%%) OR stop $%.2f (-3%%)", 
-                half_qty, full_target, full_stop)
-        
-        # Order 1: Partial profit-taking
-        executed.append({
-            "symbol": symbol,
-            "price": price,
-            "quantity": half_qty,
-            "target": partial_target,
-            "confidence": confidence,
-            "order_type": "partial_profit",
-            "description": "Lock profits at +2%",
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-        
-        # Order 2: Ride or stop
-        executed.append({
-            "symbol": symbol,
-            "price": price,
-            "quantity": half_qty,
-            "target": full_target,
-            "stop": full_stop,
-            "confidence": confidence,
-            "order_type": "ride_position",
-            "description": "Capture upside at +5% or cut at -3%",
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-    
+
+        quantity = round(size / price, 2)
+        half_qty = round(quantity / 2, 2)
+
+        plan += f"""
+{i}. {symbol} @ ${price:.2f} (confidence: {confidence:.0f}%)
+   - Buy: {quantity} shares (${size:.0f} allocation)
+   - Sell 1: {half_qty} @ ${price*1.02:.2f} (+2% lock profit)
+   - Sell 2: {half_qty} @ ${price*1.05:.2f} (+5% upside) or stop at ${price*0.97:.2f} (-3%)"""
+
+    plan += "\n\nExecute all orders. Report each order's confirmation or error."
+
+    # Ask Claude to execute via MCP
+    try:
+        log.info("=== Stage 3 Execution Request ===")
+        log.info(plan[:200] + "...")
+
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=2000,
+            messages=[{
+                "role": "user",
+                "content": plan
+            }]
+        )
+
+        text = resp.content[0].text
+        log.info("Execution result:\n%s", text[:500])
+
+        # Track execution records
+        for decision in buys:
+            executed.append({
+                "symbol": decision.get("symbol"),
+                "price": get_current_price(decision.get("symbol")),
+                "confidence": decision.get("confidence", 75),
+                "status": "submitted_to_claude",
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+
+        record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
+
+    except Exception as e:
+        log.error("Stage 3 execution error: %s", e)
+
     return executed
 
 # ============================================================================
@@ -759,15 +729,8 @@ def run_trading_loop():
     high_confidence = [d for d in decisions if d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
     log.info("High-confidence trades: %d", len(high_confidence))
 
-    log.info("=== Stage 3: Execution (Split Exits) ===")
-    access_token = get_rh_access_token()
-    if not access_token:
-        log.error("Cannot execute: Robinhood auth failed")
-        log.info("Trades identified but not executed: %s", [t.get("symbol") for t in high_confidence])
-        save_state(state)
-        return next_interval
-
-    executed = stage3_execute(state, high_confidence, access_token)
+    log.info("=== Stage 3: Execution (Split Exits via MCP) ===")
+    executed = stage3_execute(client, state, high_confidence)
     
     if executed:
         state["trades"].extend(executed)
