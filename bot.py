@@ -36,6 +36,7 @@ TOTAL_BUDGET = 2000
 MAX_POSITION = 500
 DAILY_LOSS_LIMIT_PCT = 5.0
 CONFIDENCE_THRESHOLD = 75
+RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
 TOKENS_PER_HOUR_LIMIT = 2_000_000
 TOKENS_PER_DAY_LIMIT = 15_000_000
@@ -474,14 +475,21 @@ def stage3_execute(client, state, decisions):
         log.info("No high-confidence buys to execute")
         return executed
 
-    # Build execution plan
-    plan = f"""Execute these {len(buys)} trades using Robinhood MCP tools. For EACH trade:
+    # Build execution plan for MCP tools
+    plan = f"""Execute these {len(buys)} trades using Robinhood MCP tools.
 
-1. Get current portfolio and buying power via get_equity_positions
-2. Place BUY order (full position)
+Account: {RH_ACCOUNT}
+
+For EACH trade:
+1. Use get_equity_positions(account_number="{RH_ACCOUNT}") to check buying power
+2. Place BUY order using place_equity_order with:
+   - account_number: "{RH_ACCOUNT}"
+   - type: "market"
+   - side: "buy"
+   - quantity: (calculated below)
 3. Place TWO SELL orders for partial profit-taking:
-   - Order 1: Sell 50% at +2% (lock profits)
-   - Order 2: Sell 50% at +5% limit price OR -3% stop-loss (ride position)
+   - Order 1: limit sell 50% at +2% (lock profits)
+   - Order 2: limit sell 50% at +5% OR stop-loss at -3% (ride position)
 
 Trades to execute:
 """
