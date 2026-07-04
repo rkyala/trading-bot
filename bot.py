@@ -751,7 +751,9 @@ def run_trading_loop():
 def main():
     log.info("Starting Tiered Trading Bot (with Partial Profit-Taking)...")
     log.info("Strategy: 50%% exits at +2%% (lock profits), 50%% rides to +5%% or -3%% (capture upside)")
-    
+    log.info("Configuration: Account=%s | Budget=$%d | Max/position=$%d | Confidence threshold=%d%%",
+            RH_ACCOUNT, TOTAL_BUDGET, MAX_POSITION, CONFIDENCE_THRESHOLD)
+
     current_interval = 1800
     
     while True:
