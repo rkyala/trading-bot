@@ -329,16 +329,21 @@ def stage1_haiku_screening(client, state, movers):
             max_tokens=400,
             system=[{
                 "type": "text",
-                "text": "Detect market anomalies: unusual volume, gaps, reversals.",
+                "text": "Flag significant market movers for trading opportunities. Be inclusive—strong momentum matters.",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Analyze for anomalies:
+                "content": f"""Analyze these movers for trading signals:
 {movers_text}
 
-Rate top anomalies 0-100. Return JSON:
-{{"anomalies": [{{"symbol": "XYZ", "score": 75, "reason": "spike"}}]}}"""
+Flag ANY stock with:
+- Price change >2.5% or <-2.5% (significant momentum)
+- Unusual patterns (reversals, accelerating moves)
+
+Rate each 50-100 (50=borderline, 100=strong signal).
+Only return scores ≥55. Return JSON:
+{{"anomalies": [{{"symbol": "XYZ", "score": 75, "reason": "up 3.2%, strong uptrend"}}]}}"""
             }],
         )
         
