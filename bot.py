@@ -193,6 +193,16 @@ TOP_SP500 = [
     "BKNG", "AMGN", "LRCX", "KEYS", "SNPS", "CDNS", "ADI", "PCAR", "ENPH", "GE",
 ]
 
+NASDAQ_50 = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META", "NFLX", "ADBE", "CSCO",
+    "INTC", "AMD", "CMCSA", "AVGO", "QCOM", "AMAT", "ASML", "ADP", "SNPS", "CDNS",
+    "INTU", "ABNB", "SBUX", "LRCX", "MU", "MCHP", "PCAR", "PAYX", "GOOG", "REGN",
+    "VRTX", "KLAC", "ANSS", "CRWD", "DDOG", "ZM", "MNST", "XEL", "PYPL", "MELI",
+    "FAST", "EBAY", "ENPH", "CTAS", "ODFL", "SGEN", "NFLX", "ULTA", "MRNA", "WDAY",
+]
+
+TOP_WATCHLIST = TOP_SP500 + NASDAQ_50  # Combined 110 stocks (60 S&P + 50 NASDAQ)
+
 def get_top_movers(access_token=None, limit=100, cache=None):
     """Get top movers using yfinance (no auth needed)."""
     if cache is None:
@@ -203,8 +213,8 @@ def get_top_movers(access_token=None, limit=100, cache=None):
         return cached_movers
 
     try:
-        log.info("Fetching movers from yfinance (top %d S&P 500)", len(TOP_SP500[:limit]))
-        symbols = TOP_SP500[:limit]
+        log.info("Fetching movers from yfinance (S&P 500 + NASDAQ-50: %d stocks)", len(TOP_WATCHLIST[:limit]))
+        symbols = TOP_WATCHLIST[:limit]
 
         movers = []
         for symbol in symbols:
