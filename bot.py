@@ -342,12 +342,13 @@ Return JSON: {"anomalies": [{"symbol": "XYZ", "score": 75, "reason": "up 3.2%, s
 {movers_text}
 
 Flag ANY stock with:
-- Price change >2.5% or <-2.5% (significant momentum)
+- Price change >2% or <-2% (strong momentum)
 - Unusual patterns (reversals, accelerating moves)
+- High volume spikes or volatility
 
-Rate each 50-100 (50=borderline, 100=strong signal).
-Only return scores ≥55. Return JSON:
-{{"anomalies": [{{"symbol": "XYZ", "score": 75, "reason": "up 3.2%, strong uptrend"}}]}}"""
+Rate each 40-100 (40=weak, 75=good, 100=exceptional).
+Return ALL with score ≥45. Return JSON:
+{{"anomalies": [{{"symbol": "XYZ", "score": 65, "reason": "up 2.5%, accelerating"}}]}}"""
             }],
         )
         
