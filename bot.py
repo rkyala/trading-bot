@@ -329,7 +329,11 @@ def stage1_haiku_screening(client, state, movers):
             max_tokens=400,
             system=[{
                 "type": "text",
-                "text": "Flag significant market movers for trading opportunities. Be inclusive—strong momentum matters.",
+                "text": """Flag significant market movers for trading opportunities. Be inclusive—strong momentum matters.
+
+Scoring rubric: 50=borderline, 75=strong, 100=exceptional. Only return score ≥55.
+
+Return JSON: {"anomalies": [{"symbol": "XYZ", "score": 75, "reason": "up 3.2%, strong uptrend"}]}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -394,21 +398,16 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             },
             system=[{
                 "type": "text",
-                "text": """You are a market regime analyst with adaptive thinking.
+                "text": """You are a market regime analyst. Identify market regime, assess candidates, rate confidence for +3% in 1-2 days, and recommend scanning frequency.
 
-Your job:
-1. Identify the current market regime by analyzing the movers
-2. Assess how each candidate fits that regime
-3. Rate confidence 0-100 for each hitting +3% in 1-2 days
-4. Explain your reasoning
-5. Recommend optimal scanning frequency
+Analyze:
+1. Trend direction and strength (bull/bear/choppy)
+2. Sector rotation patterns
+3. Volatility regime (high/low)
+4. Mean reversion vs momentum signals
+5. Strategy that wins today (gap-fill/momentum/reversal)
 
-Think deeply about:
-- Trend direction and strength (bull/bear/choppy)
-- Sector rotation patterns
-- Volatility regime (high/low)
-- Mean reversion vs momentum signals
-- Which strategy wins today (gap-fill/momentum/reversal)""",
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}], "next_interval_seconds": 1200}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
