@@ -197,7 +197,7 @@ NASDAQ_50 = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META", "NFLX", "ADBE", "CSCO",
     "INTC", "AMD", "CMCSA", "AVGO", "QCOM", "AMAT", "ASML", "ADP", "SNPS", "CDNS",
     "INTU", "ABNB", "SBUX", "LRCX", "MU", "MCHP", "PCAR", "PAYX", "GOOG", "REGN",
-    "VRTX", "KLAC", "ANSS", "CRWD", "DDOG", "ZM", "MNST", "XEL", "PYPL", "MELI",
+    "VRTX", "KLAC", "CRWD", "DDOG", "ZM", "MNST", "XEL", "PYPL", "MELI", "TJX",
     "FAST", "EBAY", "ENPH", "CTAS", "ODFL", "SGEN", "NFLX", "ULTA", "MRNA", "WDAY",
 ]
 
