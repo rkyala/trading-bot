@@ -319,7 +319,7 @@ def stage1_haiku_screening(client, state, movers):
         return []
     
     movers_text = "\n".join([
-        f"{m['symbol']}: {m['price']:.2f} ({m['pct_change']:+.1f}%)"
+        f"{m['symbol']}: ${m['price']:.2f} ({m['pct_change']:+.1f}%) | Vol: {m.get('volume', 0):,.0f}"
         for m in movers[:30]
     ])
     
@@ -341,14 +341,14 @@ Return JSON: {"anomalies": [{"symbol": "XYZ", "score": 75, "reason": "up 3.2%, s
                 "content": f"""Analyze these movers for trading signals:
 {movers_text}
 
-Flag ANY stock with:
-- Price change >2% or <-2% (strong momentum)
-- Unusual patterns (reversals, accelerating moves)
-- High volume spikes or volatility
+Flag stocks with:
+- Price change >1.5% or <-1.5% (momentum)
+- Volume >average (unusual activity)
+- Any unusual patterns (gaps, reversals, acceleration)
 
-Rate each 40-100 (40=weak, 75=good, 100=exceptional).
-Return ALL with score ≥45. Return JSON:
-{{"anomalies": [{{"symbol": "XYZ", "score": 65, "reason": "up 2.5%, accelerating"}}]}}"""
+Rate 40-100: 40=weak signal, 60=moderate, 75+=strong, 100=exceptional.
+Return ALL ≥45. JSON:
+{{"anomalies": [{{"symbol": "XYZ", "score": 65, "reason": "up 2.2%, 2x volume"}}]}}"""
             }],
         )
         
