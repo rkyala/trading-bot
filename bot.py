@@ -314,57 +314,61 @@ def is_market_hours():
 # ============================================================================
 
 def stage1_haiku_screening(client, state, movers):
-    """Stage 1: Identify anomalies in top movers."""
+    """Stage 1: Score all top movers for Stage 2 analysis."""
     if not movers or len(movers) == 0:
         return []
-    
+
     movers_text = "\n".join([
         f"{m['symbol']}: ${m['price']:.2f} ({m['pct_change']:+.1f}%) | Vol: {m.get('volume', 0):,.0f}"
         for m in movers[:30]
     ])
-    
+
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=400,
+            max_tokens=500,
             system=[{
                 "type": "text",
-                "text": """Flag significant market movers for trading opportunities. Be inclusive—strong momentum matters.
+                "text": """Score all movers 1-100 for trading potential. 1=ignore, 50=borderline, 75=strong, 100=exceptional.
 
-Scoring rubric: 50=borderline, 75=strong, 100=exceptional. Only return score ≥55.
+Consider: momentum, volume, patterns. Inclusive scoring—rate everything.
 
-Return JSON: {"anomalies": [{"symbol": "XYZ", "score": 75, "reason": "up 3.2%, strong uptrend"}]}""",
+Return JSON: {"candidates": [{"symbol": "XYZ", "score": 75, "reason": "up 2.2%, 2x volume"}]}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Analyze these movers for trading signals:
+                "content": f"""Score ALL these movers 1-100:
 {movers_text}
 
-Flag stocks with:
-- Price change >1.5% or <-1.5% (momentum)
-- Volume >average (unusual activity)
-- Any unusual patterns (gaps, reversals, acceleration)
+Rate each on:
+- Momentum (price change ±1%+)
+- Volume anomaly (2x+ average)
+- Pattern (reversal, acceleration, gap)
 
-Rate 40-100: 40=weak signal, 60=moderate, 75+=strong, 100=exceptional.
-Return ALL ≥45. JSON:
-{{"anomalies": [{{"symbol": "XYZ", "score": 65, "reason": "up 2.2%, 2x volume"}}]}}"""
+Return top scorers and any >50. JSON:
+{{"candidates": [{{"symbol": "XYZ", "score": 65, "reason": "up 2.2%, 2x volume"}}]}}"""
             }],
         )
-        
+
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
-        
+
         try:
             text = resp.content[0].text
             start = text.find('{')
             if start >= 0:
                 result = json.loads(text[start:])
-                return result.get("anomalies", [])
+                candidates = result.get("candidates", [])
+                # Sort by score descending, return top scorers
+                candidates = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
+                log.info("Stage 1 scored %d movers, top candidates: %s", len(movers),
+                        ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:5]]))
+                return candidates
         except:
             pass
     except Exception as e:
         log.error("Stage 1 error: %s", e)
-    
+
     return []
 
 # ============================================================================
@@ -731,17 +735,17 @@ def run_trading_loop():
         save_state(state)
         return None
     
-    anomalies = stage1_haiku_screening(client, state, movers)
-    
-    if not anomalies or len(anomalies) == 0:
-        log.info("No anomalies detected")
+    candidates = stage1_haiku_screening(client, state, movers)
+
+    if not candidates or len(candidates) == 0:
+        log.info("No candidates scored for analysis")
         save_state(state)
         return None
-    
-    log.info("Found %d anomalies", len(anomalies))
-    
+
+    log.info("Stage 1 identified %d candidates for Stage 2", len(candidates))
+
     log.info("=== Stage 2: Opus 4.8 Analysis ===")
-    decisions, next_interval = stage2_sonnet_analysis(client, state, anomalies, cache)
+    decisions, next_interval = stage2_sonnet_analysis(client, state, candidates, cache)
     
     if not decisions or len(decisions) == 0:
         log.info("No high-confidence trades identified")
