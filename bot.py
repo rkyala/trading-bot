@@ -355,22 +355,32 @@ Return top scorers and any >50. JSON:
 
         try:
             text = resp.content[0].text
-            log.debug("Stage 1 raw response: %s", text[:500])
+            # Extract JSON: find { and matching }
             start = text.find('{')
             if start >= 0:
-                json_str = text[start:]
+                depth = 0
+                end = start
+                for i in range(start, len(text)):
+                    if text[i] == '{':
+                        depth += 1
+                    elif text[i] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+
+                json_str = text[start:end]
                 result = json.loads(json_str)
                 candidates = result.get("candidates", [])
-                # Sort by score descending, return top scorers
                 candidates = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
                 if candidates:
-                    log.info("Stage 1 scored %d movers, top candidates: %s", len(movers),
-                            ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:5]]))
+                    log.info("Stage 1: %d candidates | Top: %s", len(candidates),
+                            ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:3]]))
                 else:
-                    log.info("Stage 1 scored movers but no candidates returned (JSON: %s)", json_str[:200])
+                    log.info("Stage 1: No candidates scored")
                 return candidates
         except Exception as e:
-            log.error("Stage 1 JSON parse error: %s", e)
+            log.error("Stage 1 JSON error: %s (text: %s)", e, text[:300] if 'text' in locals() else 'N/A')
             pass
     except Exception as e:
         log.error("Stage 1 error: %s", e)
