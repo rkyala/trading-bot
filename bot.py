@@ -355,24 +355,41 @@ Return top scorers and any >50. JSON:
 
         try:
             text = resp.content[0].text
-            # Strip markdown code fences if present
-            text = text.replace("```json", "").replace("```", "")
+
+            # Strip markdown code fences and whitespace
+            for fence in ["```json", "```", "```JSON"]:
+                text = text.replace(fence, "")
+            text = text.strip()
 
             # Extract JSON: find { and matching }
             start = text.find('{')
             if start >= 0:
                 depth = 0
                 end = start
-                for i in range(start, len(text)):
-                    if text[i] == '{':
-                        depth += 1
-                    elif text[i] == '}':
-                        depth -= 1
-                        if depth == 0:
-                            end = i + 1
-                            break
+                in_string = False
+                escape = False
 
-                json_str = text[start:end]
+                for i in range(start, len(text)):
+                    ch = text[i]
+
+                    # Track if we're inside a string
+                    if ch == '"' and not escape:
+                        in_string = not in_string
+
+                    # Only count braces outside strings
+                    if not in_string:
+                        if ch == '{':
+                            depth += 1
+                        elif ch == '}':
+                            depth -= 1
+                            if depth == 0:
+                                end = i + 1
+                                break
+
+                    # Track escape sequences
+                    escape = (ch == '\\' and not escape)
+
+                json_str = text[start:end].strip()
                 result = json.loads(json_str)
                 candidates = result.get("candidates", [])
                 candidates = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
@@ -381,9 +398,9 @@ Return top scorers and any >50. JSON:
                             ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:3]]))
                     return candidates
                 else:
-                    log.info("Stage 1: Parsed JSON but no candidates")
+                    log.info("Stage 1: No candidates in response")
         except Exception as e:
-            log.error("Stage 1 JSON error: %s", e)
+            log.error("Stage 1 JSON error: %s | First 200 chars: %s", e, text[:200] if 'text' in locals() else 'N/A')
     except Exception as e:
         log.error("Stage 1 error: %s", e)
 
