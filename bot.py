@@ -329,24 +329,21 @@ def stage1_haiku_screening(client, state, movers):
             max_tokens=500,
             system=[{
                 "type": "text",
-                "text": """CRITICAL: Return ONLY valid JSON. No markdown, no text, no explanation. Just the JSON object.
+                "text": """Return ONLY valid JSON array. No markdown, no text, no reason field.
 
-Score all movers 1-100. Return valid JSON only:
-{"candidates": [{"symbol": "XYZ", "score": 75}]}
+Format: [{"symbol": "XYZ", "score": 75}, ...]
 
-Use short reasons (under 80 chars). Escape any quotes or special chars in reason.""",
+Score 1-100. Include all with score >= 50.""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Score ALL these movers 1-100. Return ONLY valid JSON, no other text.
+                "content": f"""Score these 1-100, return ONLY JSON array:
 
 {movers_text}
 
-Rate on momentum, volume, patterns. Return JSON with top scorers (score >= 50):
-{{"candidates": [{{"symbol": "TICK", "score": 75}}]}}
-
-IMPORTANT: Valid JSON only. Short reason (<80 chars). Escape special chars."""
+Return array with score >= 50:
+[{{"symbol": "XYZ", "score": 75}}]"""
             }],
         )
 
@@ -358,25 +355,26 @@ IMPORTANT: Valid JSON only. Short reason (<80 chars). Escape special chars."""
             # Remove markdown fences
             text = text.replace("```json", "").replace("```", "").replace("```JSON", "")
 
-            # Find first { and last }
-            start = text.find('{')
-            end = text.rfind('}')
+            # Find first [ and last ] (array format)
+            start = text.find('[')
+            end = text.rfind(']')
 
             if start >= 0 and end > start:
                 json_str = text[start:end+1]
-                result = json.loads(json_str)
-                candidates = result.get("candidates", [])
+                candidates = json.loads(json_str)
+                # Ensure it's a list of dicts with symbol and score
+                candidates = [c for c in candidates if isinstance(c, dict) and 'symbol' in c and 'score' in c]
                 candidates = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
                 if candidates:
                     log.info("Stage 1: %d candidates | Top: %s", len(candidates),
                             ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:3]]))
                     return candidates
                 else:
-                    log.info("Stage 1: No candidates in response")
+                    log.info("Stage 1: No valid candidates in array")
             else:
-                log.error("Stage 1: Could not find JSON brackets")
+                log.error("Stage 1: Could not find JSON array brackets")
         except json.JSONDecodeError as e:
-            log.error("Stage 1 JSON decode error at line %d col %d: %s", e.lineno, e.colno, e.msg)
+            log.error("Stage 1 JSON error: %s", e.msg)
         except Exception as e:
             log.error("Stage 1 error: %s", e)
     except Exception as e:
