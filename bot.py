@@ -355,6 +355,9 @@ Return top scorers and any >50. JSON:
 
         try:
             text = resp.content[0].text
+            # Strip markdown code fences if present
+            text = text.replace("```json", "").replace("```", "")
+
             # Extract JSON: find { and matching }
             start = text.find('{')
             if start >= 0:
@@ -376,12 +379,11 @@ Return top scorers and any >50. JSON:
                 if candidates:
                     log.info("Stage 1: %d candidates | Top: %s", len(candidates),
                             ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:3]]))
+                    return candidates
                 else:
-                    log.info("Stage 1: No candidates scored")
-                return candidates
+                    log.info("Stage 1: Parsed JSON but no candidates")
         except Exception as e:
-            log.error("Stage 1 JSON error: %s (text: %s)", e, text[:300] if 'text' in locals() else 'N/A')
-            pass
+            log.error("Stage 1 JSON error: %s", e)
     except Exception as e:
         log.error("Stage 1 error: %s", e)
 
