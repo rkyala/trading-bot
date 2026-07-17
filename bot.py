@@ -356,40 +356,15 @@ Return top scorers and any >50. JSON:
         try:
             text = resp.content[0].text
 
-            # Strip markdown code fences and whitespace
-            for fence in ["```json", "```", "```JSON"]:
-                text = text.replace(fence, "")
-            text = text.strip()
+            # Remove markdown fences
+            text = text.replace("```json", "").replace("```", "").replace("```JSON", "")
 
-            # Extract JSON: find { and matching }
+            # Find first { and last }
             start = text.find('{')
-            if start >= 0:
-                depth = 0
-                end = start
-                in_string = False
-                escape = False
+            end = text.rfind('}')
 
-                for i in range(start, len(text)):
-                    ch = text[i]
-
-                    # Track if we're inside a string
-                    if ch == '"' and not escape:
-                        in_string = not in_string
-
-                    # Only count braces outside strings
-                    if not in_string:
-                        if ch == '{':
-                            depth += 1
-                        elif ch == '}':
-                            depth -= 1
-                            if depth == 0:
-                                end = i + 1
-                                break
-
-                    # Track escape sequences
-                    escape = (ch == '\\' and not escape)
-
-                json_str = text[start:end].strip()
+            if start >= 0 and end > start:
+                json_str = text[start:end+1]
                 result = json.loads(json_str)
                 candidates = result.get("candidates", [])
                 candidates = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
@@ -399,8 +374,12 @@ Return top scorers and any >50. JSON:
                     return candidates
                 else:
                     log.info("Stage 1: No candidates in response")
+            else:
+                log.error("Stage 1: Could not find JSON brackets")
+        except json.JSONDecodeError as e:
+            log.error("Stage 1 JSON decode error at line %d col %d: %s", e.lineno, e.colno, e.msg)
         except Exception as e:
-            log.error("Stage 1 JSON error: %s | First 200 chars: %s", e, text[:200] if 'text' in locals() else 'N/A')
+            log.error("Stage 1 error: %s", e)
     except Exception as e:
         log.error("Stage 1 error: %s", e)
 
