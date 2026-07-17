@@ -355,16 +355,22 @@ Return top scorers and any >50. JSON:
 
         try:
             text = resp.content[0].text
+            log.debug("Stage 1 raw response: %s", text[:500])
             start = text.find('{')
             if start >= 0:
-                result = json.loads(text[start:])
+                json_str = text[start:]
+                result = json.loads(json_str)
                 candidates = result.get("candidates", [])
                 # Sort by score descending, return top scorers
                 candidates = sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)
-                log.info("Stage 1 scored %d movers, top candidates: %s", len(movers),
-                        ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:5]]))
+                if candidates:
+                    log.info("Stage 1 scored %d movers, top candidates: %s", len(movers),
+                            ", ".join([f"{c['symbol']}({c['score']})" for c in candidates[:5]]))
+                else:
+                    log.info("Stage 1 scored movers but no candidates returned (JSON: %s)", json_str[:200])
                 return candidates
-        except:
+        except Exception as e:
+            log.error("Stage 1 JSON parse error: %s", e)
             pass
     except Exception as e:
         log.error("Stage 1 error: %s", e)
