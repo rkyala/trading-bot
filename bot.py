@@ -329,25 +329,24 @@ def stage1_haiku_screening(client, state, movers):
             max_tokens=500,
             system=[{
                 "type": "text",
-                "text": """Score all movers 1-100 for trading potential. 1=ignore, 50=borderline, 75=strong, 100=exceptional.
+                "text": """CRITICAL: Return ONLY valid JSON. No markdown, no text, no explanation. Just the JSON object.
 
-Consider: momentum, volume, patterns. Inclusive scoring—rate everything.
+Score all movers 1-100. Return valid JSON only:
+{"candidates": [{"symbol": "XYZ", "score": 75}]}
 
-Return JSON: {"candidates": [{"symbol": "XYZ", "score": 75, "reason": "up 2.2%, 2x volume"}]}""",
+Use short reasons (under 80 chars). Escape any quotes or special chars in reason.""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Score ALL these movers 1-100:
+                "content": f"""Score ALL these movers 1-100. Return ONLY valid JSON, no other text.
+
 {movers_text}
 
-Rate each on:
-- Momentum (price change ±1%+)
-- Volume anomaly (2x+ average)
-- Pattern (reversal, acceleration, gap)
+Rate on momentum, volume, patterns. Return JSON with top scorers (score >= 50):
+{{"candidates": [{{"symbol": "TICK", "score": 75}}]}}
 
-Return top scorers and any >50. JSON:
-{{"candidates": [{{"symbol": "XYZ", "score": 65, "reason": "up 2.2%, 2x volume"}}]}}"""
+IMPORTANT: Valid JSON only. Short reason (<80 chars). Escape special chars."""
             }],
         )
 
