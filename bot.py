@@ -313,6 +313,42 @@ def is_market_hours():
 # STAGE 1: HAIKU SCREENING
 # ============================================================================
 
+def extract_json_object(text):
+    """Extract valid JSON object from text by finding matching braces."""
+    start = text.find('{')
+    if start < 0:
+        return None
+
+    brace_count = 0
+    in_string = False
+    escape_next = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+
+        if escape_next:
+            escape_next = False
+            continue
+
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+
+        if not in_string:
+            if ch == '{':
+                brace_count += 1
+            elif ch == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    return text[start:i+1]
+
+    return None
+
+
 def stage1_haiku_screening(client, state, movers):
     """Stage 1: Score all top movers for Stage 2 analysis."""
     if not movers or len(movers) == 0:
@@ -456,9 +492,9 @@ Return JSON:
             for block in resp.content:
                 if block.type == "text":
                     text = block.text
-                    start = text.find('{')
-                    if start >= 0:
-                        result = json.loads(text[start:])
+                    json_str = extract_json_object(text)
+                    if json_str:
+                        result = json.loads(json_str)
                         regime = result.get("regime", "unknown")
                         strategy = result.get("strategy", "unknown")
                         decisions = result.get("decisions", [])
