@@ -236,6 +236,8 @@ def get_top_movers(access_token=None, limit=100, cache=None):
 
                 if current > 0 and prev_close > 0:
                     pct_change = ((current - prev_close) / prev_close) * 100
+                    log.debug("Finnhub %s: $%.2f (pc: $%.2f, pct: %.2f%%)",
+                             symbol, current, prev_close, pct_change)
 
                     movers.append({
                         "symbol": symbol,
