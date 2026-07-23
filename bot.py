@@ -516,8 +516,7 @@ Analyze:
 
 KEY: On sector rotation days, strong movers (70+ anomaly) aligned with winning sector get 70+ confidence.
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "...", "action": "BUY"}], "next_interval_seconds": 1200}""",
-                "cache_control": {"type": "ephemeral"}
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "...", "action": "BUY"}], "next_interval_seconds": 1200}"""
             }],
             messages=[{
                 "role": "user",
@@ -537,6 +536,7 @@ Only recommend trades if confidence >= 70 (aligned with Stage 1 anomaly detectio
 Return JSON:
 {{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
             }],
+            cache_control={"type": "ephemeral"}
         )
         
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
