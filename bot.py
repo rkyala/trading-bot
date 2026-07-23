@@ -232,7 +232,7 @@ def get_finnhub_price(symbol):
 
 
 def get_top_movers(access_token=None, limit=100, cache=None):
-    """Get top movers using Finnhub API (real-time ~100ms latency)."""
+    """Get top movers using yfinance (fast screening, cheap—real prices via refresh_candidate_prices)."""
     if cache is None:
         cache = load_cache()
 
@@ -240,35 +240,27 @@ def get_top_movers(access_token=None, limit=100, cache=None):
     if cached_movers:
         return cached_movers
 
-    if not FINNHUB_API_KEY:
-        log.error("FINNHUB_API_KEY not set")
-        return cached_movers or []
-
     try:
-        log.info("Fetching movers from Finnhub (S&P 500 + NASDAQ-50: %d stocks)", len(TOP_WATCHLIST[:limit]))
+        log.info("Fetching movers from yfinance (S&P 500 + NASDAQ-50: %d stocks)", len(TOP_WATCHLIST[:limit]))
         symbols = TOP_WATCHLIST[:limit]
 
         movers = []
         for symbol in symbols:
             try:
-                params = {"symbol": symbol, "token": FINNHUB_API_KEY}
-                resp = requests.get(FINNHUB_API_URL, params=params, timeout=5)
-                resp.raise_for_status()
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
 
-                quote = resp.json()
-                current = float(quote.get("c", 0))
-                prev_close = float(quote.get("pc", current))
+                current = info.get("currentPrice") or info.get("regularMarketPrice", 0)
+                prev_close = info.get("previousClose", current)
 
                 if current > 0 and prev_close > 0:
                     pct_change = ((current - prev_close) / prev_close) * 100
-                    log.debug("Finnhub %s: $%.2f (pc: $%.2f, pct: %.2f%%)",
-                             symbol, current, prev_close, pct_change)
 
                     movers.append({
                         "symbol": symbol,
                         "price": current,
                         "pct_change": pct_change,
-                        "volume": quote.get("v", 0),
+                        "volume": info.get("volume", 0),
                     })
             except Exception as e:
                 log.debug("Error fetching %s: %s", symbol, e)
@@ -278,7 +270,7 @@ def get_top_movers(access_token=None, limit=100, cache=None):
         cache_set(cache, "movers", movers)
         save_cache(cache)
 
-        log.info("✓ Fetched %d movers from Finnhub (real-time)", len(movers))
+        log.info("✓ Fetched %d movers from yfinance (will refresh top candidates with Finnhub)", len(movers))
         return movers
     except Exception as e:
         log.error("get_top_movers error: %s", e)
