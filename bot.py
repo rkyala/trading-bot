@@ -206,6 +206,31 @@ NASDAQ_50 = [
 
 TOP_WATCHLIST = TOP_SP500 + NASDAQ_50  # Combined 110 stocks (60 S&P + 50 NASDAQ)
 
+def get_finnhub_price(symbol):
+    """Fetch live price from Finnhub for a single symbol."""
+    if not FINNHUB_API_KEY:
+        return None
+
+    try:
+        params = {"symbol": symbol, "token": FINNHUB_API_KEY}
+        resp = requests.get(FINNHUB_API_URL, params=params, timeout=5)
+        resp.raise_for_status()
+
+        quote = resp.json()
+        current = float(quote.get("c", 0))
+        prev_close = float(quote.get("pc", current))
+
+        if current > 0 and prev_close > 0:
+            pct_change = ((current - prev_close) / prev_close) * 100
+            log.debug("Finnhub %s: $%.2f (pc: $%.2f, pct: %.2f%%)",
+                     symbol, current, prev_close, pct_change)
+            return {"price": current, "pct_change": pct_change}
+    except Exception as e:
+        log.debug("Error fetching Finnhub %s: %s", symbol, e)
+
+    return None
+
+
 def get_top_movers(access_token=None, limit=100, cache=None):
     """Get top movers using Finnhub API (real-time ~100ms latency)."""
     if cache is None:
@@ -432,6 +457,24 @@ Return array with score >= 50:
 # ============================================================================
 # STAGE 2: OPUS 4.8 ANALYSIS
 # ============================================================================
+
+def refresh_candidate_prices(candidates):
+    """Fetch fresh Finnhub prices for Stage 1 candidates only (avoids rate limits)."""
+    if not candidates:
+        return
+
+    log.info("Refreshing Finnhub prices for %d candidates", len(candidates))
+
+    for candidate in candidates[:30]:  # Only top 30 to stay under rate limits
+        symbol = candidate.get("symbol")
+        if not symbol:
+            continue
+
+        price_data = get_finnhub_price(symbol)
+        if price_data:
+            candidate["price"] = price_data["price"]
+            candidate["pct_change"] = price_data["pct_change"]
+
 
 def stage2_sonnet_analysis(client, state, candidates, cache=None):
     """Stage 2: Opus 4.8 with adaptive thinking + caching."""
@@ -801,6 +844,9 @@ def run_trading_loop():
         return None
 
     log.info("Stage 1 identified %d candidates for Stage 2", len(candidates))
+
+    # Refresh live prices from Finnhub for candidates (stays under rate limits)
+    refresh_candidate_prices(candidates)
 
     log.info("=== Stage 2: Opus 4.8 Analysis ===")
     decisions, next_interval = stage2_sonnet_analysis(client, state, candidates, cache)
