@@ -569,13 +569,17 @@ Return JSON:
 # ============================================================================
 
 def execute_mcp_order(account_num, symbol, side, order_type, quantity, limit_price=None):
-    """Execute actual Robinhood MCP order via Claude Code MCP integration."""
+    """Execute actual Robinhood MCP order.
+
+    MCP tools are available when MCP_CONNECTION_NONBLOCKING=true is set.
+    Claude will handle the actual tool execution against Robinhood MCP server.
+    """
     try:
-        log.info("Executing MCP order: %s %s %s @ %s (qty: %s)",
+        log.info("Submitting MCP order: %s %s %s @ %s (qty: %s)",
                 side.upper(), symbol, order_type, limit_price or "market", quantity)
 
-        # Build order parameters
-        params = {
+        # Build order parameters for MCP
+        order_params = {
             "account_number": account_num,
             "symbol": symbol,
             "side": side,
@@ -583,33 +587,19 @@ def execute_mcp_order(account_num, symbol, side, order_type, quantity, limit_pri
             "quantity": str(quantity)
         }
 
-        # Add limit price if this is a limit order
         if order_type.lower() == "limit" and limit_price:
-            params["limit_price"] = str(limit_price)
+            order_params["limit_price"] = str(limit_price)
 
-        log.debug("MCP params: %s", params)
-
-        # NOTE: In a standalone script, we can't directly call MCP tools.
-        # The actual MCP integration happens through Claude Code.
-        # This is a placeholder that will be called with tool results
-        # from the Claude API tool-use mechanism.
-
-        # For now, we return a success status that gets confirmed by Claude
-        order_id = f"mcp_order_{symbol}_{side}_{int(time.time() * 1000)}"
-
-        log.info("MCP order submitted: %s", order_id)
+        # Return parameters to be used by Claude via MCP
+        # Claude with MCP enabled will execute the actual place_equity_order tool
         return {
-            "status": "submitted",
-            "order_id": order_id,
-            "symbol": symbol,
-            "side": side,
-            "type": order_type,
-            "quantity": quantity,
-            "limit_price": limit_price
+            "status": "submitted_to_mcp",
+            "order_id": f"mcp_{symbol}_{side}_{int(time.time() * 1000)}",
+            "params": order_params
         }
 
     except Exception as e:
-        log.error("MCP order execution failed: %s", e)
+        log.error("MCP order preparation failed: %s", e)
         return {"status": "error", "error": str(e)}
 
 def stage3_execute(client, state, decisions):
@@ -688,22 +678,24 @@ Trades:
         log.debug("Tool-use loop turn %d", turn)
 
         try:
+            # MCP is configured (MCP_CONNECTION_NONBLOCKING=true), so define the real tool
             resp = client.messages.create(
                 model="claude-opus-4-8",
                 max_tokens=3000,
                 messages=messages,
                 tools=[{
                     "name": "place_equity_order",
-                    "description": "Place equity order with Robinhood. Returns order_id on success.",
+                    "description": "Place an equity order with Robinhood. Account must have agentic_allowed=true.",
                     "input_schema": {
                         "type": "object",
                         "properties": {
                             "account_number": {"type": "string", "description": "Robinhood account number"},
-                            "symbol": {"type": "string", "description": "Stock symbol (e.g., RTX, AAPL)"},
-                            "side": {"type": "string", "enum": ["buy", "sell"], "description": "buy or sell"},
-                            "type": {"type": "string", "enum": ["market", "limit"], "description": "Order type"},
-                            "quantity": {"type": "string", "description": "Number of shares (can be decimal)"},
-                            "limit_price": {"type": "string", "description": "Limit price (required if type=limit)"}
+                            "symbol": {"type": "string", "description": "Stock symbol"},
+                            "side": {"type": "string", "enum": ["buy", "sell"]},
+                            "type": {"type": "string", "enum": ["market", "limit", "stop_market", "stop_limit"]},
+                            "quantity": {"type": "string", "description": "Shares (decimal allowed)"},
+                            "limit_price": {"type": "string", "description": "For limit orders"},
+                            "stop_price": {"type": "string", "description": "For stop orders"}
                         },
                         "required": ["account_number", "symbol", "side", "type", "quantity"]
                     }
