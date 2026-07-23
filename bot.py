@@ -61,7 +61,7 @@ CACHE_FILE = "bot_cache.json"
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
