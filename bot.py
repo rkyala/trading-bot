@@ -46,7 +46,7 @@ RH_MOVERS_URL = "https://api.robinhood.com/midlands/movers/sp500/"
 RH_QUOTES_URL = "https://api.robinhood.com/quotes/"
 
 # Cache TTLs
-MOVERS_CACHE_TTL = 1800
+MOVERS_CACHE_TTL = 120  # 2 min (yfinance lag ~1-2 min, refresh aggressively for live prices)
 REGIME_CACHE_TTL = 3600
 LEARNING_CACHE_TTL = 604800
 
