@@ -28,6 +28,11 @@ import requests
 import anthropic
 import yfinance as yf
 
+# Reduce logging overhead from yfinance and urllib3 (excessive DEBUG logs)
+logging.getLogger("yfinance").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -35,7 +40,7 @@ import yfinance as yf
 TOTAL_BUDGET = 2000
 MAX_POSITION = 500
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 75
+CONFIDENCE_THRESHOLD = 70  # Lowered from 75 to match Stage 1 anomaly scores (72-73 max)
 RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
 TOKENS_PER_HOUR_LIMIT = 2_000_000
@@ -496,14 +501,22 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
                 "type": "text",
                 "text": """You are a market regime analyst. Identify market regime, assess candidates, rate confidence for +3% in 1-2 days, and recommend scanning frequency.
 
+CONFIDENCE SCORING RULES:
+- Anomaly 70+ with confirmed momentum + regime tailwind = 70-75+ confidence
+- Anomaly 72-73 on sector rotation day (capital flowing to leaders) = 70+ confidence
+- Mean-reversion candidates (down days) need additional oversold signals for 70+
+- If regime clearly favors the trade (e.g., defense stocks leading), boost by 3-5 points
+
 Analyze:
 1. Trend direction and strength (bull/bear/choppy)
-2. Sector rotation patterns
+2. Sector rotation patterns (if rotation day, momentum leaders get boost)
 3. Volatility regime (high/low)
 4. Mean reversion vs momentum signals
 5. Strategy that wins today (gap-fill/momentum/reversal)
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}], "next_interval_seconds": 1200}""",
+KEY: On sector rotation days, strong movers (70+ anomaly) aligned with winning sector get 70+ confidence.
+
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "...", "action": "BUY"}], "next_interval_seconds": 1200}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -515,14 +528,14 @@ JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisio
 Your analysis should show your thinking:
 1. Market Regime: What type of day is this? (bull=strong uptrend, bear=downtrend, choppy=range, rotation=sector shift)
 2. Candidate Assessment: For each symbol, why does it fit (or not fit) the regime?
-3. Confidence Scoring: Rate each 0-100 for hitting +3% in 1-2 days. Include your reasoning.
+3. Confidence Scoring: Rate each 0-100 for hitting +3% in 1-2 days. Use the scoring rules: momentum leaders on regime-favorable sectors get 70+ confidence. Include your reasoning.
 4. Strategy: Which wins today - gap-fill reversals, momentum, or mean reversion?
 5. Interval: How often should we check? (bull=fast 600-900s, normal=1200-1800s, choppy=slow 3600s)
 
-Only recommend trades if confidence >= 75.
+Only recommend trades if confidence >= 70 (aligned with Stage 1 anomaly detection).
 
 Return JSON:
-{{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
+{{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
             }],
         )
         
