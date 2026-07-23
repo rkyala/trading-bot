@@ -45,8 +45,11 @@ RH_AUTH_URL = "https://api.robinhood.com/oauth2/token/"
 RH_MOVERS_URL = "https://api.robinhood.com/midlands/movers/sp500/"
 RH_QUOTES_URL = "https://api.robinhood.com/quotes/"
 
+FINNHUB_API_URL = "https://finnhub.io/api/v1/quote"
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+
 # Cache TTLs
-MOVERS_CACHE_TTL = 120  # 2 min (yfinance lag ~1-2 min, refresh aggressively for live prices)
+MOVERS_CACHE_TTL = 120  # 2 min (finnhub real-time ~100ms latency)
 REGIME_CACHE_TTL = 3600
 LEARNING_CACHE_TTL = 604800
 
@@ -204,7 +207,7 @@ NASDAQ_50 = [
 TOP_WATCHLIST = TOP_SP500 + NASDAQ_50  # Combined 110 stocks (60 S&P + 50 NASDAQ)
 
 def get_top_movers(access_token=None, limit=100, cache=None):
-    """Get top movers using yfinance (no auth needed)."""
+    """Get top movers using Finnhub API (real-time ~100ms latency)."""
     if cache is None:
         cache = load_cache()
 
@@ -212,18 +215,24 @@ def get_top_movers(access_token=None, limit=100, cache=None):
     if cached_movers:
         return cached_movers
 
+    if not FINNHUB_API_KEY:
+        log.error("FINNHUB_API_KEY not set")
+        return cached_movers or []
+
     try:
-        log.info("Fetching movers from yfinance (S&P 500 + NASDAQ-50: %d stocks)", len(TOP_WATCHLIST[:limit]))
+        log.info("Fetching movers from Finnhub (S&P 500 + NASDAQ-50: %d stocks)", len(TOP_WATCHLIST[:limit]))
         symbols = TOP_WATCHLIST[:limit]
 
         movers = []
         for symbol in symbols:
             try:
-                ticker = yf.Ticker(symbol)
-                info = ticker.info
+                params = {"symbol": symbol, "token": FINNHUB_API_KEY}
+                resp = requests.get(FINNHUB_API_URL, params=params, timeout=5)
+                resp.raise_for_status()
 
-                current = info.get("currentPrice") or info.get("regularMarketPrice", 0)
-                prev_close = info.get("previousClose", current)
+                quote = resp.json()
+                current = float(quote.get("c", 0))
+                prev_close = float(quote.get("pc", current))
 
                 if current > 0 and prev_close > 0:
                     pct_change = ((current - prev_close) / prev_close) * 100
@@ -232,7 +241,7 @@ def get_top_movers(access_token=None, limit=100, cache=None):
                         "symbol": symbol,
                         "price": current,
                         "pct_change": pct_change,
-                        "volume": info.get("volume", 0),
+                        "volume": quote.get("v", 0),
                     })
             except Exception as e:
                 log.debug("Error fetching %s: %s", symbol, e)
@@ -242,7 +251,7 @@ def get_top_movers(access_token=None, limit=100, cache=None):
         cache_set(cache, "movers", movers)
         save_cache(cache)
 
-        log.info("✓ Fetched %d movers from yfinance", len(movers))
+        log.info("✓ Fetched %d movers from Finnhub (real-time)", len(movers))
         return movers
     except Exception as e:
         log.error("get_top_movers error: %s", e)
