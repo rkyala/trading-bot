@@ -73,6 +73,8 @@ def _can_refresh_rh_token():
 def get_rh_access_token(force_refresh=False):
     """Get valid Robinhood OAuth access token for MCP."""
     if not _can_refresh_rh_token():
+        log.error("Cannot refresh: RH_CLIENT_ID=%s, RH_REFRESH_TOKEN=%s",
+                 bool(RH_CLIENT_ID), bool(RH_REFRESH_TOKEN))
         return None
 
     # Load cached token from disk
@@ -100,7 +102,7 @@ def get_rh_access_token(force_refresh=False):
             }, timeout=20)
 
             if r.status_code != 200:
-                log.error("Token refresh failed: %s", r.status_code)
+                log.error("Token refresh failed: %s %s", r.status_code, r.text[:200])
                 continue
 
             d = r.json()
