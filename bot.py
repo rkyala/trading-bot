@@ -760,13 +760,16 @@ Trades:
 
             record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
 
+            log.debug("Stage 3 response: stop_reason=%s, content_blocks=%d",
+                     resp.stop_reason, len(resp.content) if resp.content else 0)
+
             # Check if done
             if resp.stop_reason == "end_turn":
-                log.info("Stage 3 complete")
+                log.info("Stage 3 complete (end_turn)")
                 break
 
             if resp.stop_reason != "tool_use":
-                log.warning("Unexpected stop_reason: %s", resp.stop_reason)
+                log.warning("Unexpected stop_reason: %s (expected tool_use)", resp.stop_reason)
                 break
 
             # Process tool calls
