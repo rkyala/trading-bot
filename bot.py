@@ -136,6 +136,13 @@ logging.basicConfig(
     ]
 )
 
+# Suppress verbose library DEBUG logs (Railway rate limiting)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("yfinance").setLevel(logging.WARNING)
+logging.getLogger("anthropic").setLevel(logging.WARNING)
+
 # ============================================================================
 # CACHE MANAGEMENT
 # ============================================================================
