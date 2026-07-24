@@ -45,6 +45,12 @@ RH_AUTH_URL = "https://api.robinhood.com/oauth2/token/"
 RH_MOVERS_URL = "https://api.robinhood.com/midlands/movers/sp500/"
 RH_QUOTES_URL = "https://api.robinhood.com/quotes/"
 
+# OAuth refresh token for Robinhood MCP
+RH_CLIENT_ID = os.environ.get("RH_CLIENT_ID", "")
+RH_REFRESH_TOKEN = os.environ.get("RH_REFRESH_TOKEN", "")
+RH_TOKEN_URL = "https://api.robinhood.com/oauth2/token/"
+TOKEN_FILE = "rh_token.json"
+
 FINNHUB_API_URL = "https://finnhub.io/api/v1/quote"
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
 
@@ -54,6 +60,68 @@ REGIME_CACHE_TTL = 3600
 LEARNING_CACHE_TTL = 604800
 
 CACHE_FILE = "bot_cache.json"
+
+# ============================================================================
+# ROBINHOOD OAUTH TOKEN MANAGEMENT
+# ============================================================================
+
+_rh_token_cache = {"access": None, "expires_at": 0.0, "refresh": None}
+
+def _can_refresh_rh_token():
+    return bool(RH_CLIENT_ID and (RH_REFRESH_TOKEN or _rh_token_cache["refresh"]))
+
+def get_rh_access_token(force_refresh=False):
+    """Get valid Robinhood OAuth access token for MCP."""
+    if not _can_refresh_rh_token():
+        return None
+
+    # Load cached token from disk
+    if _rh_token_cache["access"] is None:
+        try:
+            with open(TOKEN_FILE) as f:
+                saved = json.load(f)
+            _rh_token_cache.update({k: saved.get(k, _rh_token_cache[k]) for k in _rh_token_cache})
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    # Return cached if still valid
+    if not force_refresh and _rh_token_cache["access"] and time.time() < _rh_token_cache["expires_at"] - 600:
+        return _rh_token_cache["access"]
+
+    # Refresh via OAuth
+    for refresh in dict.fromkeys([_rh_token_cache["refresh"] or "", RH_REFRESH_TOKEN]):
+        if not refresh:
+            continue
+        try:
+            r = requests.post(RH_TOKEN_URL, data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+                "client_id": RH_CLIENT_ID,
+            }, timeout=20)
+
+            if r.status_code != 200:
+                log.error("Token refresh failed: %s", r.status_code)
+                continue
+
+            d = r.json()
+            _rh_token_cache["access"] = d["access_token"]
+            _rh_token_cache["expires_at"] = time.time() + float(d.get("expires_in", 3600))
+            if d.get("refresh_token"):
+                _rh_token_cache["refresh"] = d["refresh_token"]
+
+            try:
+                with open(TOKEN_FILE, "w") as f:
+                    json.dump(_rh_token_cache, f)
+            except OSError:
+                pass
+
+            log.info("✓ Robinhood access token refreshed")
+            return _rh_token_cache["access"]
+
+        except Exception as exc:
+            log.error("Token refresh error: %s", exc)
+
+    return None
 
 # ============================================================================
 # LOGGING SETUP
@@ -644,10 +712,24 @@ Trades:
         log.debug("Tool-use loop turn %d", turn)
 
         try:
-            resp = client.messages.create(
+            # Get Robinhood OAuth token for MCP
+            rh_token = get_rh_access_token()
+            if not rh_token:
+                log.error("No Robinhood access token for MCP execution")
+                break
+
+            # Use real Robinhood MCP server for order execution
+            resp = client.beta.messages.create(
                 model="claude-opus-4-8",
                 max_tokens=3000,
                 messages=messages,
+                betas=["mcp-client-2025-04-04"],
+                mcp_servers=[{
+                    "type": "url",
+                    "url": "https://agent.robinhood.com/mcp/trading",
+                    "name": "robinhood",
+                    "authorization_token": rh_token,
+                }],
                 tools=[{
                     "name": "place_equity_order",
                     "description": "Place equity order with Robinhood. Returns order_id on success.",
