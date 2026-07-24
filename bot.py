@@ -35,7 +35,7 @@ import yfinance as yf
 TOTAL_BUDGET = 2000
 MAX_POSITION = 500
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 75
+CONFIDENCE_THRESHOLD = 70  # Lowered from 75 to match Stage 1 anomaly scores
 RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
 TOKENS_PER_HOUR_LIMIT = 2_000_000
