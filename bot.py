@@ -755,7 +755,7 @@ Trades:
                         "required": ["account_number", "symbol", "side", "type", "quantity"]
                     }
                 }],
-                tool_choice={"type": "required"}  # Claude MUST call place_equity_order
+                tool_choice={"type": "tool", "name": "place_equity_order"}  # Force Claude to call this tool
             )
 
             record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
