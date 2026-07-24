@@ -563,7 +563,7 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
     
     try:
         resp = client.messages.create(
-            model="claude-opus-4-8",
+            model="claude-sonnet-4-6",
             max_tokens=1500,
             thinking={
                 "type": "adaptive",
@@ -990,7 +990,7 @@ def run_trading_loop():
             }
 
     log.info("=== Stage 1: Haiku Screening ===")
-    movers = get_top_movers(None, 100, cache)
+    movers = get_top_movers(None, 60, cache)
     
     if not movers:
         log.warning("No movers fetched from Robinhood")
