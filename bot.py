@@ -28,10 +28,15 @@ import requests
 import anthropic
 import yfinance as yf
 
-# Reduce logging overhead from yfinance and urllib3 (excessive DEBUG logs)
-logging.getLogger("yfinance").setLevel(logging.WARNING)
+# Suppress verbose DEBUG logs from libraries (httpcore, urllib3, yfinance, etc.)
+# Keep only INFO+ for trading bot logs
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+logging.getLogger("yfinance").setLevel(logging.WARNING)
+logging.getLogger("anthropic").setLevel(logging.WARNING)
+logging.getLogger("anthropic._base_client").setLevel(logging.WARNING)
 
 # ============================================================================
 # CONFIGURATION
