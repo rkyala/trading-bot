@@ -544,7 +544,7 @@ def refresh_candidate_prices(candidates):
 
 
 def stage2_sonnet_analysis(client, state, candidates, cache=None):
-    """Stage 2: Opus 4.8 with adaptive thinking + caching."""
+    """Stage 2: Sonnet 4.6 with adaptive thinking + caching."""
     if not candidates or len(candidates) == 0:
         return [], 1800
     
@@ -1009,7 +1009,7 @@ def run_trading_loop():
     # Refresh live prices from Finnhub for candidates (stays under rate limits)
     refresh_candidate_prices(candidates)
 
-    log.info("=== Stage 2: Opus 4.8 Analysis ===")
+    log.info("=== Stage 2: Sonnet 4.6 Analysis ===")
     decisions, next_interval = stage2_sonnet_analysis(client, state, candidates, cache)
     
     if not decisions or len(decisions) == 0:
