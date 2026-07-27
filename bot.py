@@ -28,6 +28,12 @@ import requests
 import anthropic
 import yfinance as yf
 
+# Import daily learning module
+try:
+    from learning import daily_learning
+except ImportError:
+    daily_learning = None
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -411,6 +417,17 @@ def is_market_hours():
         return False
 
     return True
+
+def is_market_close():
+    """Check if we're at market close (4:00 PM - 4:15 PM ET) for daily learning."""
+    et = pytz.timezone('US/Eastern')
+    now = datetime.now(et)
+
+    # Market closes at 4:00 PM ET
+    if now.hour == 16 and now.minute < 15 and now.weekday() < 5:
+        return True
+
+    return False
 
 # ============================================================================
 # STAGE 1: HAIKU SCREENING
@@ -1058,6 +1075,22 @@ def run_trading_loop():
         log.info("Executed %d orders (from %d trades)", len(executed), len(high_confidence))
     
     state["next_interval_seconds"] = next_interval
+
+    # Daily learning at market close (4:00 PM - 4:15 PM ET)
+    if is_market_close() and daily_learning:
+        log.info("=== MARKET CLOSE: Daily Learning ===")
+        try:
+            learning_result = daily_learning(client, state)
+            if learning_result and learning_result.get("deployed"):
+                log.info("Strategy updated: %s | Improvement: %.2f%%",
+                        learning_result["variant"]["variant"],
+                        learning_result["improvement"])
+                save_state(state)
+            elif learning_result:
+                log.info("No strategy change: %s", learning_result.get("reason", ""))
+        except Exception as e:
+            log.error("Daily learning error: %s", e, exc_info=True)
+
     save_state(state)
     return next_interval
 
