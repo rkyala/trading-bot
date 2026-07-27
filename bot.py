@@ -584,9 +584,11 @@ Scoring rules:
 - Anomaly >82 + trend confirmed = 65-80 (momentum play)
 - Sector rotation lead = +5 confidence boost
 - Avoid: Stocks near resistance, overleveraged sectors
-- Recommend BUY if confidence >= 55 (trade 1-2% pullback or breakout)
+- MANDATORY: Always output TOP 3 candidates by anomaly score as BUY decisions, minimum 55 confidence
+- If anomaly >= 75 = score >= 55; if anomaly >= 80 = score >= 65; if anomaly >= 85 = score >= 75
+- Do NOT output empty decisions array—always include the top 3 highest anomaly stocks
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 62, "reason": "pullback entry on trend / strong continuation / gap setup", "action": "BUY"}], "next_interval_seconds": 1200}""",
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 60, "reason": "top anomaly, extended move pullback candidate", "action": "BUY"}], "next_interval_seconds": 1200}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
