@@ -571,24 +571,36 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             },
             system=[{
                 "type": "text",
-                "text": """You are a market regime analyst. Score all candidates 0-100 for +2-5% in 1-2 days via three paths:
+                "text": """You are a mean-reversion SHORT analyzer. Identify overbought stocks that will REVERSE over 3-5 days.
+Score 0-100 for -5% reversal probability (mean reversion).
 
-PATH 1 - PULLBACK ENTRIES (mean reversion within trends): Stock already +4-8%, anomaly >75. Wait for 1-2% pullback intraday = safe entry to ride trend continuation. Score 55-75.
+MEAN REVERSION SHORT SETUP (3-5 DAY HOLD):
+- Stock up +5 to +8% today = OVERBOUGHT, likely to reverse
+- Anomaly score >75 = strong daily move signals overextension
+- Market dynamics: Extended moves exhaust buyers, then reverse hard
+- Entry: SHORT at close (sell overbought, buy the reversal)
+- Exit targets:
+  * PARTIAL: Cover 50% at -2% profit (lock in gains on reversal)
+  * RIDE: Hold 50% for -5% profit (full reversal target)
+  * STOP: Cut if +3% (price continues up, reversal failed)
+- Hold duration: 3-5 days (reversal completes within this window)
 
-PATH 2 - STRONG CONTINUATIONS: Anomaly >82 + sector cohesion + low resistance ahead. Score 65-85.
+CONFIDENCE MAPPING (MEAN REVERSION SHORTS):
+- Anomaly >= 80 + overbought = 70-80 (likely sharp reversal)
+- Anomaly >= 75 + extended move = 65-75 (solid reversal setup)
+- Anomaly >= 70 = 60-70 (weaker overbought condition)
 
-PATH 3 - GAP/CATALYST: Earnings surprise, sector rotation catalyst, or pre-move technical setup (gap up from overnight). Score 60-80.
+SKIP (avoid shorting):
+- Up <5% (not overbought enough)
+- Down 1%+ from open (reversal already started)
+- Near earnings/catalyst (gap risk)
 
-Scoring rules:
-- Extended move (+5%+) with pullback potential = 55-70 (mean reversion play)
-- Anomaly >82 + trend confirmed = 65-80 (momentum play)
-- Sector rotation lead = +5 confidence boost
-- Avoid: Stocks near resistance, overleveraged sectors
-- MANDATORY: Always output TOP 3 candidates by anomaly score as BUY decisions, minimum 55 confidence
-- If anomaly >= 75 = score >= 55; if anomaly >= 80 = score >= 65; if anomaly >= 85 = score >= 75
-- Do NOT output empty decisions array—always include the top 3 highest anomaly stocks
+MANDATORY OUTPUT:
+- Always include TOP 3 by anomaly score
+- Score >= 65 minimum (shorts need high conviction)
+- Never empty decisions
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 60, "reason": "top anomaly, extended move pullback candidate", "action": "BUY"}], "next_interval_seconds": 1200}""",
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_short_3to5days", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "up +7%, overbought, -5% reversal target", "action": "SHORT", "hold_days": "3-5", "target_pct": -5}], "next_interval_seconds": 1800}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -597,17 +609,19 @@ JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisio
 
 {candidates_text}{learning_context}
 
-Your analysis should show your thinking:
-1. Market Regime: What type of day is this? (bull=strong uptrend, bear=downtrend, choppy=range, rotation=sector shift)
-2. Candidate Assessment: For each symbol, which path fits? (pullback entry on trend / strong continuation / gap/catalyst setup)
-3. Confidence Scoring: Rate each 0-100 for +2-5% gain in 1-2 days. Reward pullback entries (55-70), strong trends (65-80), gap plays (60-75).
-4. Entry Strategy: Which wins today - pullback dips, momentum breakouts, or gap/catalyst plays?
-5. Interval: How often should we check? (bull=fast 600-900s, normal=1200-1800s, choppy=slow 3600s)
+Your analysis should show your thinking for MEAN REVERSION SHORTS:
+1. Market Regime: Bull/bear/choppy/rotation? (overbought conditions)
+2. Overbought Assessment: Which stocks are most extended (+5-8%)?
+3. Reversal Probability: Will this overbought move reverse -5% in 3-5 days?
+   - Anomaly >= 80 + strong extended move = 70-80 (likely reversal)
+   - Anomaly >= 75 + overbought = 65-75 (solid reversal)
+   - Anomaly >= 70 = 60-70 (weaker setup)
+4. Interval: Check every 30min during market hours (shorts need monitoring for stop-outs)
 
-Score all candidates, recommend BUY if confidence >= 55 (lower barrier = more trades).
+Score all candidates, recommend SHORT if confidence >= 65 (high-conviction reversals only).
 
 Return JSON:
-{{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
+{{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_short_3to5days", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7%, overbought, reversal target -5%", "action": "SHORT", "hold_days": "3-5", "target_pct": -5}}], "next_interval_seconds": 1800}}"""
             }],
         )
         
@@ -658,24 +672,24 @@ Return JSON:
 
 def stage3_execute(client, state, decisions):
     """
-    Stage 3: Execute trades using Claude with Robinhood MCP tool-use.
+    Stage 3: Execute SHORT trades using Claude with Robinhood MCP tool-use.
 
     Claude ACTIVELY CALLS place_equity_order tools (forced via tool_choice).
-    Strategy: 50% exits at +2%, 50% rides to +5% or -3%.
+    Strategy: Mean reversion SHORT targeting -5% reversal. Cover 50% at -2%, 50% at -5%.
     """
     executed = []
 
-    # Filter for high-confidence BUY orders
-    buys = [d for d in decisions
-            if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
+    # Filter for high-confidence SHORT orders
+    shorts = [d for d in decisions
+              if d.get("action") == "SHORT" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
 
-    if not buys:
-        log.info("No high-confidence buys to execute")
+    if not shorts:
+        log.info("No high-confidence shorts to execute")
         return executed
 
     # Build trade list for Claude
     trades = []
-    for decision in buys:
+    for decision in shorts:
         symbol = decision.get("symbol")
         price = get_current_price(symbol)
         confidence = decision.get("confidence", 75)
@@ -696,28 +710,28 @@ def stage3_execute(client, state, decisions):
             "confidence": confidence,
             "quantity": quantity,
             "half_qty": half_qty,
-            "sell1_price": round(price * 1.02, 2),
-            "sell2_price": round(price * 1.05, 2),
+            "cover1_price": round(price * 0.98, 2),  # Cover 50% at -2% (profit)
+            "cover2_price": round(price * 0.95, 2),  # Cover 50% at -5% (profit)
         })
 
     # Build instruction for Claude
-    instruction = f"""Execute these {len(buys)} trades using place_equity_order tool for EACH order:
+    instruction = f"""Execute these {len(shorts)} MEAN REVERSION SHORT trades using place_equity_order tool for EACH order:
 
 Account: {RH_ACCOUNT}
 
 For each trade, place 3 orders:
-1. BUY order (market, full quantity)
-2. SELL order (limit, 50% qty at +2%)
-3. SELL order (limit, 50% qty at +5%)
+1. SHORT order (market, full quantity) - sell overbought stock
+2. BUY to COVER (limit, 50% qty at -2% profit)
+3. BUY to COVER (limit, 50% qty at -5% profit)
 
 Trades:
 """
     for i, t in enumerate(trades, 1):
         instruction += f"""
-{i}. {t['symbol']} @ ${t['price']:.2f} (confidence {t['confidence']:.0f}%)
-   - Buy {t['quantity']} shares (market)
-   - Sell limit {t['half_qty']} @ ${t['sell1_price']} (+2%)
-   - Sell limit {t['half_qty']} @ ${t['sell2_price']} (+5%)"""
+{i}. {t['symbol']} SHORT @ ${t['price']:.2f} (confidence {t['confidence']:.0f}%)
+   - Short {t['quantity']} shares (market)
+   - Buy cover {t['half_qty']} @ ${t['cover1_price']} (-2% profit)
+   - Buy cover {t['half_qty']} @ ${t['cover2_price']} (-5% profit)"""
 
     instruction += f"""\n\nExecute each order immediately. Use place_equity_order for EVERY trade."""
 
@@ -814,14 +828,15 @@ Trades:
                         "quantity": qty
                     }
 
-                    # Track in executed list
+                    # Track in executed list (only SHORT orders, not COVER orders)
                     trade_match = next((t for t in trades if t["symbol"] == symbol), None)
-                    if trade_match and side == "buy":
+                    if trade_match and side == "sell":  # SHORT = sell first
                         executed.append({
                             "symbol": symbol,
                             "price": trade_match["price"],
                             "quantity": float(qty),
                             "confidence": trade_match["confidence"],
+                            "action": "SHORT",
                             "status": "executed",
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
