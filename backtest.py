@@ -1,223 +1,228 @@
+#!/usr/bin/env python3
 """
-Backtest of the rule-based strategy described in README.md, using the same
-indicator math as bot.py (calc_rsi, calc_ema, 30-day VWAP, 10-day volume ratio).
-
-Rules (from README):
-  BUY  — at least 3 of 4: RSI < 30, MACD > 0, price > VWAP, volume >= 2x 10d avg
-  SELL — at least 2 of 3: RSI > 70, MACD < 0, price < VWAP
-  Exit — stop-loss -3% / take-profit +5% from entry, checked against daily lows/highs
-
-Sizing: $125 per position, $500 total budget, fractional shares.
-Signals are computed on data up to each day's close and filled at that close.
-Stops/TPs fill at the stop price when the day's range crosses it (stop checked
-first when both are hit the same day — conservative).
+3-month backtest of trading bot strategy (Apr-Jul 2026).
+Tests Stage 1 anomaly detection + Stage 2 confidence scoring + Stage 3 execution.
 """
-
-import json
-import sys
-from datetime import date
-
 import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import json
 
-SYMBOLS      = ["META", "MU", "TSLA", "NVDA", "SOXL", "SPXL", "NVDL"]
-BENCHMARK    = "SPY"
-YEARS        = 2
-MAX_POSITION = 125.0
-TOTAL_BUDGET = 500.0
-STOP_LOSS    = 0.03
-TAKE_PROFIT  = 0.05
-LOOKBACK     = 30   # bot.py fetches 30d of history for its indicators
+# Config
+START_DATE = "2026-04-27"
+END_DATE = "2026-07-27"
+TOTAL_BUDGET = 2000
+MAX_POSITION = 500
+CONFIDENCE_THRESHOLD = 55
 
+# S&P 500 + NASDAQ-50 watchlist
+WATCHLIST = [
+    'NVDA', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'AAPL', 'NFLX', 'SNPS', 'ADBE',
+    'CRM', 'NOW', 'ACN', 'CDNS', 'INTU', 'BKNG', 'V', 'MA', 'AMAT', 'LRCX',
+    'AMD', 'INTC', 'KEYS', 'ADI', 'MU', 'AVGO', 'AXP', 'BA', 'CAT', 'GE',
+    'RTX', 'JNJ', 'PFE', 'KO', 'PEP', 'WMT', 'MCD', 'CMCSA', 'VZ', 'CVX',
+    'XOM', 'COP', 'GILD', 'AMGN', 'LLY', 'AZO', 'COST', 'HD', 'PCAR', 'ENPH'
+]
 
-# ── identical math to bot.py ──────────────────────────────────────────────────
+def backtest():
+    print(f"Loading 3-month historical data ({START_DATE} to {END_DATE})...")
 
-def calc_rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return 50.0
-    gains = losses = 0.0
-    for i in range(-period, 0):
-        d = prices[i] - prices[i - 1]
-        if d > 0: gains += d
-        else:     losses += abs(d)
-    avg_g = gains / period
-    avg_l = losses / period or 1e-9
-    return round(100 - 100 / (1 + avg_g / avg_l), 2)
+    # Fetch data
+    data = yf.download(' '.join(WATCHLIST), start=START_DATE, end=END_DATE, progress=False)['Close']
+    dates = data.index.tolist()
 
+    trades = []
+    cash = TOTAL_BUDGET
+    positions = {}  # {symbol: {'entry_price': X, 'qty': Y, 'entry_date': Z}}
+    daily_cash_flow = []
 
-def calc_ema(prices, period):
-    if len(prices) < period:
-        return prices[-1]
-    k   = 2 / (period + 1)
-    ema = sum(prices[:period]) / period
-    for p in prices[period:]:
-        ema = p * k + ema * (1 - k)
-    return round(ema, 4)
+    print(f"Backtesting {len(dates)} trading days...\n")
 
+    for day_idx, date in enumerate(dates[1:], start=1):  # Skip first day (no prior close)
+        prev_date = dates[day_idx - 1]
 
-def indicators(closes, volumes):
-    """Same fields tool_fetch_market_data derives from its 30d window."""
-    n       = min(len(closes), len(volumes))
-    vwap    = sum(closes[i] * volumes[i] for i in range(n)) / (sum(volumes[:n]) or 1)
-    avg_vol = sum(volumes[-10:]) / 10
-    return {
-        "price":        closes[-1],
-        "rsi":          calc_rsi(closes),
-        "macd":         calc_ema(closes, 12) - calc_ema(closes, 26),
-        "vwap":         vwap,
-        "volume_ratio": volumes[-1] / avg_vol if avg_vol else 1,
-    }
+        # Stage 1: Detect anomalies (daily % change > 2%)
+        today_prices = data.loc[date]
+        prev_prices = data.loc[prev_date]
+        pct_changes = ((today_prices - prev_prices) / prev_prices * 100).dropna()
 
+        # Find top movers (anomalies)
+        top_gainers = pct_changes[pct_changes > 2].nlargest(3)  # Top 3 gainers
 
-def buy_signal(ind):
-    votes = [
-        ind["rsi"] < 30,
-        ind["macd"] > 0,
-        ind["price"] > ind["vwap"],
-        ind["volume_ratio"] >= 2.0,
-    ]
-    return sum(votes) >= 3, votes
-
-
-def sell_signal(ind):
-    votes = [
-        ind["rsi"] > 70,
-        ind["macd"] < 0,
-        ind["price"] < ind["vwap"],
-    ]
-    return sum(votes) >= 2, votes
-
-
-# ── backtest ──────────────────────────────────────────────────────────────────
-
-def run():
-    raw = yf.download(
-        SYMBOLS + [BENCHMARK],
-        period=f"{YEARS}y",
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        group_by="ticker",
-    )
-
-    data = {}
-    for sym in SYMBOLS + [BENCHMARK]:
-        df = raw[sym].dropna()
-        if len(df) < LOOKBACK + 10:
-            print(f"skipping {sym}: only {len(df)} bars")
+        if len(top_gainers) == 0:
             continue
-        data[sym] = df
 
-    dates = sorted(set().union(*(set(df.index) for df in data.values())))
+        # Stage 2: Assign confidence to top 3 (mandate output)
+        # Simple rule: map % change to confidence
+        candidates = []
+        for symbol, pct_change in top_gainers.items():
+            confidence = min(55 + int(pct_change * 3), 85)  # Scale: +5% → 60, +9% → 82
+            candidates.append({'symbol': symbol, 'confidence': confidence, 'pct': pct_change})
 
-    cash      = TOTAL_BUDGET
-    positions = {}            # sym -> {shares, entry, entry_date}
-    trades    = []
-    equity    = []            # (date, total value)
+        # Stage 3: Execute trades (top-3 mandate)
+        entry_date = date
+        for candidate in candidates:
+            symbol = candidate['symbol']
+            confidence = candidate['confidence']
 
-    for d in dates:
-        # 1. manage open positions: stops, take-profits, sell signals
-        for sym in list(positions):
-            df = data.get(sym)
-            if df is None or d not in df.index:
+            if confidence < CONFIDENCE_THRESHOLD:
                 continue
-            pos  = positions[sym]
-            row  = df.loc[d]
-            exit_price = None
-            reason     = None
 
-            stop = pos["entry"] * (1 - STOP_LOSS)
-            tp   = pos["entry"] * (1 + TAKE_PROFIT)
-            if row["Low"] <= stop:
-                exit_price, reason = stop, "stop-loss"
-            elif row["High"] >= tp:
-                exit_price, reason = tp, "take-profit"
-            else:
-                loc = df.index.get_loc(d)
-                if loc >= LOOKBACK:
-                    window = df.iloc[loc - LOOKBACK + 1: loc + 1]
-                    ind = indicators(window["Close"].tolist(), window["Volume"].tolist())
-                    hit, _ = sell_signal(ind)
-                    if hit:
-                        exit_price, reason = row["Close"], "sell-signal"
-
-            if exit_price is not None:
-                proceeds = pos["shares"] * exit_price
-                cash    += proceeds
-                pnl      = proceeds - pos["shares"] * pos["entry"]
-                trades.append({
-                    "symbol": sym, "entry_date": str(pos["entry_date"].date()),
-                    "exit_date": str(d.date()), "entry": round(pos["entry"], 2),
-                    "exit": round(exit_price, 2), "pnl": round(pnl, 2),
-                    "pct": round(100 * (exit_price / pos["entry"] - 1), 2),
-                    "reason": reason,
-                })
-                del positions[sym]
-
-        # 2. look for entries
-        for sym in SYMBOLS:
-            if sym in positions or cash < 1:
+            # Skip if already holding
+            if symbol in positions:
                 continue
-            df = data.get(sym)
-            if df is None or d not in df.index:
+
+            # Calculate position size
+            qty = min(MAX_POSITION // int(today_prices[symbol]), int(cash / today_prices[symbol]))
+            if qty == 0 or cash < today_prices[symbol] * qty:
                 continue
-            loc = df.index.get_loc(d)
-            if loc < LOOKBACK:
+
+            # Enter trade
+            entry_price = today_prices[symbol]
+            cost = entry_price * qty
+            cash -= cost
+            positions[symbol] = {
+                'entry_price': entry_price,
+                'qty': qty,
+                'entry_date': entry_date,
+                'confidence': confidence
+            }
+
+        # Exit logic: Check if any positions hit exit targets
+        closed_positions = []
+        for symbol in list(positions.keys()):
+            if symbol not in today_prices.index:
                 continue
-            window = df.iloc[loc - LOOKBACK + 1: loc + 1]
-            ind = indicators(window["Close"].tolist(), window["Volume"].tolist())
-            hit, votes = buy_signal(ind)
-            if hit:
-                dollars = min(MAX_POSITION, cash)
-                price   = float(df.loc[d, "Close"])
-                positions[sym] = {
-                    "shares": dollars / price, "entry": price, "entry_date": d,
-                }
-                cash -= dollars
 
-        # 3. mark to market
-        value = cash
-        for sym, pos in positions.items():
-            df = data[sym]
-            px = float(df.loc[d, "Close"]) if d in df.index else pos["entry"]
-            value += pos["shares"] * px
-        equity.append((d, value))
+            pos = positions[symbol]
+            current_price = today_prices[symbol]
+            pnl_pct = (current_price - pos['entry_price']) / pos['entry_price'] * 100
+            days_held = (date - pos['entry_date']).days
 
-    # ── results ──────────────────────────────────────────────────────────────
-    final  = equity[-1][1]
-    ret    = 100 * (final / TOTAL_BUDGET - 1)
-    peak   = mdd = 0.0
-    for _, v in equity:
-        peak = max(peak, v)
-        mdd  = max(mdd, (peak - v) / peak)
-    n_days = (equity[-1][0] - equity[0][0]).days
-    spy    = data[BENCHMARK]
-    spy_ret = 100 * (float(spy["Close"].iloc[-1]) / float(spy["Close"].iloc[LOOKBACK]) - 1)
+            # Exit rule: 50% exits at +2%, ride the rest to +5% or -3%
+            if pnl_pct >= 2.0:  # Exit half at +2%
+                exit_qty = pos['qty'] // 2
+                exit_price = current_price
+                pnl = (exit_price - pos['entry_price']) * exit_qty
+                cash += exit_price * exit_qty
 
-    wins   = [t for t in trades if t["pnl"] > 0]
-    losses = [t for t in trades if t["pnl"] <= 0]
+                # Reduce position (ride other half)
+                positions[symbol]['qty'] -= exit_qty
 
-    print(f"\nPeriod: {equity[0][0].date()} -> {equity[-1][0].date()}  ({n_days} days)")
-    print(f"Universe: {', '.join(s for s in SYMBOLS if s in data)}")
-    print(f"\nStarting budget : ${TOTAL_BUDGET:,.2f}")
-    print(f"Final value     : ${final:,.2f}")
-    print(f"Total return    : {ret:+.2f}%")
-    print(f"Annualized      : {100 * ((final / TOTAL_BUDGET) ** (365 / n_days) - 1):+.2f}%")
-    print(f"Avg daily return: {ret / max(len(equity), 1):+.4f}% per trading day")
-    print(f"Max drawdown    : -{100 * mdd:.2f}%")
-    print(f"SPY buy & hold  : {spy_ret:+.2f}% over same period")
-    print(f"\nTrades: {len(trades)}  |  wins: {len(wins)}  losses: {len(losses)}"
-          f"  |  win rate: {100 * len(wins) / len(trades):.0f}%" if trades else "\nTrades: 0")
-    if positions:
-        print(f"Still open: {', '.join(positions)}")
-    print("\nTrade log:")
-    for t in trades:
-        print(f"  {t['symbol']:5} {t['entry_date']} -> {t['exit_date']}  "
-              f"{t['pct']:+6.2f}%  ${t['pnl']:+8.2f}  ({t['reason']})")
+                if exit_qty > 0:
+                    trades.append({
+                        'symbol': symbol,
+                        'entry_date': pos['entry_date'],
+                        'exit_date': date,
+                        'entry_price': pos['entry_price'],
+                        'exit_price': exit_price,
+                        'qty': exit_qty,
+                        'pnl': pnl,
+                        'pnl_pct': pnl_pct,
+                        'days': days_held,
+                        'confidence': pos['confidence'],
+                        'reason': 'partial_exit_+2%'
+                    })
 
-    with open("backtest_results.json", "w") as f:
-        json.dump({"final": final, "return_pct": ret, "max_drawdown_pct": 100 * mdd,
-                   "trades": trades}, f, indent=2)
+            # Ride rest to +5% or -3%
+            if positions[symbol]['qty'] > 0:  # Still holding second half
+                if pnl_pct >= 5.0 or pnl_pct <= -3.0 or days_held >= 2:
+                    exit_qty = positions[symbol]['qty']
+                    exit_price = current_price
+                    pnl = (exit_price - pos['entry_price']) * exit_qty
+                    cash += exit_price * exit_qty
 
+                    trades.append({
+                        'symbol': symbol,
+                        'entry_date': pos['entry_date'],
+                        'exit_date': date,
+                        'entry_price': pos['entry_price'],
+                        'exit_price': exit_price,
+                        'qty': exit_qty,
+                        'pnl': pnl,
+                        'pnl_pct': pnl_pct,
+                        'days': days_held,
+                        'confidence': pos['confidence'],
+                        'reason': f'exit_{pnl_pct:+.1f}%'
+                    })
+                    closed_positions.append(symbol)
 
-if __name__ == "__main__":
-    run()
+        # Remove closed positions
+        for symbol in closed_positions:
+            del positions[symbol]
+
+        daily_cash_flow.append({'date': date, 'cash': cash, 'positions': len(positions)})
+
+    # Close all remaining positions at last date
+    last_price = data.loc[dates[-1]]
+    for symbol in list(positions.keys()):
+        pos = positions[symbol]
+        exit_price = last_price[symbol]
+        pnl = (exit_price - pos['entry_price']) * pos['qty']
+        trades.append({
+            'symbol': symbol,
+            'entry_date': pos['entry_date'],
+            'exit_date': dates[-1],
+            'entry_price': pos['entry_price'],
+            'exit_price': exit_price,
+            'qty': pos['qty'],
+            'pnl': pnl,
+            'pnl_pct': (exit_price - pos['entry_price']) / pos['entry_price'] * 100,
+            'days': (dates[-1] - pos['entry_date']).days,
+            'confidence': pos['confidence'],
+            'reason': 'backtest_end'
+        })
+
+    # Calculate metrics
+    df_trades = pd.DataFrame(trades)
+
+    if len(df_trades) == 0:
+        print("❌ NO TRADES EXECUTED (backtest failed)")
+        return
+
+    total_pnl = df_trades['pnl'].sum()
+    winning_trades = len(df_trades[df_trades['pnl'] > 0])
+    losing_trades = len(df_trades[df_trades['pnl'] < 0])
+    win_rate = winning_trades / len(df_trades) * 100 if len(df_trades) > 0 else 0
+    avg_profit = df_trades[df_trades['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0
+    avg_loss = df_trades[df_trades['pnl'] < 0]['pnl'].mean() if losing_trades > 0 else 0
+
+    final_capital = cash
+    roi = (final_capital - TOTAL_BUDGET) / TOTAL_BUDGET * 100
+
+    print("=" * 70)
+    print("BACKTEST RESULTS (3 months: Apr-Jul 2026)")
+    print("=" * 70)
+    print(f"Total Trades:        {len(df_trades)}")
+    print(f"Winning Trades:      {winning_trades} ({win_rate:.1f}%)")
+    print(f"Losing Trades:       {losing_trades}")
+    print(f"Avg Win:             ${avg_profit:,.2f}")
+    print(f"Avg Loss:            ${avg_loss:,.2f}")
+    print(f"\nTotal P&L:           ${total_pnl:,.2f}")
+    print(f"Starting Capital:    ${TOTAL_BUDGET:,.2f}")
+    print(f"Final Capital:       ${final_capital:,.2f}")
+    print(f"ROI:                 {roi:+.2f}%")
+    print("=" * 70)
+
+    # Top trades
+    print("\nTop 5 Winning Trades:")
+    top_wins = df_trades.nlargest(5, 'pnl')[['symbol', 'entry_date', 'exit_date', 'entry_price', 'exit_price', 'pnl', 'pnl_pct', 'confidence']]
+    for idx, trade in top_wins.iterrows():
+        print(f"  {trade['symbol']:5s} {trade['entry_date'].date()} → {trade['exit_date'].date():10s} | Entry ${trade['entry_price']:.2f} Exit ${trade['exit_price']:.2f} | P&L ${trade['pnl']:+7.2f} ({trade['pnl_pct']:+.1f}%) [Conf:{trade['confidence']}]")
+
+    print("\nTop 5 Losing Trades:")
+    top_losses = df_trades.nsmallest(5, 'pnl')[['symbol', 'entry_date', 'exit_date', 'entry_price', 'exit_price', 'pnl', 'pnl_pct', 'confidence']]
+    for idx, trade in top_losses.iterrows():
+        print(f"  {trade['symbol']:5s} {trade['entry_date'].date()} → {trade['exit_date'].date():10s} | Entry ${trade['entry_price']:.2f} Exit ${trade['exit_price']:.2f} | P&L ${trade['pnl']:+7.2f} ({trade['pnl_pct']:+.1f}%) [Conf:{trade['confidence']}]")
+
+    # Verdict
+    print("\n" + "=" * 70)
+    if roi > 0:
+        print(f"✅ STRATEGY IS PROFITABLE: +{roi:.2f}% ROI over 3 months")
+    else:
+        print(f"❌ STRATEGY IS LOSING: {roi:.2f}% ROI over 3 months")
+    print("=" * 70)
+
+if __name__ == '__main__':
+    backtest()
