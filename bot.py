@@ -35,7 +35,7 @@ import yfinance as yf
 TOTAL_BUDGET = 2000
 MAX_POSITION = 500
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 70  # Lowered from 75 to match Stage 1 anomaly scores
+CONFIDENCE_THRESHOLD = 65  # Lowered to 65 for better trade capture on extended moves
 RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
 TOKENS_PER_HOUR_LIMIT = 2_000_000
@@ -604,11 +604,14 @@ Return JSON:
         )
         
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
-        
+        log.info("Stage 2 tokens: %d input, %d output | Running total: %d input, %d output",
+                resp.usage.input_tokens, resp.usage.output_tokens,
+                state["token_usage"]["input"], state["token_usage"]["output"])
+
         for block in resp.content:
             if block.type == "thinking":
                 log.info("\n[OPUS THINKING]\n%s\n", block.thinking[:500])
-        
+
         try:
             for block in resp.content:
                 if block.type == "text":
@@ -759,6 +762,9 @@ Trades:
             )
 
             record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
+            log.info("Stage 3 tokens: %d input, %d output | Running total: %d input, %d output",
+                    resp.usage.input_tokens, resp.usage.output_tokens,
+                    state["token_usage"]["input"], state["token_usage"]["output"])
 
             log.debug("Stage 3 response: stop_reason=%s, content_blocks=%d",
                      resp.stop_reason, len(resp.content) if resp.content else 0)
