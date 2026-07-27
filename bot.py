@@ -35,7 +35,7 @@ import yfinance as yf
 TOTAL_BUDGET = 2000
 MAX_POSITION = 500
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 65  # Lowered to 65 for better trade capture on extended moves
+CONFIDENCE_THRESHOLD = 55  # Lowered to 55 to trade pullbacks + strong continuations
 RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
 TOKENS_PER_HOUR_LIMIT = 2_000_000
@@ -571,16 +571,22 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             },
             system=[{
                 "type": "text",
-                "text": """You are a market regime analyst. Identify market regime, assess candidates, rate confidence for +3% in 1-2 days, and recommend scanning frequency.
+                "text": """You are a market regime analyst. Score all candidates 0-100 for +2-5% in 1-2 days via three paths:
 
-Analyze:
-1. Trend direction and strength (bull/bear/choppy)
-2. Sector rotation patterns
-3. Volatility regime (high/low)
-4. Mean reversion vs momentum signals
-5. Strategy that wins today (gap-fill/momentum/reversal)
+PATH 1 - PULLBACK ENTRIES (mean reversion within trends): Stock already +4-8%, anomaly >75. Wait for 1-2% pullback intraday = safe entry to ride trend continuation. Score 55-75.
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}], "next_interval_seconds": 1200}""",
+PATH 2 - STRONG CONTINUATIONS: Anomaly >82 + sector cohesion + low resistance ahead. Score 65-85.
+
+PATH 3 - GAP/CATALYST: Earnings surprise, sector rotation catalyst, or pre-move technical setup (gap up from overnight). Score 60-80.
+
+Scoring rules:
+- Extended move (+5%+) with pullback potential = 55-70 (mean reversion play)
+- Anomaly >82 + trend confirmed = 65-80 (momentum play)
+- Sector rotation lead = +5 confidence boost
+- Avoid: Stocks near resistance, overleveraged sectors
+- Recommend BUY if confidence >= 55 (trade 1-2% pullback or breakout)
+
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{"symbol": "XYZ", "confidence": 62, "reason": "pullback entry on trend / strong continuation / gap setup", "action": "BUY"}], "next_interval_seconds": 1200}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -591,12 +597,12 @@ JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisio
 
 Your analysis should show your thinking:
 1. Market Regime: What type of day is this? (bull=strong uptrend, bear=downtrend, choppy=range, rotation=sector shift)
-2. Candidate Assessment: For each symbol, why does it fit (or not fit) the regime?
-3. Confidence Scoring: Rate each 0-100 for hitting +3% in 1-2 days. Include your reasoning.
-4. Strategy: Which wins today - gap-fill reversals, momentum, or mean reversion?
+2. Candidate Assessment: For each symbol, which path fits? (pullback entry on trend / strong continuation / gap/catalyst setup)
+3. Confidence Scoring: Rate each 0-100 for +2-5% gain in 1-2 days. Reward pullback entries (55-70), strong trends (65-80), gap plays (60-75).
+4. Entry Strategy: Which wins today - pullback dips, momentum breakouts, or gap/catalyst plays?
 5. Interval: How often should we check? (bull=fast 600-900s, normal=1200-1800s, choppy=slow 3600s)
 
-Only recommend trades if confidence >= 75.
+Score all candidates, recommend BUY if confidence >= 55 (lower barrier = more trades).
 
 Return JSON:
 {{"regime": "bull/bear/choppy/rotation", "strategy": "...", "decisions": [{{"symbol": "XYZ", "confidence": 82, "reason": "...", "action": "BUY"}}], "next_interval_seconds": 1200}}"""
