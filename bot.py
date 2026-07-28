@@ -637,7 +637,11 @@ Your analysis should show your thinking for MEAN REVERSION SHORTS:
 
 Score all candidates, recommend SHORT if confidence >= 65 (high-conviction reversals only).
 
-Return JSON:
+CRITICAL - MANDATORY OUTPUT:
+After your analysis, you MUST output valid JSON. Do not just analyze - output the JSON response.
+This JSON is required for trade execution. Always include at least an empty decisions array.
+
+Return JSON (REQUIRED):
 {{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_short_3to5days", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7%, overbought, reversal target -5%", "action": "SHORT", "hold_days": "3-5", "target_pct": -5}}], "next_interval_seconds": 1800}}"""
             }],
         )
@@ -652,10 +656,11 @@ Return JSON:
                 log.info("\n[OPUS THINKING]\n%s\n", block.thinking[:500])
 
         try:
+            text_content = None
             for block in resp.content:
                 if block.type == "text":
-                    text = block.text
-                    json_str = extract_json_object(text)
+                    text_content = block.text
+                    json_str = extract_json_object(text_content)
                     if json_str:
                         result = json.loads(json_str)
                         regime = result.get("regime", "unknown")
@@ -678,9 +683,14 @@ Return JSON:
                         return decisions, interval
         except Exception as e:
             log.error("JSON parse error: %s", e)
+
+        # Log warning if no text content found (thinking-only response)
+        if not text_content:
+            log.warning("Stage 2 returned only thinking blocks, no text output with decisions")
+
     except Exception as e:
-        log.error("Stage 2 error: %s", e)
-    
+        log.error("Stage 2 error: %s", e, exc_info=True)
+
     return [], 1800
 
 # ============================================================================
