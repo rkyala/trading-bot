@@ -237,6 +237,12 @@ def load_state():
             "last_weekly_analysis": None,
             "confidence_calibration": None,
         },
+        "open_positions": {},  # For autonomous learning feedback
+        "autonomous_learning": {
+            "enabled": True,
+            "regime": "unknown",
+            "last_update": None,
+        }
     }
 
 def save_state(state):
@@ -716,12 +722,13 @@ Return JSON (REQUIRED):
 # STAGE 3: EXECUTION (with Partial Profit-Taking via MCP)
 # ============================================================================
 
-def stage3_execute(client, state, decisions):
+def stage3_execute(client, state, decisions, learning_agent=None):
     """
-    Stage 3: Execute BUY trades using Claude with Robinhood MCP tool-use.
+    Stage 3: Execute BUY trades using Claude with Robinhood MCP tool-use + Autonomous Learning.
 
     Claude ACTIVELY CALLS place_equity_order tools (forced via tool_choice).
-    Strategy: Momentum BUY targeting +3-5% gain. Sell 50% at +2%, 50% at +5%.
+    Strategy: Mean-reversion BUY with autonomous learning-optimized position sizing.
+    Autonomous Learning: Q-Learning adapts position sizing, MAB allocates capital.
     """
     executed = []
 
@@ -733,23 +740,52 @@ def stage3_execute(client, state, decisions):
         log.info("No high-confidence buys to execute")
         return executed
 
+    # Initialize learning agent if not provided
+    if learning_agent is None and autonomous_learning_enabled:
+        try:
+            learning_agent = TradeWithLearning(bot_agent=None)
+            log.info("Autonomous learning enabled")
+        except Exception as e:
+            log.warning("Failed to initialize autonomous learning: %s", e)
+            learning_agent = None
+
     # Build trade list for Claude
-    # Mean-reversion strategy: adaptive position sizing
+    # Mean-reversion strategy with autonomous learning-driven position sizing
     trades = []
     for decision in buys:
         symbol = decision.get("symbol")
         price = get_current_price(symbol)
         confidence = decision.get("confidence", 70)
+        daily_change = decision.get("pct_change", 6.0)
 
-        # Mean-reversion position sizing V2 (optimized for deeper pullbacks -3% to -4%)
-        if confidence >= 80:
-            size = 350  # Very high confidence: aggressive position
-        elif confidence >= 75:
-            size = 300  # High confidence
-        elif confidence >= 70:
-            size = 200  # Medium confidence
+        # AUTONOMOUS LEARNING: Get optimized position sizing
+        if learning_agent:
+            autonomous_decision = learning_agent.execute_trade_with_learning(
+                symbol=symbol,
+                daily_change_pct=daily_change,
+                confidence=confidence,
+                available_capital=TOTAL_BUDGET
+            )
+
+            # Map learned position size to actual shares
+            size_map = {'small': 100, 'medium': 200, 'large': 300}
+            size = size_map.get(autonomous_decision['position_size'], 200)
+            strategy = autonomous_decision['strategy']
+            regime = autonomous_decision['regime']
+
+            log.info(f"[AUTONOMOUS] {symbol}: {strategy} ({regime}), size={size}")
         else:
-            size = 150  # Moderate confidence
+            # Fallback to fixed position sizing V2 if learning unavailable
+            if confidence >= 80:
+                size = 350
+            elif confidence >= 75:
+                size = 300
+            elif confidence >= 70:
+                size = 200
+            else:
+                size = 150
+            strategy = "mean_reversion"
+            regime = "unknown"
 
         quantity = round(size / price, 2)
         half_qty = round(quantity / 2, 2)
@@ -762,6 +798,9 @@ def stage3_execute(client, state, decisions):
             "half_qty": half_qty,
             "sell1_price": round(price * 1.0075, 2),  # Sell 50% at +0.75% (quick recovery exit)
             "sell2_price": round(price * 1.02, 2),   # Sell 50% at +2% (full mean reversion)
+            "strategy": strategy,
+            "regime": regime,
+            "learning_agent": learning_agent
         })
 
     # Build instruction for Claude
@@ -886,15 +925,29 @@ Trades:
                     # Track in executed list (only BUY orders, not SELL orders)
                     trade_match = next((t for t in trades if t["symbol"] == symbol), None)
                     if trade_match and side == "buy":  # BUY = buy first
-                        executed.append({
+                        executed_trade = {
                             "symbol": symbol,
                             "price": trade_match["price"],
                             "quantity": float(qty),
                             "confidence": trade_match["confidence"],
                             "action": "BUY",
                             "status": "executed",
-                            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "strategy": trade_match.get("strategy", "mean_reversion"),
+                            "regime": trade_match.get("regime", "unknown"),
+                            "order_id": order_id
+                        }
+                        executed.append(executed_trade)
+
+                        # Track position for autonomous learning feedback
+                        state["open_positions"][order_id] = {
+                            "symbol": symbol,
+                            "entry_price": trade_match["price"],
+                            "entry_date": datetime.now().isoformat(),
+                            "confidence": trade_match["confidence"],
+                            "strategy": trade_match.get("strategy", "mean_reversion"),
+                            "learning_agent": trade_match.get("learning_agent")  # For feedback
+                        }
 
                     tool_results.append({
                         "type": "tool_result",
@@ -1064,6 +1117,18 @@ def run_trading_loop():
     
     client = get_anthropic_client()
 
+    # Initialize autonomous learning agent
+    learning_agent = None
+    if autonomous_learning_enabled and state.get("autonomous_learning", {}).get("enabled", True):
+        try:
+            learning_agent = TradeWithLearning(bot_agent=None)
+            regime = learning_agent.learning_agent.regime_detector.detect_regime()
+            state["autonomous_learning"]["regime"] = regime
+            state["autonomous_learning"]["last_update"] = datetime.now().isoformat()
+            log.info("Autonomous learning initialized (regime: %s)", regime)
+        except Exception as e:
+            log.warning("Failed to initialize autonomous learning: %s", e)
+
     if should_run_weekly_analysis(state):
         log.info("=== Weekly Learning Analysis ===")
         analysis = analyze_weekly_performance(client, state, cache)
@@ -1075,12 +1140,12 @@ def run_trading_loop():
 
     log.info("=== Stage 1: Haiku Screening ===")
     movers = get_top_movers(None, 60, cache)
-    
+
     if not movers:
         log.warning("No movers fetched from Robinhood")
         save_state(state)
         return None
-    
+
     candidates = stage1_haiku_screening(client, state, movers)
 
     if not candidates or len(candidates) == 0:
@@ -1095,7 +1160,7 @@ def run_trading_loop():
 
     log.info("=== Stage 2: Sonnet 4.6 Analysis ===")
     decisions, next_interval = stage2_sonnet_analysis(client, state, candidates, cache)
-    
+
     if not decisions or len(decisions) == 0:
         log.info("No high-confidence trades identified")
         state["next_interval_seconds"] = next_interval
@@ -1110,11 +1175,23 @@ def run_trading_loop():
     log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
 
     log.info("=== Stage 3: Execution (Split Exits via MCP) ===")
-    executed = stage3_execute(client, state, high_confidence)
+    executed = stage3_execute(client, state, high_confidence, learning_agent=learning_agent)
     
     if executed:
         state["trades"].extend(executed)
         log.info("Executed %d orders (from %d trades)", len(executed), len(high_confidence))
+
+        # Log autonomous learning status after execution
+        if learning_agent:
+            try:
+                report = learning_agent.learning_agent.get_learning_report()
+                regime = report.get('current_regime', 'unknown')
+                log.info("Autonomous Learning: Regime=%s | Strategy allocations: momentum=%.0f%% mean_reversion=%.0f%%",
+                        regime,
+                        report.get('strategy_allocations', {}).get('momentum', 0) * 100,
+                        report.get('strategy_allocations', {}).get('mean_reversion', 0) * 100)
+            except Exception as e:
+                log.debug("Failed to log learning status: %s", e)
 
     # Use FOMC interval if in FOMC window
     fomc_threshold, fomc_interval = get_fomc_settings()
