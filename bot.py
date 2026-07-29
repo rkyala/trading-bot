@@ -604,10 +604,6 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1500,
-            thinking={
-                "type": "adaptive",
-                "display": "summarized"
-            },
             system=[{
                 "type": "text",
                 "text": """You are a mean-reversion SHORT analyzer. Identify overbought stocks that will REVERSE over 3-5 days.
@@ -672,10 +668,6 @@ Return JSON (REQUIRED):
         log.info("Stage 2 tokens: %d input, %d output | Running total: %d input, %d output",
                 resp.usage.input_tokens, resp.usage.output_tokens,
                 state["token_usage"]["input"], state["token_usage"]["output"])
-
-        for block in resp.content:
-            if block.type == "thinking":
-                log.info("\n[OPUS THINKING]\n%s\n", block.thinking[:500])
 
         try:
             text_content = None
