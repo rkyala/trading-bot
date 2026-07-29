@@ -780,7 +780,7 @@ Trades:
     log.info("=== Stage 3: MCP Tool-Use Execution ===")
     messages = [{"role": "user", "content": instruction}]
     turn = 0
-    max_turns = 100
+    max_turns = 1  # Single turn only - execute once and stop
 
     while turn < max_turns:
         turn += 1
@@ -796,7 +796,7 @@ Trades:
             # Use real Robinhood MCP server for order execution
             resp = client.beta.messages.create(
                 model="claude-opus-4-8",
-                max_tokens=3000,
+                max_tokens=1000,
                 messages=messages,
                 betas=["mcp-client-2025-04-04"],
                 mcp_servers=[{
@@ -892,9 +892,9 @@ Trades:
                 log.info("No tool calls, exiting loop")
                 break
 
-            # Continue loop with tool results
-            messages.append({"role": "assistant", "content": resp.content})
-            messages.append({"role": "user", "content": tool_results})
+            # Single-turn execution: exit after first tool call
+            log.info("Stage 3 single-turn execution complete. Exiting loop.")
+            break
 
         except Exception as e:
             log.error("Stage 3 error: %s", e)
