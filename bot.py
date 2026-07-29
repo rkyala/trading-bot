@@ -44,6 +44,11 @@ DAILY_LOSS_LIMIT_PCT = 5.0
 CONFIDENCE_THRESHOLD = 55  # Lowered to 55 to trade pullbacks + strong continuations
 RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
+# FOMC aggressive mode (2026-07-29 only)
+FOMC_DATE = "2026-07-29"
+FOMC_THRESHOLD = 45  # More aggressive during FOMC
+FOMC_INTERVAL = 600  # 10 min instead of 30 min
+
 TOKENS_PER_HOUR_LIMIT = 2_000_000
 TOKENS_PER_DAY_LIMIT = 15_000_000
 
@@ -428,6 +433,23 @@ def is_market_close():
         return True
 
     return False
+
+def get_fomc_settings():
+    """Check if FOMC day and return aggressive settings for 2-3:30 PM ET window."""
+    et = pytz.timezone('US/Eastern')
+    now = datetime.now(et)
+    today = now.strftime("%Y-%m-%d")
+
+    # FOMC today?
+    if today == FOMC_DATE:
+        # FOMC window: 2:00 PM - 3:30 PM ET
+        if now.hour == 14 and now.minute < 60:  # 2 PM hour
+            return FOMC_THRESHOLD, FOMC_INTERVAL
+        elif now.hour == 15 and now.minute < 30:  # 3:30 PM
+            return FOMC_THRESHOLD, FOMC_INTERVAL
+
+    # Normal settings
+    return CONFIDENCE_THRESHOLD, 1800
 
 # ============================================================================
 # STAGE 1: HAIKU SCREENING
@@ -1073,9 +1095,13 @@ def run_trading_loop():
         state["next_interval_seconds"] = next_interval
         save_state(state)
         return next_interval
-    
-    high_confidence = [d for d in decisions if d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
-    log.info("High-confidence trades: %d", len(high_confidence))
+
+    # Get FOMC-adjusted settings
+    current_threshold, next_interval = get_fomc_settings()
+
+    # Filter for current confidence threshold (could be aggressive during FOMC)
+    high_confidence = [d for d in decisions if d.get("confidence", 0) >= current_threshold]
+    log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
 
     log.info("=== Stage 3: Execution (Split Exits via MCP) ===")
     executed = stage3_execute(client, state, high_confidence)
@@ -1083,8 +1109,12 @@ def run_trading_loop():
     if executed:
         state["trades"].extend(executed)
         log.info("Executed %d orders (from %d trades)", len(executed), len(high_confidence))
-    
-    state["next_interval_seconds"] = next_interval
+
+    # Use FOMC interval if in FOMC window
+    fomc_threshold, fomc_interval = get_fomc_settings()
+    state["next_interval_seconds"] = fomc_interval
+    if fomc_interval == FOMC_INTERVAL:
+        log.info("🚀 FOMC AGGRESSIVE MODE: 10-min checks, threshold=%d", fomc_threshold)
 
     # Daily learning at market close (4:00 PM - 4:15 PM ET)
     if is_market_close() and daily_learning:
