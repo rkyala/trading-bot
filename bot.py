@@ -583,7 +583,7 @@ def refresh_candidate_prices(candidates):
 
 
 def stage2_sonnet_analysis(client, state, candidates, cache=None):
-    """Stage 2: Sonnet 4.6 with adaptive thinking + caching."""
+    """Stage 2: Sonnet 4.6 - BUY momentum strategy (cash account compatible)."""
     if not candidates or len(candidates) == 0:
         return [], 1800
     
@@ -606,36 +606,36 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             max_tokens=1500,
             system=[{
                 "type": "text",
-                "text": """You are a mean-reversion SHORT analyzer. Identify overbought stocks that will REVERSE over 3-5 days.
-Score 0-100 for -5% reversal probability (mean reversion).
+                "text": """You are a momentum BUY analyzer for cash accounts. Identify strong movers to BUY.
+Score 0-100 for +3% upside probability over 1-2 days.
 
-MEAN REVERSION SHORT SETUP (3-5 DAY HOLD):
-- Stock up +5 to +8% today = OVERBOUGHT, likely to reverse
-- Anomaly score >75 = strong daily move signals overextension
-- Market dynamics: Extended moves exhaust buyers, then reverse hard
-- Entry: SHORT at close (sell overbought, buy the reversal)
+MOMENTUM BUY SETUP (1-2 DAY HOLD):
+- Stock up +3 to +8% today = STRONG MOMENTUM, likely to continue
+- Anomaly score >70 = strong daily move signals buying interest
+- Market dynamics: Established trends often continue short-term
+- Entry: BUY at close (catch momentum, ride the wave)
 - Exit targets:
-  * PARTIAL: Cover 50% at -2% profit (lock in gains on reversal)
-  * RIDE: Hold 50% for -5% profit (full reversal target)
-  * STOP: Cut if +3% (price continues up, reversal failed)
-- Hold duration: 3-5 days (reversal completes within this window)
+  * PARTIAL: Sell 50% at +2% profit (lock in gains early)
+  * RIDE: Hold 50% for +5% profit (capture full move)
+  * STOP: Cut if -3% (momentum fails)
+- Hold duration: 1-2 days (momentum peaks then consolidates)
 
-CONFIDENCE MAPPING (MEAN REVERSION SHORTS):
-- Anomaly >= 80 + overbought = 70-80 (likely sharp reversal)
-- Anomaly >= 75 + extended move = 65-75 (solid reversal setup)
-- Anomaly >= 70 = 60-70 (weaker overbought condition)
+CONFIDENCE MAPPING (MOMENTUM BUYS):
+- Anomaly >= 80 + strong move = 70-80 (likely strong continuation)
+- Anomaly >= 75 + good move = 65-75 (solid momentum)
+- Anomaly >= 70 = 60-70 (weaker momentum)
 
-SKIP (avoid shorting):
-- Up <5% (not overbought enough)
-- Down 1%+ from open (reversal already started)
+SKIP (avoid buying):
+- Down >2% (bad momentum)
+- Volume too low (risky)
 - Near earnings/catalyst (gap risk)
 
 MANDATORY OUTPUT:
 - Always include TOP 3 by anomaly score
-- Score >= 65 minimum (shorts need high conviction)
+- Score >= 55 minimum (buys need reasonable conviction)
 - Never empty decisions
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_short_3to5days", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "up +7%, overbought, -5% reversal target", "action": "SHORT", "hold_days": "3-5", "target_pct": -5}], "next_interval_seconds": 1800}""",
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "momentum_buy_1to2days", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "up +6%, strong momentum, +3% target", "action": "BUY", "hold_days": "1-2", "target_pct": 3}], "next_interval_seconds": 1800}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -713,24 +713,24 @@ Return JSON (REQUIRED):
 
 def stage3_execute(client, state, decisions):
     """
-    Stage 3: Execute SHORT trades using Claude with Robinhood MCP tool-use.
+    Stage 3: Execute BUY trades using Claude with Robinhood MCP tool-use.
 
     Claude ACTIVELY CALLS place_equity_order tools (forced via tool_choice).
-    Strategy: Mean reversion SHORT targeting -5% reversal. Cover 50% at -2%, 50% at -5%.
+    Strategy: Momentum BUY targeting +3-5% gain. Sell 50% at +2%, 50% at +5%.
     """
     executed = []
 
-    # Filter for high-confidence SHORT orders
-    shorts = [d for d in decisions
-              if d.get("action") == "SHORT" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
+    # Filter for high-confidence BUY orders
+    buys = [d for d in decisions
+            if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
 
-    if not shorts:
-        log.info("No high-confidence shorts to execute")
+    if not buys:
+        log.info("No high-confidence buys to execute")
         return executed
 
     # Build trade list for Claude
     trades = []
-    for decision in shorts:
+    for decision in buys:
         symbol = decision.get("symbol")
         price = get_current_price(symbol)
         confidence = decision.get("confidence", 75)
@@ -751,28 +751,28 @@ def stage3_execute(client, state, decisions):
             "confidence": confidence,
             "quantity": quantity,
             "half_qty": half_qty,
-            "cover1_price": round(price * 0.98, 2),  # Cover 50% at -2% (profit)
-            "cover2_price": round(price * 0.95, 2),  # Cover 50% at -5% (profit)
+            "sell1_price": round(price * 1.02, 2),  # Sell 50% at +2% (profit)
+            "sell2_price": round(price * 1.05, 2),  # Sell 50% at +5% (profit)
         })
 
     # Build instruction for Claude
-    instruction = f"""Execute these {len(shorts)} MEAN REVERSION SHORT trades using place_equity_order tool for EACH order:
+    instruction = f"""Execute these {len(buys)} MOMENTUM BUY trades using place_equity_order tool for EACH order:
 
 Account: {RH_ACCOUNT}
 
 For each trade, place 3 orders:
-1. SHORT order (market, full quantity) - sell overbought stock
-2. BUY to COVER (limit, 50% qty at -2% profit)
-3. BUY to COVER (limit, 50% qty at -5% profit)
+1. BUY order (market, full quantity) - catch momentum
+2. SELL order (limit, 50% qty at +2% profit)
+3. SELL order (limit, 50% qty at +5% profit)
 
 Trades:
 """
     for i, t in enumerate(trades, 1):
         instruction += f"""
-{i}. {t['symbol']} SHORT @ ${t['price']:.2f} (confidence {t['confidence']:.0f}%)
-   - Short {t['quantity']} shares (market)
-   - Buy cover {t['half_qty']} @ ${t['cover1_price']} (-2% profit)
-   - Buy cover {t['half_qty']} @ ${t['cover2_price']} (-5% profit)"""
+{i}. {t['symbol']} BUY @ ${t['price']:.2f} (confidence {t['confidence']:.0f}%)
+   - Buy {t['quantity']} shares (market)
+   - Sell {t['half_qty']} @ ${t['sell1_price']} (+2% profit)
+   - Sell {t['half_qty']} @ ${t['sell2_price']} (+5% profit)"""
 
     instruction += f"""\n\nExecute each order immediately. Use place_equity_order for EVERY trade."""
 
@@ -869,15 +869,15 @@ Trades:
                         "quantity": qty
                     }
 
-                    # Track in executed list (only SHORT orders, not COVER orders)
+                    # Track in executed list (only BUY orders, not SELL orders)
                     trade_match = next((t for t in trades if t["symbol"] == symbol), None)
-                    if trade_match and side == "sell":  # SHORT = sell first
+                    if trade_match and side == "buy":  # BUY = buy first
                         executed.append({
                             "symbol": symbol,
                             "price": trade_match["price"],
                             "quantity": float(qty),
                             "confidence": trade_match["confidence"],
-                            "action": "SHORT",
+                            "action": "BUY",
                             "status": "executed",
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
