@@ -30,6 +30,15 @@ import requests
 import anthropic
 import yfinance as yf
 
+# Import technical analysis module
+try:
+    from technical_analysis import score_technical_setup, format_technical_for_claude
+    technical_analysis_enabled = True
+except ImportError:
+    technical_analysis_enabled = False
+    log = logging.getLogger(__name__)
+    log.warning("Technical analysis module not available")
+
 # Import autonomous learning module
 try:
     from autonomous_bot_integration import TradeWithLearning
@@ -508,14 +517,33 @@ def extract_json_object(text):
 
 
 def stage1_haiku_screening(client, state, movers):
-    """Stage 1: Score all top movers for Stage 2 analysis."""
+    """Stage 1: Score all top movers for Stage 2 analysis with technical confirmation."""
     if not movers or len(movers) == 0:
         return []
 
-    movers_text = "\n".join([
-        f"{m['symbol']}: ${m['price']:.2f} ({m['pct_change']:+.1f}%) | Vol: {m.get('volume', 0):,.0f}"
-        for m in movers[:30]
-    ])
+    # Calculate technical scores for each mover
+    movers_with_tech = []
+    if technical_analysis_enabled:
+        for m in movers[:30]:
+            tech_score = score_technical_setup(
+                m['symbol'],
+                m['price'],
+                m['pct_change']
+            )
+            m['technical_score'] = tech_score.get('score', 0)
+            m['technical_data'] = tech_score
+            movers_with_tech.append(m)
+    else:
+        movers_with_tech = movers[:30]
+
+    # Format movers text with technical data if available
+    if technical_analysis_enabled:
+        movers_text = format_technical_for_claude(movers_with_tech)
+    else:
+        movers_text = "\n".join([
+            f"{m['symbol']}: ${m['price']:.2f} ({m['pct_change']:+.1f}%) | Vol: {m.get('volume', 0):,.0f}"
+            for m in movers[:30]
+        ])
 
     try:
         resp = client.messages.create(
@@ -606,10 +634,16 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
     if cache is None:
         cache = load_cache()
     
-    candidates_text = "\n".join([
-        f"{c['symbol']}: +{c.get('pct_change', 0):.1f}% (anomaly={c.get('score', 0)})"
-        for c in candidates[:5]
-    ])
+    # Format candidates with technical data if available
+    if technical_analysis_enabled:
+        candidates_text = format_technical_for_claude(candidates[:5])
+        candidates_text_note = "\nNote: Technical data includes RSI, VWAP extension, Fibonacci levels for overbought confirmation."
+    else:
+        candidates_text = "\n".join([
+            f"{c['symbol']}: +{c.get('pct_change', 0):.1f}% (anomaly={c.get('score', 0)})"
+            for c in candidates[:5]
+        ])
+        candidates_text_note = ""
     
     learning_context = ""
     calibration = state.get("performance_analytics", {}).get("confidence_calibration")
@@ -625,22 +659,26 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
                 "text": """You are a MEAN-REVERSION analyzer for cash accounts. Identify overbought movers to fade via dip-buying.
 Score 0-100 for pullback recovery probability over 3-5 days.
 
-MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD) - OPTIMIZED:
-- Stocks that spiked up +5% to +8% yesterday/today (overbought/extended)
-- Anomaly score >70 = extreme move likely to revert back to mean
-- Market dynamics: Big daily moves often reverse-then-consolidate
-- Entry: BUY on pullback (wait for -1% to -4% dip after the spike) [OPTIMIZED WIDER WINDOW]
+MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD) - OPTIMIZED WITH TECHNICAL CONFIRMATION:
+- Stocks that spiked up +5% to +8% (overbought/extended)
+- Technical confirmation: RSI > 70 (overbought) + price above VWAP (extended)
+- Market dynamics: Big daily moves often reverse-then-consolidate, especially when technically extreme
+- Entry signals:
+  * PRIMARY: Stock spiked +5-8% AND RSI > 70 AND price > 2% above VWAP (technical overbought)
+  * SECONDARY: Stock spiked +5-8% AND trading near Fibonacci 38.2% resistance level
+  * WAIT for pullback -1% to -4% before entry (mean-reversion entry point)
 - Exit targets:
   * PARTIAL: Sell 50% at +0.75% recovery (capture first reversion)
   * RIDE: Hold 50% for +2% recovery (capture full mean-reversion)
-  * STOP: Cut if -1.5% (reversal failed) [OPTIMIZED TIGHTER STOP]
+  * STOP: Cut if -1.5% (reversal failed, technical breakdown)
 - Hold duration: 3-5 days (mean reversion takes time)
 - Position sizing: $600 per trade (optimized from $500 for better risk/reward)
 
-CONFIDENCE MAPPING (MEAN-REVERSION BUYS) - OPTIMIZED:
-- Anomaly >= 80 + large spike (5-8%) + pullback -1% to -4% = 75-85 (strong reversion setup)
-- Anomaly >= 75 + good spike + pullback confirmed = 65-75 (solid mean-reversion)
-- Anomaly >= 70 + spike + early pullback = 55-65 (weaker setup, enter on wider pullback window)
+CONFIDENCE MAPPING (MEAN-REVERSION BUYS) - TECHNICAL CONFIRMED:
+- Spike +6-8% + RSI > 75 + VWAP extension > 2% + pullback -1 to -4% = 80-90 (strong overbought reversal)
+- Spike +5-6% + RSI > 70 + price above VWAP + pullback confirmed = 70-80 (solid technical setup)
+- Spike +5% + technical score 50+ (some RSI/VWAP extension) = 60-70 (moderate setup, enter on pullback)
+- Spike +5% + low technical score = 55-60 (weak setup, only if other factors align)
 
 SKIP (avoid buying):
 - Only up +2-3% (not enough extension to revert)
@@ -660,19 +698,22 @@ JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion
                 "role": "user",
                 "content": f"""Analyze these daily movers for MEAN-REVERSION dip-buying opportunities:
 
-{candidates_text}{learning_context}
+{candidates_text}{candidates_text_note}{learning_context}
 
-Your analysis should assess each stock for mean-reversion probability:
+Your analysis should assess each stock for mean-reversion probability using:
 1. Market Regime: Bull/bear/choppy/rotation? (extreme moves in choppy markets revert faster)
-2. Overbought Assessment: Which stocks are most extended (+5-8%)?
-3. Reversal Probability: Will this overbought move pull back -2 to -3%, then recover +3%?
-   - Anomaly >= 80 + large spike (5-8%) = 75-85 (strong reversion likely)
-   - Anomaly >= 75 + good spike (4-6%) = 65-75 (solid reversion setup)
-   - Anomaly >= 70 + moderate spike (3-5%) = 55-65 (weaker, wait for pullback confirmation)
+2. Technical Overbought Assessment:
+   - RSI > 70 = overbought, likely to pullback
+   - Price > 2% above VWAP = extended, reversion likely
+   - Fibonacci levels show pullback targets
+3. Reversal Probability: Will this overbought move pull back -1% to -4%, then recover +2%?
+   - RSI > 75 + VWAP extended + large spike (+6-8%) = 80-90 (strong reversion setup)
+   - RSI > 70 + VWAP extended + spike (+5-6%) = 70-80 (solid setup)
+   - RSI 60-70 + some extension + spike = 60-70 (moderate setup)
 4. Historical Pattern: Does this symbol mean-revert normally? (Tech tends to revert faster than utilities)
-5. Interval: Check every 30min - we need to catch the pullback entry, not just the spike
+5. Entry timing: Stocks may still need pullback confirmation (-1% to -4% from spike high)
 
-Score all candidates. Recommend BUY (on pullback) if confidence >= 60 for high-conviction reversions.
+Score all candidates. Recommend BUY if confidence >= 55 for high-conviction reversions.
 
 CRITICAL - MANDATORY OUTPUT:
 After your analysis, you MUST output valid JSON. Do not just analyze - output the JSON response.
