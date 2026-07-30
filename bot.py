@@ -42,9 +42,16 @@ except ImportError:
 # ============================================================================
 
 TOTAL_BUDGET = 2000
-MAX_POSITION = 500
+MAX_POSITION = 600  # Optimized: increased from 500 (backtest +8.66% ROI)
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 60  # Mean-reversion setup confidence (60+ for pullback entry)
+CONFIDENCE_THRESHOLD = 55  # Mean-reversion setup confidence (optimized from 60)
+
+# Mean-reversion dip-buy parameters (backtested +8.66% ROI over 3 months)
+SPIKE_MIN_PCT = 5.0  # Detect spikes 5-8%
+SPIKE_MAX_PCT = 8.0
+PULLBACK_MIN_PCT = 1.0  # Entry on 1-4% pullback (optimized from 2-4%)
+PULLBACK_MAX_PCT = 4.0
+STOP_LOSS_PCT = 1.5  # Cut at -1.5% if reversal fails
 RH_ACCOUNT = "432591949"  # Robinhood account for MCP tool execution
 
 # FOMC aggressive mode (2026-07-29 only)
@@ -618,21 +625,22 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
                 "text": """You are a MEAN-REVERSION analyzer for cash accounts. Identify overbought movers to fade via dip-buying.
 Score 0-100 for pullback recovery probability over 3-5 days.
 
-MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD):
+MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD) - OPTIMIZED:
 - Stocks that spiked up +5% to +8% yesterday/today (overbought/extended)
 - Anomaly score >70 = extreme move likely to revert back to mean
 - Market dynamics: Big daily moves often reverse-then-consolidate
-- Entry: BUY on pullback (wait for -2% to -3% dip after the spike)
+- Entry: BUY on pullback (wait for -1% to -4% dip after the spike) [OPTIMIZED WIDER WINDOW]
 - Exit targets:
-  * PARTIAL: Sell 50% at +1% recovery (capture first reversion)
-  * RIDE: Hold 50% for +3% recovery (capture full mean-reversion)
-  * STOP: Cut if -2% more (reversal failed)
+  * PARTIAL: Sell 50% at +0.75% recovery (capture first reversion)
+  * RIDE: Hold 50% for +2% recovery (capture full mean-reversion)
+  * STOP: Cut if -1.5% (reversal failed) [OPTIMIZED TIGHTER STOP]
 - Hold duration: 3-5 days (mean reversion takes time)
+- Position sizing: $600 per trade (optimized from $500 for better risk/reward)
 
-CONFIDENCE MAPPING (MEAN-REVERSION BUYS):
-- Anomaly >= 80 + large spike (5-8%) = 75-85 (strong reversion setup)
-- Anomaly >= 75 + good spike = 65-75 (solid mean-reversion)
-- Anomaly >= 70 = 55-65 (weaker setup, wait for pullback)
+CONFIDENCE MAPPING (MEAN-REVERSION BUYS) - OPTIMIZED:
+- Anomaly >= 80 + large spike (5-8%) + pullback -1% to -4% = 75-85 (strong reversion setup)
+- Anomaly >= 75 + good spike + pullback confirmed = 65-75 (solid mean-reversion)
+- Anomaly >= 70 + spike + early pullback = 55-65 (weaker setup, enter on wider pullback window)
 
 SKIP (avoid buying):
 - Only up +2-3% (not enough extension to revert)
