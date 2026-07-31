@@ -895,36 +895,44 @@ Trades:
                 log.error("No Robinhood access token for MCP execution")
                 break
 
+            log.info("Stage 3 MCP: Using token (last 8 chars): ...%s", rh_token[-8:] if rh_token else "NONE")
+            log.info("Stage 3 MCP: Connecting to agent.robinhood.com")
+
             # Use real Robinhood MCP server for order execution
-            resp = client.beta.messages.create(
-                model="claude-opus-4-8",
-                max_tokens=1000,
-                messages=messages,
-                betas=["mcp-client-2025-04-04"],
-                mcp_servers=[{
-                    "type": "url",
-                    "url": "https://agent.robinhood.com/mcp/trading",
-                    "name": "robinhood",
-                    "authorization_token": rh_token,
-                }],
-                tools=[{
-                    "name": "place_equity_order",
-                    "description": "Place equity order with Robinhood. Returns order_id on success.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "account_number": {"type": "string", "description": "Robinhood account number"},
-                            "symbol": {"type": "string", "description": "Stock symbol (e.g., RTX, AAPL)"},
-                            "side": {"type": "string", "enum": ["buy", "sell"], "description": "buy or sell"},
-                            "type": {"type": "string", "enum": ["market", "limit"], "description": "Order type"},
-                            "quantity": {"type": "string", "description": "Number of shares (can be decimal)"},
-                            "limit_price": {"type": "string", "description": "Limit price (required if type=limit)"}
-                        },
-                        "required": ["account_number", "symbol", "side", "type", "quantity"]
-                    }
-                }],
-                tool_choice={"type": "tool", "name": "place_equity_order"}  # Force Claude to call this tool
-            )
+            try:
+                resp = client.beta.messages.create(
+                    model="claude-opus-4-8",
+                    max_tokens=1000,
+                    messages=messages,
+                    betas=["mcp-client-2025-04-04"],
+                    mcp_servers=[{
+                        "type": "url",
+                        "url": "https://agent.robinhood.com/mcp/trading",
+                        "name": "robinhood",
+                        "authorization_token": rh_token,
+                    }],
+                    tools=[{
+                        "name": "place_equity_order",
+                        "description": "Place equity order with Robinhood. Returns order_id on success.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "account_number": {"type": "string", "description": "Robinhood account number"},
+                                "symbol": {"type": "string", "description": "Stock symbol (e.g., RTX, AAPL)"},
+                                "side": {"type": "string", "enum": ["buy", "sell"], "description": "buy or sell"},
+                                "type": {"type": "string", "enum": ["market", "limit"], "description": "Order type"},
+                                "quantity": {"type": "string", "description": "Number of shares (can be decimal)"},
+                                "limit_price": {"type": "string", "description": "Limit price (required if type=limit)"}
+                            },
+                            "required": ["account_number", "symbol", "side", "type", "quantity"]
+                        }
+                    }],
+                    tool_choice={"type": "tool", "name": "place_equity_order"}  # Force Claude to call this tool
+                )
+            except Exception as mcp_error:
+                log.error("MCP API error: %s", str(mcp_error)[:500])
+                log.error("MCP error type: %s", type(mcp_error).__name__)
+                raise
 
             record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
             log.info("Stage 3 tokens: %d input, %d output | Running total: %d input, %d output",
@@ -933,6 +941,16 @@ Trades:
 
             log.debug("Stage 3 response: stop_reason=%s, content_blocks=%d",
                      resp.stop_reason, len(resp.content) if resp.content else 0)
+
+            # Log MCP response details
+            if resp.content:
+                for i, block in enumerate(resp.content):
+                    if hasattr(block, 'type'):
+                        log.debug("  Content block %d: type=%s", i, block.type)
+                        if block.type == "text" and hasattr(block, 'text'):
+                            log.debug("    Text: %s", block.text[:200] if block.text else "")
+                        elif block.type == "tool_use" and hasattr(block, 'name'):
+                            log.debug("    Tool: %s, id=%s", block.name, block.id if hasattr(block, 'id') else "?")
 
             # Check if done
             if resp.stop_reason == "end_turn":
