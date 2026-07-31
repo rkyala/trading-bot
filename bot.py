@@ -934,6 +934,29 @@ Trades:
             log.debug("Stage 3 response: stop_reason=%s, content_blocks=%d",
                      resp.stop_reason, len(resp.content) if resp.content else 0)
 
+            # Deep MCP debugging - check for errors or messages
+            log.info("=== MCP RESPONSE DEBUG ===")
+            log.info("Stop reason: %s", resp.stop_reason)
+            log.info("Response model: %s", resp.model if hasattr(resp, 'model') else 'unknown')
+
+            # Check for text blocks (might contain errors or responses from MCP)
+            has_text = False
+            for block in resp.content:
+                if hasattr(block, 'type') and block.type == "text":
+                    has_text = True
+                    log.warning("⚠️  MCP returned TEXT (might be an error): %s", block.text if hasattr(block, 'text') else "(empty)")
+
+            if not has_text:
+                log.info("✓ No text blocks in response (expected for tool_use)")
+
+            if resp.content:
+                for i, block in enumerate(resp.content):
+                    log.debug("Block %d: %s", i, block.type if hasattr(block, 'type') else 'unknown')
+                    if hasattr(block, 'name'):
+                        log.debug("  Tool name: %s", block.name)
+                    if hasattr(block, 'id'):
+                        log.debug("  Tool ID: %s", block.id)
+
             # Check if done
             if resp.stop_reason == "end_turn":
                 log.info("Stage 3 complete (end_turn)")
@@ -959,17 +982,24 @@ Trades:
                     qty = tool_input.get("quantity", "0")
                     price = tool_input.get("limit_price", "market")
 
-                    log.info("Tool call %d: %s %s %s shares @ %s", tool_call_count, side.upper(), symbol, qty, price)
+                    log.info("🔧 Tool call %d: %s %s %s shares @ %s", tool_call_count, side.upper(), symbol, qty, price)
+                    log.info("   Tool ID: %s", block.id)
+                    log.info("   Full input: %s", json.dumps(tool_input, indent=2))
 
-                    # Simulate tool execution (in real environment, MCP handles this)
+                    # Log the MCP execution note
+                    log.info("   >>> MCP server should execute this order now <<<")
+
+                    # Track as executed (MCP handles the actual execution)
                     order_id = f"order_{turn}_{tool_call_count}"
                     result = {
                         "status": "success",
                         "order_id": order_id,
                         "symbol": symbol,
                         "side": side,
-                        "quantity": qty
+                        "quantity": qty,
+                        "note": "Passed to MCP for execution"
                     }
+                    log.info("   Local tracking: %s", result)
 
                     # Track in executed list (only BUY orders, not SELL orders)
                     trade_match = next((t for t in trades if t["symbol"] == symbol), None)
