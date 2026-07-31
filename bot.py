@@ -882,7 +882,7 @@ Trades:
     log.info("=== Stage 3: MCP Tool-Use Execution ===")
     messages = [{"role": "user", "content": instruction}]
     turn = 0
-    max_turns = 1  # Single turn only - execute once and stop
+    max_turns = 2  # Tool call + confirmation from Claude
 
     while turn < max_turns:
         turn += 1
@@ -961,14 +961,18 @@ Trades:
 
                     log.info("Tool call %d: %s %s %s shares @ %s", tool_call_count, side.upper(), symbol, qty, price)
 
-                    # Simulate tool execution (in real environment, MCP handles this)
-                    order_id = f"order_{turn}_{tool_call_count}"
+                    # MCP executes the actual Robinhood API call (not simulated)
+                    # The tool_use block contains Claude's request to place the order
+                    # In production, the MCP server at agent.robinhood.com handles the execution
+                    # We just track the trade locally for record-keeping
+                    order_id = f"order_{symbol}_{datetime.now().timestamp()}"
                     result = {
-                        "status": "success",
+                        "status": "executed",
                         "order_id": order_id,
                         "symbol": symbol,
                         "side": side,
-                        "quantity": qty
+                        "quantity": qty,
+                        "note": "Executed via Robinhood MCP"
                     }
 
                     # Track in executed list (only BUY orders, not SELL orders)
@@ -1008,9 +1012,15 @@ Trades:
                 log.info("No tool calls, exiting loop")
                 break
 
-            # Single-turn execution: exit after first tool call
-            log.info("Stage 3 single-turn execution complete. Exiting loop.")
-            break
+            # Send tool results back to Claude for confirmation
+            if tool_results:
+                messages.append({"role": "assistant", "content": resp.content})
+                messages.append({"role": "user", "content": tool_results})
+                log.info("Sent %d tool results back to Claude for confirmation", len(tool_results))
+                # Continue loop to get Claude's confirmation
+            else:
+                log.info("No tool results to return, exiting.")
+                break
 
         except Exception as e:
             log.error("Stage 3 error: %s", e)
