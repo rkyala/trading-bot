@@ -659,26 +659,23 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
                 "text": """You are a MEAN-REVERSION analyzer for cash accounts. Identify overbought movers to fade via dip-buying.
 Score 0-100 for pullback recovery probability over 3-5 days.
 
-MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD) - OPTIMIZED WITH TECHNICAL CONFIRMATION:
-- Stocks that spiked up +5% to +8% (overbought/extended)
-- Technical confirmation: RSI > 70 (overbought) + price above VWAP (extended)
-- Market dynamics: Big daily moves often reverse-then-consolidate, especially when technically extreme
-- Entry signals:
-  * PRIMARY: Stock spiked +5-8% AND RSI > 70 AND price > 2% above VWAP (technical overbought)
-  * SECONDARY: Stock spiked +5-8% AND trading near Fibonacci 38.2% resistance level
-  * WAIT for pullback -1% to -4% before entry (mean-reversion entry point)
+MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD) - SPIKE-DAY ENTRY:
+- Stocks that spiked up +5% to +8% TODAY (overbought/extended condition NOW)
+- Entry: BUY on spike day, exit on mean-reversion bounce (+0.75% to +2%)
+- Market dynamics: Overbought movers tend to consolidate/reverse within 3-5 days
+- Technical confirmation (RSI > 70, VWAP extension) increases confidence but NOT required
 - Exit targets:
   * PARTIAL: Sell 50% at +0.75% recovery (capture first reversion)
   * RIDE: Hold 50% for +2% recovery (capture full mean-reversion)
-  * STOP: Cut if -1.5% (reversal failed, technical breakdown)
-- Hold duration: 3-5 days (mean reversion takes time)
-- Position sizing: $600 per trade (optimized from $500 for better risk/reward)
+  * STOP: Cut if -1.5% (reversal failed, exit early)
+- Hold duration: 1-3 days (mean reversion is fast after spike)
+- Position sizing: $600 per trade (risk/reward optimized)
 
-CONFIDENCE MAPPING (MEAN-REVERSION BUYS) - TECHNICAL CONFIRMED:
-- Spike +6-8% + RSI > 75 + VWAP extension > 2% + pullback -1 to -4% = 80-90 (strong overbought reversal)
-- Spike +5-6% + RSI > 70 + price above VWAP + pullback confirmed = 70-80 (solid technical setup)
-- Spike +5% + technical score 50+ (some RSI/VWAP extension) = 60-70 (moderate setup, enter on pullback)
-- Spike +5% + low technical score = 55-60 (weak setup, only if other factors align)
+CONFIDENCE MAPPING (MEAN-REVERSION SPIKE-DAY BUYS):
+- Spike +6-8% (strong overbought, high reversal probability) = 70-80 (BUY)
+- Spike +5-6% (moderate overbought) = 60-70 (BUY)
+- Spike +5% with technical confirmation (RSI > 70 or VWAP extended) = 60-65 (BUY)
+- Spike +5% without technical score = 55-60 (BUY, lower conviction)
 
 SKIP (avoid buying):
 - Only up +2-3% (not enough extension to revert)
@@ -691,7 +688,7 @@ MANDATORY OUTPUT:
 - Score >= 60 minimum (reversions need reasonable conviction)
 - Never empty decisions
 
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_dip_buy_3to5days", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "up +6% (overbought), expecting -2% pullback + recovery to +3%", "action": "BUY", "hold_days": "3-5", "target_pct": 3}], "next_interval_seconds": 1800}""",
+JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "up +6% (overbought today), will revert to mean +0.75% to +2% within 3 days", "action": "BUY", "hold_days": "1-3", "target_pct": 2}], "next_interval_seconds": 1800}""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -702,25 +699,26 @@ JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion
 
 Your analysis should assess each stock for mean-reversion probability using:
 1. Market Regime: Bull/bear/choppy/rotation? (extreme moves in choppy markets revert faster)
-2. Technical Overbought Assessment:
-   - RSI > 70 = overbought, likely to pullback
-   - Price > 2% above VWAP = extended, reversion likely
-   - Fibonacci levels show pullback targets
-3. Reversal Probability: Will this overbought move pull back -1% to -4%, then recover +2%?
-   - RSI > 75 + VWAP extended + large spike (+6-8%) = 80-90 (strong reversion setup)
-   - RSI > 70 + VWAP extended + spike (+5-6%) = 70-80 (solid setup)
-   - RSI 60-70 + some extension + spike = 60-70 (moderate setup)
-4. Historical Pattern: Does this symbol mean-revert normally? (Tech tends to revert faster than utilities)
-5. Entry timing: Stocks may still need pullback confirmation (-1% to -4% from spike high)
+2. Spike Magnitude: How far up did it go? (+5% = moderate, +6-8% = strong overbought)
+   - Larger spikes = higher reversal probability
+3. Technical Overbought Assessment (if available):
+   - RSI > 70 = overbought, increases confidence
+   - Price > 2% above VWAP = extended, increases confidence
+   - These are CONFIRMING signals, not required
+4. Reversal Probability: Will this overbought move revert to mean within 3-5 days?
+   - +6-8% spike = 70-80 confidence (very likely to revert)
+   - +5-6% spike = 60-70 confidence (likely to revert)
+   - +5% spike = 55-65 confidence (moderate reversion probability)
+5. Historical Pattern: Does this symbol mean-revert normally? (Tech/growth tends to revert faster)
 
-Score all candidates. Recommend BUY if confidence >= 55 for high-conviction reversions.
+Score all candidates >= 55. BUY candidates TODAY (spike day). Exit on +0.75% partial, +2% full.
 
 CRITICAL - MANDATORY OUTPUT:
 After your analysis, you MUST output valid JSON. Do not just analyze - output the JSON response.
 This JSON is required for trade execution. Always include at least an empty decisions array.
 
 Return JSON (REQUIRED):
-{{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_dip_buy_3to5days", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% (overbought), expecting pullback to -2%, then recovery to +3%", "action": "BUY", "hold_days": "3-5", "target_pct": 3}}], "next_interval_seconds": 1800}}"""
+{{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% (overbought today), high reversal probability within 1-3 days to +2%", "action": "BUY", "hold_days": "1-3", "target_pct": 2}}], "next_interval_seconds": 1800}}"""
             }],
         )
         
