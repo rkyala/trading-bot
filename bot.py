@@ -944,7 +944,8 @@ Trades:
             for block in resp.content:
                 if hasattr(block, 'type') and block.type == "text":
                     has_text = True
-                    log.warning("⚠️  MCP returned TEXT (might be an error): %s", block.text if hasattr(block, 'text') else "(empty)")
+                    text_content = block.text if hasattr(block, 'text') else "(empty)"
+                    log.warning("⚠️  MCP returned TEXT block (length=%d): %s", len(text_content), text_content[:300] if text_content else "(empty)")
 
             if not has_text:
                 log.info("✓ No text blocks in response (expected for tool_use)")
