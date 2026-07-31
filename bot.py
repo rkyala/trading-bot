@@ -898,11 +898,11 @@ Trades:
                 model="claude-opus-4-8",
                 max_tokens=2000,
                 messages=messages,
-                betas=["mcp-client-2025-04-04"],
+                betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 mcp_servers=[{
                     "type": "url",
                     "url": "https://agent.robinhood.com/mcp/trading",
-                    "name": "robinhood",
+                    "name": "Rh",
                     "authorization_token": rh_token,
                 }],
                 tools=[{
