@@ -1272,6 +1272,22 @@ def main():
     log.info("Configuration: Account=%s | Budget=$%d | Max/position=$%d | Confidence threshold=%d%%",
             RH_ACCOUNT, TOTAL_BUDGET, MAX_POSITION, CONFIDENCE_THRESHOLD)
 
+    # Test mode: Force MCP test if TEST_MCP env var is set
+    if os.environ.get("TEST_MCP") == "1":
+        log.info("\n🧪 TEST MODE: Forcing MCP test order...")
+        client = get_anthropic_client()
+        state = load_state()
+        test_decisions = [{
+            "symbol": "AAPL",
+            "confidence": 75,
+            "action": "BUY",
+            "pct_change": 5.5,
+            "reason": "TEST ORDER"
+        }]
+        executed = stage3_execute(client, state, test_decisions)
+        log.info("🧪 TEST: Executed %d test orders. Check Robinhood!", len(executed))
+        return
+
     current_interval = 1800
     
     while True:
