@@ -851,30 +851,25 @@ def stage3_execute(client, state, decisions, learning_agent=None):
         })
 
     # Build instruction for Claude
-    instruction = f"""Execute these {len(buys)} MEAN-REVERSION DIP-BUY trades (V2: Optimized) using place_equity_order tool for EACH order:
+    # NOTE: Only place BUY orders. Exit orders require shares to be owned first (non-margin account).
+    instruction = f"""Execute these {len(buys)} MEAN-REVERSION BUY orders using place_equity_order tool:
 
 Account: {RH_ACCOUNT}
 
-Mean-Reversion V2 Strategy (Backtested +1.96% ROI):
+Mean-Reversion Strategy:
 - These stocks spiked +5-8% (overbought) then pulled back -3% to -4%
 - We're buying after the pullback (catching mean-reversion bounce)
-- Exit targets: Quick partial at +0.75%, full exit at +2%
+- Exit targets will be placed in next cycle after buys settle
 
-For each trade, place 3 orders:
-1. BUY order (market, full quantity) - entry on deep pullback
-2. SELL order (limit, 50% qty at +0.75% recovery) - quick profit lock
-3. SELL order (limit, 50% qty at +2% recovery) - full mean-reversion target
-
-Trades:
+Trades (BUY ORDERS ONLY):
 """
     for i, t in enumerate(trades, 1):
         instruction += f"""
-{i}. {t['symbol']} BUY @ ${t['price']:.2f} (confidence {t['confidence']:.0f}%)
-   - Buy {t['quantity']} shares (market, deep pullback entry)
-   - Sell {t['half_qty']} @ ${t['sell1_price']} (+0.75% quick exit)
-   - Sell {t['half_qty']} @ ${t['sell2_price']} (+2% full mean-reversion)"""
+{i}. {t['symbol']} BUY {t['quantity']} shares @ market (confidence {t['confidence']:.0f}%)
+   - Entry: ${t['price']:.2f}
+   - Exit targets (place after fill): ${t['sell1_price']} (50%) and ${t['sell2_price']} (50%)"""
 
-    instruction += f"""\n\nExecute each order immediately. Use place_equity_order for EVERY trade."""
+    instruction += f"""\n\nExecute BUY orders only. Exit orders will be placed after positions settle."""
 
     # Tool-use loop - Claude MUST call place_equity_order
     log.info("=== Stage 3: MCP Tool-Use Execution ===")
