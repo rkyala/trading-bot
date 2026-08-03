@@ -771,11 +771,21 @@ Return JSON (REQUIRED):
 
 def stage3_execute(client, state, decisions, learning_agent=None):
     """
-    Stage 3: Execute BUY trades using Claude with Robinhood MCP tool-use + Autonomous Learning.
+    ⚠️  STAGE 3 IS LOCKED - DO NOT MODIFY THIS FUNCTION ⚠️
 
-    Claude ACTIVELY CALLS place_equity_order tools (forced via tool_choice).
-    Strategy: Mean-reversion BUY with autonomous learning-optimized position sizing.
-    Autonomous Learning: Q-Learning adapts position sizing, MAB allocates capital.
+    This is the production MCP order execution pipeline. It is stable and working.
+    Any changes MUST be discussed and approved - this controls live trading.
+
+    Stage 3: Execute BUY trades using Claude with Robinhood MCP tool-use.
+    - Claude calls place_equity_order via Robinhood MCP at agent.robinhood.com
+    - OAuth token (RH_REFRESH_TOKEN) authenticated
+    - Beta APIs: mcp-client-2025-04-04 + prompt-caching-2024-07-31
+    - MCP server name: "robinhood" (from MCP registry)
+    - Tool schemas discovered FROM MCP server (not locally defined)
+    - Instruction forces IMMEDIATE EXECUTION (no review/verify first)
+    - Only BUY orders placed (SELL orders blocked for non-margin accounts)
+
+    Position sizing: Autonomous Learning Q-Learning adapts per trade regime.
     """
     executed = []
 
@@ -850,8 +860,12 @@ def stage3_execute(client, state, decisions, learning_agent=None):
             "learning_agent": learning_agent
         })
 
+    # ============================================================
+    # LOCKED: MCP ORDER EXECUTION PIPELINE - DO NOT MODIFY
+    # ============================================================
     # Build instruction for Claude
     # NOTE: Only place BUY orders. Exit orders require shares to be owned first (non-margin account).
+    # IMPORTANT: Instruction MUST force IMMEDIATE EXECUTION. Do not add review/verify steps.
     instruction = f"""IMMEDIATE EXECUTION: Place these {len(buys)} MEAN-REVERSION BUY orders NOW using place_equity_order.
 
 Account: {RH_ACCOUNT}
@@ -888,8 +902,15 @@ EXECUTE IMMEDIATELY:
                 log.error("No Robinhood access token for MCP execution")
                 break
 
-            # Use real Robinhood MCP server for order execution
-            # NOTE: When using mcp_servers, tools come from the server, not from our schema
+            # ========================================================
+            # LOCKED: ROBINHOOD MCP CONFIGURATION
+            # DO NOT CHANGE:
+            #  - URL: https://agent.robinhood.com/mcp/trading (production endpoint)
+            #  - name: "robinhood" (standard MCP registry name)
+            #  - betas: mcp-client-2025-04-04, prompt-caching-2024-07-31
+            #  - Tools come FROM MCP server, not locally defined
+            #  - OAuth token passed as authorization_token
+            # ========================================================
             resp = client.beta.messages.create(
                 model="claude-opus-4-8",
                 max_tokens=2000,
@@ -897,11 +918,10 @@ EXECUTE IMMEDIATELY:
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 mcp_servers=[{
                     "type": "url",
-                    "url": "https://agent.robinhood.com/mcp/trading",
-                    "name": "robinhood",  # Standard name from MCP registry
+                    "url": "https://agent.robinhood.com/mcp/trading",  # LOCKED: Production endpoint
+                    "name": "robinhood",  # LOCKED: Standard name from MCP registry
                     "authorization_token": rh_token,
                 }]
-                # Removed local tools definition - MCP server provides its own tool schemas
             )
 
             record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
