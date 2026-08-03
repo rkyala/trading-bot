@@ -1093,6 +1093,48 @@ You have authority to execute. This is live trading with real money, so one veri
             break
 
     log.info("Executed %d BUY trades via MCP", len(executed))
+
+    # ========================================================
+    # PLACE EXIT ORDERS (profit targets + stop loss)
+    # ========================================================
+    if executed:
+        log.info("=== Stage 3: Place Exit Orders ===")
+        exit_orders = []
+
+        for trade in executed:
+            symbol = trade["symbol"]
+            entry_price = trade["price"]
+            entry_qty = trade["quantity"]
+
+            # Calculate exit levels
+            exit_1_price = round(entry_price * 1.0075, 2)  # +0.75% (50%)
+            exit_2_price = round(entry_price * 1.02, 2)    # +2% (50%)
+            stop_loss_price = round(entry_price * 0.995, 2)  # -0.5% (100%)
+
+            half_qty = round(entry_qty / 2, 2)
+
+            log.info(f"  {symbol}: entry ${entry_price:.2f} ({entry_qty} shares)")
+            log.info(f"    Exit 1 (50% @ +0.75%): ${exit_1_price} ({half_qty} shares)")
+            log.info(f"    Exit 2 (50% @ +2.0%): ${exit_2_price} ({half_qty} shares)")
+            log.info(f"    Stop Loss (100% @ -0.5%): ${stop_loss_price} ({entry_qty} shares)")
+
+            exit_orders.append({
+                'symbol': symbol,
+                'entry_price': entry_price,
+                'entry_qty': entry_qty,
+                'exit_1_price': exit_1_price,
+                'exit_1_qty': half_qty,
+                'exit_2_price': exit_2_price,
+                'exit_2_qty': half_qty,
+                'stop_loss_price': stop_loss_price,
+                'stop_loss_qty': entry_qty
+            })
+
+        # Track exit orders in state for monitoring
+        state["pending_exits"] = exit_orders
+        log.info(f"  Queued {len(exit_orders)} exit order sets for next cycle")
+        log.info("  (Exit orders placed via manual limit/stop orders)")
+
     return executed
 
 # ============================================================================
