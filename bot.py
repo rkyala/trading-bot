@@ -960,16 +960,8 @@ You have authority to execute. This is live trading with real money, so one veri
                     if hasattr(block, 'id'):
                         log.debug("  Tool ID: %s", block.id)
 
-            # Check if done
-            if resp.stop_reason == "end_turn":
-                log.info("Stage 3 complete (end_turn)")
-                break
-
-            if resp.stop_reason != "tool_use":
-                log.warning("Unexpected stop_reason: %s (expected tool_use)", resp.stop_reason)
-                break
-
-            # Process tool calls and look for MCP tool results
+            # Process tool calls and look for MCP tool results (ALWAYS do this, even if end_turn)
+            # When end_turn, there are still tool_use/tool_result blocks to process before exiting
             tool_call_count = 0
             tool_results = []
             import re
@@ -991,14 +983,19 @@ You have authority to execute. This is live trading with real money, so one veri
                     log.info("   Full input: %s", json.dumps(tool_input, indent=2))
 
                     # Look for corresponding MCP tool result in response
+                    # Handle both "tool_result" (regular) and "mcp_tool_result" (MCP server response)
                     mcp_result_text = ""
                     for rblock in resp.content:
-                        if hasattr(rblock, "type") and rblock.type == "tool_result":
+                        if hasattr(rblock, "type") and rblock.type in ("tool_result", "mcp_tool_result"):
                             if hasattr(rblock, "tool_use_id") and rblock.tool_use_id == tool_id:
                                 if hasattr(rblock, "content"):
                                     mcp_result_text = str(rblock.content)
-                                    log.info("   ✅ MCP Tool Result: %s", mcp_result_text[:300])
+                                    log.info("   ✅ MCP Tool Result found: %s", mcp_result_text[:300])
                                 break
+
+                    # If we found a result, this tool was actually executed by MCP
+                    if mcp_result_text and symbol and side == "buy":
+                        log.info("   ✅ CONFIRMED: MCP executed %s %s order", side.upper(), symbol)
 
                     # Extract actual fill price/quantity from MCP result if available
                     fill_price = None
@@ -1068,6 +1065,11 @@ You have authority to execute. This is live trading with real money, so one veri
                         "tool_use_id": tool_id,
                         "content": json.dumps(result)
                     })
+
+            # Check if Claude is done (end_turn means no more interaction needed)
+            if resp.stop_reason == "end_turn":
+                log.info("Stage 3 complete (end_turn after processing %d tool calls)", tool_call_count)
+                break
 
             if tool_call_count == 0:
                 log.info("No tool calls, exiting loop")
