@@ -1263,6 +1263,96 @@ def should_run_weekly_analysis(state):
     return True
 
 # ============================================================================
+# POSITION MONITORING & STOP LOSS ALERTS
+# ============================================================================
+
+def check_positions_and_alert():
+    """
+    Monitor open positions for stop loss breach (-0.5%).
+    Fetch from Robinhood, check P&L, alert if below threshold.
+    Cost: ~$0 (no Claude, direct API call)
+    """
+    try:
+        state = load_state()
+
+        # Only check if we have open positions
+        if not state.get("open_positions"):
+            return
+
+        rh_token = get_rh_access_token()
+        if not rh_token:
+            return
+
+        # Fetch current positions from Robinhood
+        headers = {"Authorization": f"Bearer {rh_token}"}
+        resp = requests.get(
+            f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
+            headers=headers,
+            timeout=10
+        )
+
+        if resp.status_code != 200:
+            log.warning("Failed to fetch positions: %s", resp.status_code)
+            return
+
+        positions = resp.json().get("results", [])
+        if not positions:
+            return
+
+        # Check each open position
+        alerts = []
+        for pos in positions:
+            symbol = pos.get("symbol", "").upper()
+            if not symbol:
+                continue
+
+            current_qty = float(pos.get("quantity", 0))
+            avg_buy_price = float(pos.get("average_buy_price", 0))
+
+            if current_qty <= 0 or avg_buy_price <= 0:
+                continue
+
+            # Get current price
+            quote_resp = requests.get(
+                f"https://api.robinhood.com/quotes/{symbol}/",
+                headers=headers,
+                timeout=5
+            )
+
+            if quote_resp.status_code != 200:
+                continue
+
+            current_price = float(quote_resp.json().get("last_trade_price", 0))
+            if current_price <= 0:
+                continue
+
+            # Calculate P&L
+            pnl_pct = (current_price - avg_buy_price) / avg_buy_price
+
+            # ALERT: Below -0.5% stop loss threshold
+            if pnl_pct < -0.005:  # -0.5%
+                alerts.append({
+                    'symbol': symbol,
+                    'entry': avg_buy_price,
+                    'current': current_price,
+                    'qty': current_qty,
+                    'pnl_pct': pnl_pct
+                })
+
+        # Log alerts
+        if alerts:
+            log.warning("🚨 STOP LOSS ALERTS - Manual sell required:")
+            for alert in alerts:
+                log.warning(
+                    f"  {alert['symbol']}: ${alert['entry']:.2f} → ${alert['current']:.2f} "
+                    f"({alert['pnl_pct']*100:.2f}%) | {alert['qty']} shares"
+                )
+            log.warning("   Action: Manually sell via Robinhood app to prevent further loss")
+
+    except Exception as e:
+        log.debug("Position check error (non-critical): %s", e)
+
+# ============================================================================
 # MAIN TRADING LOOP
 # ============================================================================
 
@@ -1270,10 +1360,14 @@ def run_trading_loop():
     if not is_market_hours():
         log.info("Outside market hours — skipping")
         return None
-    
+
     state = load_state()
     cache = load_cache()
-    
+
+    # === MONITOR OPEN POSITIONS ===
+    # Check if any position falls below -0.5% stop loss, alert user
+    check_positions_and_alert()
+
     if state.get("bot_halted"):
         log.warning("BOT HALTED — circuit breaker triggered")
         return None
