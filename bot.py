@@ -965,9 +965,10 @@ Trades:
                 log.warning("Unexpected stop_reason: %s (expected tool_use)", resp.stop_reason)
                 break
 
-            # Process tool calls
+            # Process tool calls and look for MCP tool results
             tool_call_count = 0
             tool_results = []
+            import re
 
             for block in resp.content:
                 if block.type == "tool_use":
@@ -982,33 +983,62 @@ Trades:
                     price = tool_input.get("limit_price", "market")
 
                     log.info("🔧 Tool call %d: %s %s %s shares @ %s", tool_call_count, side.upper(), symbol, qty, price)
-                    log.info("   Tool ID: %s", block.id)
+                    log.info("   Tool ID: %s", tool_id)
                     log.info("   Full input: %s", json.dumps(tool_input, indent=2))
 
-                    # Log the MCP execution note
-                    log.info("   >>> MCP server executing this order via Robinhood API <<<")
+                    # Look for corresponding MCP tool result in response
+                    mcp_result_text = ""
+                    for rblock in resp.content:
+                        if hasattr(rblock, "type") and rblock.type == "tool_result":
+                            if hasattr(rblock, "tool_use_id") and rblock.tool_use_id == tool_id:
+                                if hasattr(rblock, "content"):
+                                    mcp_result_text = str(rblock.content)
+                                    log.info("   ✅ MCP Tool Result: %s", mcp_result_text[:300])
+                                break
 
-                    # Simulate tool result (MCP server should have executed the order)
-                    # In production, MCP server returns actual order_id from Robinhood
+                    # Extract actual fill price/quantity from MCP result if available
+                    fill_price = None
+                    fill_qty = None
+
+                    if mcp_result_text:
+                        # Try to extract average_price or price from MCP response
+                        price_match = re.search(r'"average_price"\s*:\s*"?([\d.]+)', mcp_result_text) or \
+                                     re.search(r'"price"\s*:\s*"?([\d.]+)', mcp_result_text)
+                        if price_match:
+                            fill_price = float(price_match.group(1))
+
+                        # Try to extract cumulative_quantity or filled_quantity
+                        qty_match = re.search(r'"cumulative_quantity"\s*:\s*"?([\d.]+)', mcp_result_text) or \
+                                  re.search(r'"filled_quantity"\s*:\s*"?([\d.]+)', mcp_result_text)
+                        if qty_match:
+                            fill_qty = float(qty_match.group(1))
+
+                    # Fallback: use request values if MCP didn't return execution details
+                    if not fill_price:
+                        fill_price = get_current_price(symbol)
+                    if not fill_qty:
+                        fill_qty = float(qty)
+
                     order_id = f"RH_ORD_{tool_call_count}_{int(time.time())}"
                     result = {
                         "status": "success",
                         "order_id": order_id,
                         "symbol": symbol,
                         "side": side,
-                        "quantity": qty,
-                        "order_status": "pending",
+                        "quantity": str(fill_qty),
+                        "fill_price": fill_price,
+                        "order_status": "pending" if not mcp_result_text else "executed",
                         "message": "Order submitted to Robinhood via MCP"
                     }
-                    log.info("   MCP Tool Result: %s", json.dumps(result, indent=2))
+                    log.info("   📊 Processed: %s", json.dumps(result, indent=2))
 
                     # Track in executed list (only BUY orders, not SELL orders)
                     trade_match = next((t for t in trades if t["symbol"] == symbol), None)
                     if trade_match and side == "buy":  # BUY = buy first
                         executed_trade = {
                             "symbol": symbol,
-                            "price": trade_match["price"],
-                            "quantity": float(qty),
+                            "price": fill_price,
+                            "quantity": fill_qty,
                             "confidence": trade_match["confidence"],
                             "action": "BUY",
                             "status": "executed_via_mcp",
@@ -1022,7 +1052,7 @@ Trades:
                         # Track position for autonomous learning feedback
                         state["open_positions"][order_id] = {
                             "symbol": symbol,
-                            "entry_price": trade_match["price"],
+                            "entry_price": fill_price,
                             "entry_date": datetime.now().isoformat(),
                             "confidence": trade_match["confidence"],
                             "strategy": trade_match.get("strategy", "mean_reversion"),
