@@ -934,14 +934,20 @@ Trades (BUY ORDERS ONLY):
 
             # Check for text blocks (might contain errors or responses from MCP)
             has_text = False
+            has_tool_result = False
             for block in resp.content:
                 if hasattr(block, 'type') and block.type == "text":
                     has_text = True
                     text_content = block.text if hasattr(block, 'text') else "(empty)"
                     log.warning("⚠️  MCP returned TEXT block (length=%d): %s", len(text_content), text_content[:300] if text_content else "(empty)")
+                if hasattr(block, 'type') and block.type == "tool_result":
+                    has_tool_result = True
 
             if not has_text:
-                log.info("✓ No text blocks in response (expected for tool_use)")
+                log.info("✓ No text blocks in response")
+
+            if not has_tool_result:
+                log.warning("⚠️  NO TOOL_RESULT BLOCKS - MCP server may not be executing orders")
 
             if resp.content:
                 for i, block in enumerate(resp.content):
