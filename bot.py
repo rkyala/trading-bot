@@ -889,6 +889,7 @@ Trades (BUY ORDERS ONLY):
                 break
 
             # Use real Robinhood MCP server for order execution
+            # NOTE: When using mcp_servers, tools come from the server, not from our schema
             resp = client.beta.messages.create(
                 model="claude-opus-4-8",
                 max_tokens=2000,
@@ -897,26 +898,10 @@ Trades (BUY ORDERS ONLY):
                 mcp_servers=[{
                     "type": "url",
                     "url": "https://agent.robinhood.com/mcp/trading",
-                    "name": "Rh",
+                    "name": "robinhood",  # Standard name from MCP registry
                     "authorization_token": rh_token,
-                }],
-                tools=[{
-                    "name": "place_equity_order",
-                    "description": "Place equity order with Robinhood. Returns order_id on success.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "account_number": {"type": "string", "description": "Robinhood account number"},
-                            "symbol": {"type": "string", "description": "Stock symbol (e.g., RTX, AAPL)"},
-                            "side": {"type": "string", "enum": ["buy", "sell"], "description": "buy or sell"},
-                            "type": {"type": "string", "enum": ["market", "limit"], "description": "Order type"},
-                            "quantity": {"type": "string", "description": "Number of shares (can be decimal)"},
-                            "limit_price": {"type": "string", "description": "Limit price (required if type=limit)"}
-                        },
-                        "required": ["account_number", "symbol", "side", "type", "quantity"]
-                    }
-                }],
-                tool_choice={"type": "tool", "name": "place_equity_order"}  # Force Claude to call this tool
+                }]
+                # Removed local tools definition - MCP server provides its own tool schemas
             )
 
             record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
