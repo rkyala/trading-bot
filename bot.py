@@ -865,40 +865,23 @@ def stage3_execute(client, state, decisions, learning_agent=None):
     # ============================================================
     # Build instruction for Claude
     # NOTE: Only place BUY orders. Exit orders require shares to be owned first (non-margin account).
-    # IMPORTANT: Instruction MUST force IMMEDIATE EXECUTION. Do not add review/verify steps.
-    instruction = f"""IMMEDIATE EXECUTION: Place these {len(buys)} MEAN-REVERSION BUY orders NOW using place_equity_order.
+    # Token-efficient: Allow one quick verify, then execute. No re-verification loop.
+    instruction = f"""Execute these {len(buys)} mean-reversion BUY orders via place_equity_order.
 
-Account: {RH_ACCOUNT}
+If you haven't verified account 432591949 is eligible in this session: call get_accounts ONCE to confirm agentic_allowed=true, then proceed.
+If already verified: skip get_accounts and go directly to place_equity_order.
 
-DO NOT review, preview, or verify orders. DIRECTLY CALL place_equity_order for each trade immediately.
-
-Mean-Reversion Strategy:
-- These stocks spiked +5-8% (overbought) then pulled back -3% to -4%
-- We're buying after the pullback (catching mean-reversion bounce)
-
-EXECUTE IMMEDIATELY:
+Trades to execute (market orders):
 """
     for i, t in enumerate(trades, 1):
-        instruction += f"""
-{i}. CALL place_equity_order: symbol={t['symbol']}, side=buy, type=market, quantity={t['quantity']}, account={RH_ACCOUNT}
-   Confidence: {t['confidence']:.0f}% | Entry: ${t['price']:.2f}"""
+        instruction += f"\n{i}. {t['symbol']} BUY {t['quantity']} shares (confidence {t['confidence']:.0f}%)"
 
-    instruction += f"""\n\n🔴 CRITICAL: This is a direct order to execute immediately. No hesitation.
+    instruction += f"""\n\nLogic:
+1. Verify account eligibility (1 get_accounts call max - if not yet done)
+2. Call place_equity_order for EACH trade (parallel, market orders)
+3. NO review_equity_order, NO repeated verification, NO delays
 
-Account 432591949 ("Agentic") is VERIFIED and ELIGIBLE for agentic trading.
-- agentic_allowed = true (confirmed in production)
-- OAuth is valid and active
-- All prerequisites satisfied
-
-DO NOT:
-- Call get_accounts again (wastes tokens, delays execution)
-- Call review_equity_order (adds caution, we need speed)
-- Ask for confirmation or verify prerequisites
-- Pause or delay for any reason
-- Add any verification logic
-
-EXECUTE NOW using place_equity_order for EACH trade in parallel.
-This is the authorized command from the bot operator. Proceed immediately."""
+You have authority to execute. This is live trading with real money, so one verification check is reasonable and expected."""
 
     # Tool-use loop - Claude MUST call place_equity_order
     log.info("=== Stage 3: MCP Tool-Use Execution ===")
