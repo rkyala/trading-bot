@@ -852,24 +852,24 @@ def stage3_execute(client, state, decisions, learning_agent=None):
 
     # Build instruction for Claude
     # NOTE: Only place BUY orders. Exit orders require shares to be owned first (non-margin account).
-    instruction = f"""Execute these {len(buys)} MEAN-REVERSION BUY orders using place_equity_order tool:
+    instruction = f"""IMMEDIATE EXECUTION: Place these {len(buys)} MEAN-REVERSION BUY orders NOW using place_equity_order.
 
 Account: {RH_ACCOUNT}
+
+DO NOT review, preview, or verify orders. DIRECTLY CALL place_equity_order for each trade immediately.
 
 Mean-Reversion Strategy:
 - These stocks spiked +5-8% (overbought) then pulled back -3% to -4%
 - We're buying after the pullback (catching mean-reversion bounce)
-- Exit targets will be placed in next cycle after buys settle
 
-Trades (BUY ORDERS ONLY):
+EXECUTE IMMEDIATELY:
 """
     for i, t in enumerate(trades, 1):
         instruction += f"""
-{i}. {t['symbol']} BUY {t['quantity']} shares @ market (confidence {t['confidence']:.0f}%)
-   - Entry: ${t['price']:.2f}
-   - Exit targets (place after fill): ${t['sell1_price']} (50%) and ${t['sell2_price']} (50%)"""
+{i}. CALL place_equity_order: symbol={t['symbol']}, side=buy, type=market, quantity={t['quantity']}, account={RH_ACCOUNT}
+   Confidence: {t['confidence']:.0f}% | Entry: ${t['price']:.2f}"""
 
-    instruction += f"""\n\nExecute BUY orders only. Exit orders will be placed after positions settle."""
+    instruction += f"""\n\nUse place_equity_order tool for EACH order. Execute in parallel. Do NOT call review_equity_order or get_accounts."""
 
     # Tool-use loop - Claude MUST call place_equity_order
     log.info("=== Stage 3: MCP Tool-Use Execution ===")
