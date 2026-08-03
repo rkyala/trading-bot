@@ -1095,45 +1095,103 @@ You have authority to execute. This is live trading with real money, so one veri
     log.info("Executed %d BUY trades via MCP", len(executed))
 
     # ========================================================
-    # PLACE EXIT ORDERS (profit targets + stop loss)
+    # AUTO-PLACE STOP-LOSS ORDERS (via MCP)
     # ========================================================
-    if executed:
-        log.info("=== Stage 3: Place Exit Orders ===")
-        exit_orders = []
+    if executed and len(executed) > 0:
+        log.info("=== Stage 3: Auto-Place Stop-Loss Orders ===")
+
+        # Build stop-loss instruction for Claude
+        stop_instruction = f"""Place stop-loss orders for these {len(executed)} positions via place_equity_order.
+
+Account: {RH_ACCOUNT}
+Stop-loss level: -0.5% from entry (protective)
+
+Positions:
+"""
+        stop_orders_to_place = []
 
         for trade in executed:
             symbol = trade["symbol"]
             entry_price = trade["price"]
             entry_qty = trade["quantity"]
+            stop_loss_price = round(entry_price * 0.995, 2)  # -0.5%
 
-            # Calculate exit levels
-            exit_1_price = round(entry_price * 1.0075, 2)  # +0.75% (50%)
-            exit_2_price = round(entry_price * 1.02, 2)    # +2% (50%)
-            stop_loss_price = round(entry_price * 0.995, 2)  # -0.5% (100%)
-
-            half_qty = round(entry_qty / 2, 2)
-
-            log.info(f"  {symbol}: entry ${entry_price:.2f} ({entry_qty} shares)")
-            log.info(f"    Exit 1 (50% @ +0.75%): ${exit_1_price} ({half_qty} shares)")
-            log.info(f"    Exit 2 (50% @ +2.0%): ${exit_2_price} ({half_qty} shares)")
-            log.info(f"    Stop Loss (100% @ -0.5%): ${stop_loss_price} ({entry_qty} shares)")
-
-            exit_orders.append({
+            stop_instruction += f"\n{symbol}: {entry_qty} shares @ stop ${stop_loss_price}"
+            stop_orders_to_place.append({
                 'symbol': symbol,
                 'entry_price': entry_price,
-                'entry_qty': entry_qty,
-                'exit_1_price': exit_1_price,
-                'exit_1_qty': half_qty,
-                'exit_2_price': exit_2_price,
-                'exit_2_qty': half_qty,
-                'stop_loss_price': stop_loss_price,
-                'stop_loss_qty': entry_qty
+                'qty': entry_qty,
+                'stop_price': stop_loss_price
             })
 
-        # Track exit orders in state for monitoring
-        state["pending_exits"] = exit_orders
-        log.info(f"  Queued {len(exit_orders)} exit order sets for next cycle")
-        log.info("  (Exit orders placed via manual limit/stop orders)")
+            log.info(f"  {symbol}: Entry ${entry_price:.2f} → Stop @ ${stop_loss_price} (-0.5%)")
+
+        stop_instruction += f"""\n\nFor each position, call place_equity_order:
+- symbol: [from list above]
+- side: "sell"
+- type: "stop"
+- stop_price: [from list above]
+- quantity: [full qty]
+- account_number: {RH_ACCOUNT}
+
+Execute all stop orders in parallel."""
+
+        # Call Claude to place stops via MCP
+        try:
+            rh_token = get_rh_access_token()
+            if not rh_token:
+                log.error("Cannot place stops: no Robinhood token")
+            else:
+                stop_messages = [{"role": "user", "content": stop_instruction}]
+                stop_turn = 0
+                max_stop_turns = 2
+
+                while stop_turn < max_stop_turns:
+                    stop_turn += 1
+                    log.debug("Stop-loss placement turn %d", stop_turn)
+
+                    try:
+                        stop_resp = client.beta.messages.create(
+                            model="claude-opus-4-8",
+                            max_tokens=1500,
+                            messages=stop_messages,
+                            betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
+                            mcp_servers=[{
+                                "type": "url",
+                                "url": "https://agent.robinhood.com/mcp/trading",
+                                "name": "robinhood",
+                                "authorization_token": rh_token,
+                            }]
+                        )
+
+                        # Count stop-loss orders placed
+                        stop_count = 0
+                        for block in stop_resp.content:
+                            if hasattr(block, "type") and block.type in ("tool_use", "mcp_tool_use"):
+                                if hasattr(block, "name") and block.name == "place_equity_order":
+                                    stop_count += 1
+
+                        if stop_count > 0:
+                            log.info(f"✅ Placed {stop_count} stop-loss orders via MCP")
+
+                        # Check if done
+                        if stop_resp.stop_reason == "end_turn":
+                            log.info("Stop-loss orders placement complete")
+                            break
+
+                        if stop_resp.stop_reason != "tool_use":
+                            log.warning("Unexpected stop reason: %s", stop_resp.stop_reason)
+                            break
+
+                        # Add response and tool results for next turn
+                        stop_messages.append({"role": "assistant", "content": stop_resp.content})
+
+                    except Exception as e:
+                        log.warning("Error placing stop-loss orders: %s", e)
+                        break
+
+        except Exception as e:
+            log.error("Stop-loss placement error: %s", e)
 
     return executed
 
