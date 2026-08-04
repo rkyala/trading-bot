@@ -1099,8 +1099,119 @@ You have authority to execute. This is live trading with real money."""
 
     log.info("Executed %d BUY trades via MCP", len(executed))
 
-    # NOTE: Stop-loss orders placed in same Claude call as BUY orders (zero additional cost)
-    # BUY + STOP executed in parallel via MCP in single message batch
+    # ========================================================================
+    # PHASE 2: Place STOP-LIMIT orders for executed BUYs (sequential phase)
+    # ========================================================================
+    if executed:
+        log.info("=== Stage 3 Phase 2: STOP-LIMIT Execution ===")
+
+        # Build stop orders: for each executed buy, create stop-limit at entry_price * 0.995
+        stop_orders = []
+        for trade in executed:
+            symbol = trade["symbol"]
+            entry_price = float(trade["price"])
+            quantity = float(trade["quantity"])
+
+            # Stop-limit at -0.5%
+            stop_price = entry_price * 0.995
+            limit_price = stop_price  # Same as stop price for aggressive execution
+
+            stop_orders.append({
+                "symbol": symbol,
+                "quantity": quantity,
+                "stop_price": stop_price,
+                "limit_price": limit_price,
+                "entry_price": entry_price
+            })
+
+        # Build instruction for stop orders
+        stop_instruction = f"""Place {len(stop_orders)} stop-limit SELL orders to protect executed positions.
+
+Stop-limit details (0.5% below entry price):
+"""
+        for i, s in enumerate(stop_orders, 1):
+            stop_instruction += f"\n{i}. {s['symbol']} SELL {s['quantity']} shares at STOP ${s['stop_price']:.2f} (limit ${s['limit_price']:.2f}, entry was ${s['entry_price']:.2f})"
+
+        stop_instruction += f"""\n\nExecute as stop-limit SELL orders:
+- Type: "stop_limit"
+- Side: "sell"
+- Stop price: as specified above
+- Limit price: as specified above
+- Time-in-force: "gfd" (good for day)
+
+NO verification, NO review_equity_order, NO delays. Execute all STOPs in parallel."""
+
+        # Clear messages and run stop-order phase
+        messages = [{"role": "user", "content": stop_instruction}]
+        turn = 0
+        stop_tool_count = 0
+
+        while turn < max_turns:
+            turn += 1
+            try:
+                log.info("Stop-order loop turn %d", turn)
+
+                resp = client.beta.messages.create(
+                    model="claude-opus-4-8",
+                    max_tokens=2200,
+                    messages=messages,
+                    betas=["interleaved-thinking-2025-05-14"]
+                )
+
+                stop_tool_count = 0
+                stop_tool_results = []
+
+                for block in resp.content:
+                    if block.type in ("tool_use", "mcp_tool_use"):
+                        stop_tool_count += 1
+                        tool_name = block.name
+                        tool_id = block.id
+                        tool_input = block.input
+
+                        symbol = tool_input.get("symbol", "").upper()
+                        side = tool_input.get("side", "").lower()
+                        stop_price = tool_input.get("stop_price")
+                        limit_price = tool_input.get("limit_price")
+
+                        log.info("🔧 Stop order %d: %s %s @ stop $%s limit $%s",
+                                 stop_tool_count, side.upper(), symbol, stop_price, limit_price)
+
+                        # Look for MCP tool result
+                        mcp_result_text = ""
+                        for rblock in resp.content:
+                            if hasattr(rblock, "type") and rblock.type in ("tool_result", "mcp_tool_result"):
+                                if hasattr(rblock, "tool_use_id") and rblock.tool_use_id == tool_id:
+                                    if hasattr(rblock, "content"):
+                                        if isinstance(rblock.content, list):
+                                            mcp_result_text = "\n".join(str(c) for c in rblock.content)
+                                        else:
+                                            mcp_result_text = str(rblock.content)
+                                        log.info("   ✅ STOP order result: %s", mcp_result_text[:200])
+                                    break
+
+                        stop_tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": f"Stop-limit order for {symbol} SELL placed"
+                        })
+
+                if resp.stop_reason == "end_turn":
+                    log.info("Stop-order phase complete (end_turn after %d stop calls)", stop_tool_count)
+                    break
+
+                if stop_tool_count == 0:
+                    log.info("No stop order calls, exiting stop phase")
+                    break
+
+                messages.append({"role": "assistant", "content": resp.content})
+                if stop_tool_results:
+                    messages.append({"role": "user", "content": stop_tool_results})
+
+            except Exception as e:
+                log.error("Stop-order phase error: %s", e)
+                break
+
+        log.info("Placed %d stop-limit orders", stop_tool_count)
 
     return executed
 
