@@ -876,16 +876,11 @@ Trades to execute (market orders):
     for i, t in enumerate(trades, 1):
         instruction += f"\n{i}. {t['symbol']} BUY {t['quantity']} shares (confidence {t['confidence']:.0f}%)"
 
-    instruction += f"""\n\nAfter BUY execution, place STOP orders for downside protection:
-- For EACH position: STOP at entry_price * 0.995 (−0.5%)
-- Type: "stop", Side: "sell", Quantity: full position
-- Execute all STOPs in parallel with BUYs
-
-Logic:
+    instruction += f"""\n\nLogic:
 1. Verify account eligibility (1 get_accounts call max - if not yet done)
-2. Call place_equity_order for ALL BUYs (parallel, market orders)
-3. Call place_equity_order for ALL STOPs (parallel, stop orders at -0.5%)
-4. NO review_equity_order, NO repeated verification, NO delays
+2. Call place_equity_order for ALL BUYs (parallel, market orders only)
+3. NO stop orders, NO review_equity_order, NO repeated verification, NO delays
+4. Return order IDs and execution status
 
 You have authority to execute. This is live trading with real money."""
 
