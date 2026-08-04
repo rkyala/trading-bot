@@ -973,7 +973,7 @@ You have authority to execute. This is live trading with real money."""
             import re
 
             for block in resp.content:
-                if block.type == "tool_use":
+                if block.type in ("tool_use", "mcp_tool_use"):
                     tool_call_count += 1
                     tool_name = block.name
                     tool_id = block.id
@@ -995,7 +995,11 @@ You have authority to execute. This is live trading with real money."""
                         if hasattr(rblock, "type") and rblock.type in ("tool_result", "mcp_tool_result"):
                             if hasattr(rblock, "tool_use_id") and rblock.tool_use_id == tool_id:
                                 if hasattr(rblock, "content"):
-                                    mcp_result_text = str(rblock.content)
+                                    # Handle content as either string or list of content blocks
+                                    if isinstance(rblock.content, list):
+                                        mcp_result_text = "\n".join(str(c) for c in rblock.content)
+                                    else:
+                                        mcp_result_text = str(rblock.content)
                                     log.info("   ✅ MCP Tool Result found: %s", mcp_result_text[:300])
                                 break
 
