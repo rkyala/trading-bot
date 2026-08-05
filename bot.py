@@ -718,7 +718,8 @@ After your analysis, you MUST output valid JSON. Do not just analyze - output th
 This JSON is required for trade execution. Always include at least an empty decisions array.
 
 Return JSON (REQUIRED):
-{{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% (overbought today), high reversal probability within 1-3 days to +2%", "action": "BUY", "hold_days": "1-3", "target_pct": 2}}], "next_interval_seconds": 1800}}"""
+{{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% (overbought today), high reversal probability within 1-3 days to +2%", "action": "BUY", "hold_days": "1-3", "target_pct": 2}}], "next_interval_seconds": 1800}}""",
+                "cache_control": {"type": "ephemeral"}  # Cache for 5 min
             }],
         )
         
@@ -886,7 +887,11 @@ You have authority to execute. This is live trading with real money."""
 
     # Tool-use loop - Claude MUST call place_equity_order
     log.info("=== Stage 3: MCP Tool-Use Execution ===")
-    messages = [{"role": "user", "content": instruction}]
+    messages = [{
+        "role": "user",
+        "content": instruction,
+        "cache_control": {"type": "ephemeral"}  # Cache for 5 min (retries/errors)
+    }]
     turn = 0
     max_turns = 2  # Allow 2 turns: Claude calls tool, then processes result
 
