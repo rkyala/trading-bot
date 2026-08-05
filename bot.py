@@ -1143,7 +1143,13 @@ NO verification, NO review_equity_order, NO delays. Execute all STOPs in paralle
                     model="claude-opus-4-8",
                     max_tokens=2200,
                     messages=messages,
-                    betas=["interleaved-thinking-2025-05-14"]
+                    betas=["interleaved-thinking-2025-05-14", "mcp-client-2025-04-04"],
+                    mcp_servers=[{
+                        "type": "url",
+                        "url": "https://agent.robinhood.com/mcp/trading",
+                        "name": "robinhood",
+                        "authorization_token": rh_token,
+                    }]
                 )
 
                 stop_tool_count = 0
