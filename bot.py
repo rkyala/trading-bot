@@ -656,39 +656,19 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             max_tokens=1500,
             system=[{
                 "type": "text",
-                "text": """You are a MEAN-REVERSION analyzer for cash accounts. Identify overbought movers to fade via dip-buying.
-Score 0-100 for pullback recovery probability over 3-5 days.
+                "text": """MEAN-REVERSION analyzer: Score overbought movers (spiked +5-8% today) for pullback reversal probability.
 
-MEAN-REVERSION DIP-BUY SETUP (3-5 DAY HOLD) - SPIKE-DAY ENTRY:
-- Stocks that spiked up +5% to +8% TODAY (overbought/extended condition NOW)
-- Entry: BUY on spike day, exit on mean-reversion bounce (+0.75% to +2%)
-- Market dynamics: Overbought movers tend to consolidate/reverse within 3-5 days
-- Technical confirmation (RSI > 70, VWAP extension) increases confidence but NOT required
-- Exit targets:
-  * PARTIAL: Sell 50% at +0.75% recovery (capture first reversion)
-  * RIDE: Hold 50% for +2% recovery (capture full mean-reversion)
-  * STOP: Cut if -1.5% (reversal failed, exit early)
-- Hold duration: 1-3 days (mean reversion is fast after spike)
-- Position sizing: $600 per trade (risk/reward optimized)
+SETUP: Buy spike-day pullbacks, exit at +0.75% (50%) and +2% (50%). Stop at -1.5%. Hold 1-3 days.
 
-CONFIDENCE MAPPING (MEAN-REVERSION SPIKE-DAY BUYS):
-- Spike +6-8% (strong overbought, high reversal probability) = 70-80 (BUY)
-- Spike +5-6% (moderate overbought) = 60-70 (BUY)
-- Spike +5% with technical confirmation (RSI > 70 or VWAP extended) = 60-65 (BUY)
-- Spike +5% without technical score = 55-60 (BUY, lower conviction)
+SCORING:
+- +6-8% spike: 70-80
+- +5-6% spike: 60-70
+- +5% + RSI>70/VWAP extended: 60-65
+- +5% alone: 55-60
 
-SKIP (avoid buying):
-- Only up +2-3% (not enough extension to revert)
-- Volume too low (risky reversion)
-- Near earnings/catalyst (gap risk, might not revert)
-- Showing continued strength next day (reversal failed)
+SKIP: <+2% moves, low volume, earnings risk, continued strength.
 
-MANDATORY OUTPUT:
-- Always include TOP 3 by anomaly + extension score
-- Score >= 60 minimum (reversions need reasonable conviction)
-- Never empty decisions
-
-JSON format: {"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{"symbol": "XYZ", "confidence": 72, "reason": "up +6% (overbought today), will revert to mean +0.75% to +2% within 3 days", "action": "BUY", "hold_days": "1-3", "target_pct": 2}], "next_interval_seconds": 1800}""",
+OUTPUT: Top 3 candidates, score ≥60 minimum. Include regime (bull/bear/choppy/rotation). Return JSON only.""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
