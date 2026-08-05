@@ -913,6 +913,14 @@ You have authority to execute. This is live trading with real money."""
             resp = client.beta.messages.create(
                 model="claude-opus-4-8",
                 max_tokens=2000,
+                system=[{
+                    "type": "text",
+                    "text": """You are a trading execution system with access to Robinhood MCP tools.
+Your job: Execute trade instructions via place_equity_order and verify account eligibility via get_accounts.
+Authority: You have live trading authorization for account 432591949.
+Constraints: Market orders only, no review_equity_order, no repeated verification, parallel execution OK.""",
+                    "cache_control": {"type": "ephemeral"}
+                }],
                 messages=messages,
                 betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
                 mcp_servers=[{
