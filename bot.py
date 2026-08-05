@@ -50,10 +50,10 @@ except ImportError:
 # CONFIGURATION
 # ============================================================================
 
-TOTAL_BUDGET = 2000
+TOTAL_BUDGET = 10000
 MAX_POSITION = 600  # Optimized: increased from 500 (backtest +8.66% ROI)
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 55  # Mean-reversion setup confidence (optimized from 60)
+CONFIDENCE_THRESHOLD = 75  # Mean-reversion setup confidence (conservative for live trading)
 
 # Mean-reversion dip-buy parameters (backtested +8.66% ROI over 3 months)
 SPIKE_MIN_PCT = 5.0  # Detect spikes 5-8%
