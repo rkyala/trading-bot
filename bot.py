@@ -313,6 +313,61 @@ def cleanup_sonnet_cache():
 # AUTHENTICATION & CLIENTS
 # ============================================================================
 
+
+# ============================================================================
+# POSITION SIZING VALIDATION
+# ============================================================================
+
+def validate_position_sizing(trades, total_budget, max_position):
+    """Validate and adjust position sizes to respect budget and limits."""
+    validated_trades = []
+    total_deployed = 0.0
+    
+    for trade in trades:
+        symbol = trade.get("symbol", "?")
+        price = trade.get("price", 0)
+        quantity = trade.get("quantity", 0)
+        
+        if price <= 0 or quantity <= 0:
+            continue
+        
+        # Calculate actual $ deployed
+        capital_required = quantity * price
+        
+        # Check against MAX_POSITION limit
+        if capital_required > max_position:
+            log.warning(
+                "Position %s exceeds MAX_POSITION: $%.2f > $%d (reducing qty)",
+                symbol, capital_required, max_position
+            )
+            quantity = round(max_position / price, 2)
+            capital_required = quantity * price
+        
+        # Check against remaining budget
+        remaining_budget = total_budget - total_deployed
+        if capital_required > remaining_budget:
+            log.warning(
+                "Position %s exceeds remaining budget: $%.2f > $%.2f (skipping)",
+                symbol, capital_required, remaining_budget
+            )
+            continue
+        
+        # This trade is valid
+        total_deployed += capital_required
+        trade["quantity"] = quantity
+        trade["capital_deployed"] = capital_required
+        validated_trades.append(trade)
+        
+        log.info(
+            "✓ Position validated: %s - $%.2f deployed (total: $%.2f / $%d)",
+            symbol, capital_required, total_deployed, total_budget
+        )
+    
+    log.info("📊 Capital deployment: $%.2f / $%d (%.1f%% used)",
+             total_deployed, total_budget, (total_deployed / total_budget) * 100)
+    
+    return validated_trades
+
 def get_anthropic_client():
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -954,6 +1009,13 @@ def stage3_execute(client, state, decisions, learning_agent=None):
     # ============================================================
     # LOCKED: MCP ORDER EXECUTION PIPELINE - DO NOT MODIFY
     # ============================================================
+
+    # Validate all positions respect budget and MAX_POSITION limits
+    trades = validate_position_sizing(trades, TOTAL_BUDGET, MAX_POSITION)
+    if not trades:
+        log.warning("⚠️  No trades passed capital validation - skipping execution")
+        return []
+
     # Build instruction for Claude
     # NOTE: Only place BUY orders. Exit orders require shares to be owned first (non-margin account).
     # Token-efficient: Allow one quick verify, then execute. No re-verification loop.
