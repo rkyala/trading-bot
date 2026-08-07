@@ -1514,8 +1514,11 @@ def should_run_weekly_analysis(state):
 def get_open_symbols():
     """Fetch currently owned symbols to avoid duplicate buying in same cycle."""
     try:
+        # Ensure token is fresh before checking positions
+        refresh_rh_token()
         rh_token = get_rh_access_token()
         if not rh_token:
+            log.warning("No Robinhood token after refresh")
             return set()
 
         headers = {"Authorization": f"Bearer {rh_token}"}
