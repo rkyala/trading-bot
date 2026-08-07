@@ -1511,6 +1511,41 @@ def should_run_weekly_analysis(state):
 # POSITION MONITORING & STOP LOSS ALERTS
 # ============================================================================
 
+def get_open_symbols():
+    """Fetch currently owned symbols to avoid duplicate buying in same cycle."""
+    try:
+        rh_token = get_rh_access_token()
+        if not rh_token:
+            return set()
+
+        headers = {"Authorization": f"Bearer {rh_token}"}
+        resp = requests.get(
+            f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
+            headers=headers,
+            timeout=5
+        )
+
+        if resp.status_code != 200:
+            log.debug("Position fetch for dedup failed: %s", resp.status_code)
+            return set()
+
+        positions = resp.json().get("results", [])
+        owned_symbols = set()
+        for pos in positions:
+            symbol = pos.get("symbol", "").upper()
+            qty = float(pos.get("quantity", 0))
+            if symbol and qty > 0:
+                owned_symbols.add(symbol)
+
+        if owned_symbols:
+            log.info("🔒 Filtering out already-owned: %s", ", ".join(sorted(owned_symbols)))
+
+        return owned_symbols
+
+    except Exception as e:
+        log.debug("Position dedup error (non-critical): %s", e)
+        return set()
+
 def check_positions_and_alert():
     """
     Monitor open positions for stop loss breach (-0.5%).
@@ -1680,6 +1715,13 @@ def run_trading_loop():
     # Filter for current confidence threshold (could be aggressive during FOMC)
     high_confidence = [d for d in decisions if d.get("confidence", 0) >= current_threshold]
     log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
+
+    # DEDUPLICATE: Skip symbols already owned (avoid buying same stock repeatedly)
+    owned_symbols = get_open_symbols()
+    high_confidence = [d for d in high_confidence if d.get("symbol", "").upper() not in owned_symbols]
+
+    if len(high_confidence) < len(decisions):
+        log.info("After deduplication: %d new trades", len(high_confidence))
 
     log.info("=== Stage 3: Execution (Split Exits via MCP) ===")
     executed = stage3_execute(client, state, high_confidence, learning_agent=learning_agent)
