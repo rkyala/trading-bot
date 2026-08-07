@@ -1515,8 +1515,7 @@ def get_open_symbols():
     """Fetch currently owned symbols to avoid duplicate buying in same cycle."""
     try:
         # Ensure token is fresh before checking positions
-        refresh_rh_token()
-        rh_token = get_rh_access_token()
+        rh_token = get_rh_access_token(force_refresh=True)
         if not rh_token:
             log.warning("No Robinhood token after refresh")
             return set()
@@ -1752,19 +1751,20 @@ def run_trading_loop():
         log.info("🚀 FOMC AGGRESSIVE MODE: 10-min checks, threshold=%d", fomc_threshold)
 
     # Daily learning at market close (4:00 PM - 4:15 PM ET)
-    if is_market_close() and daily_learning:
-        log.info("=== MARKET CLOSE: Daily Learning ===")
-        try:
-            learning_result = daily_learning(client, state)
-            if learning_result and learning_result.get("deployed"):
-                log.info("Strategy updated: %s | Improvement: %.2f%%",
-                        learning_result["variant"]["variant"],
-                        learning_result["improvement"])
-                save_state(state)
-            elif learning_result:
-                log.info("No strategy change: %s", learning_result.get("reason", ""))
-        except Exception as e:
-            log.error("Daily learning error: %s", e, exc_info=True)
+    # TODO: Re-enable after implementing daily learning function
+    # if is_market_close() and daily_learning:
+    #     log.info("=== MARKET CLOSE: Daily Learning ===")
+    #     try:
+    #         learning_result = daily_learning(client, state)
+    #         if learning_result and learning_result.get("deployed"):
+    #             log.info("Strategy updated: %s | Improvement: %.2f%%",
+    #                     learning_result["variant"]["variant"],
+    #                     learning_result["improvement"])
+    #             save_state(state)
+    #         elif learning_result:
+    #             log.info("No strategy change: %s", learning_result.get("reason", ""))
+    #     except Exception as e:
+    #         log.error("Daily learning error: %s", e, exc_info=True)
 
     save_state(state)
     return next_interval
