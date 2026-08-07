@@ -26,6 +26,8 @@ from datetime import datetime, timedelta
 import pytz
 import time
 import requests
+import sqlite3
+import hashlib
 
 import anthropic
 import yfinance as yf
@@ -217,6 +219,95 @@ def cache_set(cache, key, value):
         "data": value,
         "timestamp": time.time()
     }
+
+# ============================================================================
+# SONNET RESPONSE CACHING (SQLite)
+# ============================================================================
+
+SONNET_CACHE_DB = "sonnet_responses.db"
+SONNET_CACHE_TTL = 1800  # 30 minutes
+
+def init_sonnet_cache():
+    """Initialize SQLite database for Sonnet response caching."""
+    try:
+        conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sonnet_cache (
+                data_hash TEXT PRIMARY KEY,
+                regime TEXT NOT NULL,
+                response TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON sonnet_cache(timestamp)")
+        conn.commit()
+        conn.close()
+        log.info("✓ Sonnet cache initialized")
+    except Exception as e:
+        log.error("Failed to init Sonnet cache: %s", e)
+
+def get_cached_sonnet_response(candidates_data, regime):
+    """Retrieve cached Sonnet response if fresh (TTL < 30 min)."""
+    try:
+        # Hash the candidates data to create cache key
+        data_str = json.dumps(candidates_data, sort_keys=True)
+        data_hash = hashlib.md5(data_str.encode()).hexdigest()
+        
+        conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
+        result = conn.execute(
+            "SELECT response, timestamp FROM sonnet_cache WHERE data_hash = ? AND regime = ?",
+            (data_hash, regime)
+        ).fetchone()
+        conn.close()
+        
+        if result:
+            response_text, timestamp = result
+            age = time.time() - timestamp
+            
+            if age < SONNET_CACHE_TTL:
+                log.info("✓ Sonnet cache HIT (age: %.0f sec)", age)
+                return json.loads(response_text)
+            else:
+                log.debug("Sonnet cache expired (age: %.0f sec > TTL: %d)", age, SONNET_CACHE_TTL)
+        
+        return None
+    except Exception as e:
+        log.debug("Sonnet cache retrieval error: %s", e)
+        return None
+
+def cache_sonnet_response(candidates_data, regime, response_text):
+    """Cache Sonnet response for future cycles."""
+    try:
+        # Hash the candidates data
+        data_str = json.dumps(candidates_data, sort_keys=True)
+        data_hash = hashlib.md5(data_str.encode()).hexdigest()
+        
+        conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
+        conn.execute(
+            "INSERT OR REPLACE INTO sonnet_cache (data_hash, regime, response, timestamp) VALUES (?, ?, ?, ?)",
+            (data_hash, regime, response_text, time.time())
+        )
+        conn.commit()
+        conn.close()
+        log.debug("✓ Sonnet response cached")
+    except Exception as e:
+        log.error("Failed to cache Sonnet response: %s", e)
+
+def cleanup_sonnet_cache():
+    """Remove expired cache entries (older than 2 hours)."""
+    try:
+        cutoff_time = time.time() - 7200  # 2 hours
+        conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
+        deleted = conn.execute(
+            "DELETE FROM sonnet_cache WHERE timestamp < ?",
+            (cutoff_time,)
+        ).rowcount
+        conn.commit()
+        conn.close()
+        if deleted > 0:
+            log.info("Cleaned up %d expired Sonnet cache entries", deleted)
+    except Exception as e:
+        log.error("Failed to cleanup cache: %s", e)
 
 # ============================================================================
 # AUTHENTICATION & CLIENTS
@@ -650,6 +741,18 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
     if calibration:
         learning_context = f"\n\nLast week's calibration: {calibration.get('recommendations', '')}"
     
+    
+    # Check cache before calling Sonnet
+    # Get regime for cache key
+    cached_regime = cache_get(cache, "regime", REGIME_CACHE_TTL)
+    regime = cached_regime.get("regime", "unknown") if cached_regime else "unknown"
+    
+    # Check Sonnet cache with candidates + regime
+    cached_response = get_cached_sonnet_response(candidates, regime)
+    if cached_response:
+        # Return cached decisions and interval
+        return cached_response.get("decisions", []), cached_response.get("interval", 1800)
+    
     try:
         resp = client.messages.create(
             model="claude-sonnet-4-6",
@@ -727,6 +830,14 @@ Return JSON (REQUIRED):
                             "strategy": strategy,
                             "interval": interval
                         })
+                        # Cache Sonnet response for future cycles
+                        sonnet_response = {
+                            "decisions": decisions,
+                            "regime": regime,
+                            "strategy": strategy,
+                            "interval": interval
+                        }
+                        cache_sonnet_response(candidates, regime, json.dumps(sonnet_response))
                         save_cache(cache)
                         
                         log.info("Regime: %s | Strategy: %s | Interval: %d sec (%.1f min)", 
@@ -1436,6 +1547,7 @@ def run_trading_loop():
     state = load_state()
     cache = load_cache()
 
+    cleanup_sonnet_cache()  # Remove expired cache entries
     # === MONITOR OPEN POSITIONS ===
     # Check if any position falls below -0.5% stop loss, alert user
     check_positions_and_alert()
@@ -1552,6 +1664,7 @@ def run_trading_loop():
 
 def main():
     log.info("Starting Tiered Trading Bot (with Partial Profit-Taking)...")
+    init_sonnet_cache()  # Initialize SQLite cache for Sonnet responses
     log.info("Strategy: 50%% exits at +2%% (lock profits), 50%% rides to +5%% or -3%% (capture upside)")
     log.info("Configuration: Account=%s | Budget=$%d | Max/position=$%d | Confidence threshold=%d%%",
             RH_ACCOUNT, TOTAL_BUDGET, MAX_POSITION, CONFIDENCE_THRESHOLD)
