@@ -52,10 +52,13 @@ except ImportError:
 try:
     from finrl_integration import FinRLPredictor, initialize_finrl
     finrl_enabled = True
-except ImportError:
+except Exception as e:
     finrl_enabled = False
+    import traceback
     log = logging.getLogger(__name__)
-    log.info("FinRL integration not available (using rules-based strategy)")
+    log.error(f"❌ FINRL IMPORT ERROR: {type(e).__name__}: {e}")
+    log.error(f"Traceback: {traceback.format_exc()}")
+    log.info("ℹ️ FinRL not available (using rules-based strategy)")
 
 # ============================================================================
 # CONFIGURATION
