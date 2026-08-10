@@ -7,21 +7,36 @@ Loads trained FinRL agent and provides entry/exit predictions
 import numpy as np
 from stable_baselines3 import PPO
 import logging
+import os
 
 log = logging.getLogger(__name__)
 
 class FinRLPredictor:
     """Wrapper around trained FinRL agent for bot predictions"""
     
-    def __init__(self, model_path="finrl_agent"):
-        """Load trained model"""
+    def __init__(self, model_path=None):
+        """Load trained model
+        
+        Args:
+            model_path: Path to model (without .zip extension). 
+                       If None, looks in script directory.
+        """
+        if model_path is None:
+            # Try to find the model in the current directory or script directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(script_dir, "finrl_agent")
+        
         try:
             self.model = PPO.load(model_path)
             self.enabled = True
-            log.info("✅ FinRL agent loaded: %s", model_path)
+            log.info("✅ FinRL agent loaded from: %s.zip", model_path)
+        except FileNotFoundError as e:
+            self.enabled = False
+            log.warning("⚠️  FinRL agent file not found at %s.zip (using rules fallback)", model_path)
+            self.model = None
         except Exception as e:
             self.enabled = False
-            log.warning("⚠️  FinRL agent not found: %s (using rules fallback)", e)
+            log.warning("⚠️  FinRL agent load error: %s (using rules fallback)", str(e))
             self.model = None
     
     def predict_action(self, observation):
