@@ -48,6 +48,15 @@ try:
 except ImportError:
     autonomous_learning_enabled = False
 
+# Import FinRL integration
+try:
+    from finrl_integration import FinRLPredictor, initialize_finrl
+    finrl_enabled = True
+except ImportError:
+    finrl_enabled = False
+    log = logging.getLogger(__name__)
+    log.info("FinRL integration not available (using rules-based strategy)")
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -1772,6 +1781,14 @@ def run_trading_loop():
 def main():
     log.info("Starting Tiered Trading Bot (with Partial Profit-Taking)...")
     init_sonnet_cache()  # Initialize SQLite cache for Sonnet responses
+
+    # Initialize FinRL if available
+    if finrl_enabled:
+        initialize_finrl()
+        log.info("✅ FinRL integration active (trained model predictions enabled)")
+    else:
+        log.info("⚠️  FinRL not available (using rules-based mean-reversion strategy)")
+
     log.info("Strategy: 50%% exits at +2%% (lock profits), 50%% rides to +5%% or -3%% (capture upside)")
     log.info("Configuration: Account=%s | Budget=$%d | Max/position=$%d | Confidence threshold=%d%%",
             RH_ACCOUNT, TOTAL_BUDGET, MAX_POSITION, CONFIDENCE_THRESHOLD)
