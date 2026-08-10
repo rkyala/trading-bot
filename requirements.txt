@@ -4,3 +4,7 @@ schedule
 pytz
 requests
 lxml
+stable-baselines3
+numpy
+gymnasium
+torch
