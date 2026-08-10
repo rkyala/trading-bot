@@ -8,6 +8,7 @@ import numpy as np
 from stable_baselines3 import PPO
 import logging
 import os
+import sys
 
 log = logging.getLogger(__name__)
 
@@ -26,17 +27,29 @@ class FinRLPredictor:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             model_path = os.path.join(script_dir, "finrl_agent")
         
+        # Debug logging
+        full_zip_path = model_path + ".zip"
+        log.info(f"DEBUG: Script dir = {os.path.dirname(os.path.abspath(__file__))}")
+        log.info(f"DEBUG: Model path = {model_path}")
+        log.info(f"DEBUG: Full zip path = {full_zip_path}")
+        log.info(f"DEBUG: Zip exists = {os.path.exists(full_zip_path)}")
+        log.info(f"DEBUG: CWD = {os.getcwd()}")
+        log.info(f"DEBUG: Files in script dir: {os.listdir(os.path.dirname(os.path.abspath(__file__)))[:10]}")
+        
         try:
             self.model = PPO.load(model_path)
             self.enabled = True
-            log.info("✅ FinRL agent loaded from: %s.zip", model_path)
+            log.info(f"✅ FinRL agent loaded from: {model_path}.zip")
         except FileNotFoundError as e:
             self.enabled = False
-            log.warning("⚠️  FinRL agent file not found at %s.zip (using rules fallback)", model_path)
+            log.error(f"❌ FinRL agent file not found at {full_zip_path}")
+            log.error(f"DEBUG: FileNotFoundError: {e}")
             self.model = None
         except Exception as e:
             self.enabled = False
-            log.warning("⚠️  FinRL agent load error: %s (using rules fallback)", str(e))
+            log.error(f"❌ FinRL agent load error: {type(e).__name__}: {str(e)}")
+            import traceback
+            log.error(f"DEBUG: Traceback: {traceback.format_exc()}")
             self.model = None
     
     def predict_action(self, observation):
