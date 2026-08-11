@@ -884,6 +884,8 @@ Return JSON (REQUIRED):
                     text_content = block.text
                     json_str = extract_json_object(text_content)
                     if json_str:
+                        # DEBUG: Log raw Sonnet response to understand reasoning
+                        log.debug("DEBUG: Sonnet raw response: %s", json_str[:500] if len(json_str) > 500 else json_str)
                         result = json.loads(json_str)
                         regime = result.get("regime", "unknown")
                         strategy = result.get("strategy", "unknown")
