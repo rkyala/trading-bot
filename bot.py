@@ -948,11 +948,21 @@ def stage3_execute(client, state, decisions, learning_agent=None):
     executed = []
 
     # Filter for high-confidence BUY orders
+    # DEBUG: Log ALL trade scores
+    buy_decisions = [d for d in decisions if d.get("action") == "BUY"]
+    if buy_decisions:
+        for d in buy_decisions:
+            symbol = d.get("symbol", "?")
+            conf = d.get("confidence", 0)
+            reason = d.get("reason", "")
+            status = "✅ PASS" if conf >= CONFIDENCE_THRESHOLD else "❌ FAIL"
+            log.info(f"  {status}: {symbol} conf={conf}% (threshold={CONFIDENCE_THRESHOLD}%) | {reason[:60]}")
+    
     buys = [d for d in decisions
             if d.get("action") == "BUY" and d.get("confidence", 0) >= CONFIDENCE_THRESHOLD]
 
     if not buys:
-        log.info("No high-confidence buys to execute")
+        log.info("High-confidence trades (threshold=%d): %d", CONFIDENCE_THRESHOLD, len(buys))
         return executed
 
     # Initialize learning agent if not provided
