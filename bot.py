@@ -910,6 +910,13 @@ Return JSON (REQUIRED):
                         log.info("Regime: %s | Strategy: %s | Interval: %d sec (%.1f min)", 
                                 regime, strategy, interval, interval / 60.0)
                         
+                        # DEBUG: Log what Sonnet returned
+                        buy_decisions = [d for d in decisions if d.get("action") == "BUY"]
+                        log.info("DEBUG: Stage 2 returned %d total decisions, %d are BUY", len(decisions), len(buy_decisions))
+                        if buy_decisions:
+                            for d in buy_decisions:
+                                log.info("  BUY: %s (conf=%s) - %s", d.get("symbol"), d.get("confidence"), d.get("reason", "")[:80])
+                        
                         return decisions, interval
         except Exception as e:
             log.error("JSON parse error: %s", e)
