@@ -1,13 +1,15 @@
 #!/bin/bash
-# Sunday 20:00 UTC: Retrain FinRL and auto-deploy if Sharpe >= 1.8
+# FinRL Retraining: Runs Wednesday & Sunday 20:00 UTC
+# Auto-deploys new model if Sharpe >= 1.8
 
 LOG_FILE="logs/finrl_weekly_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p logs
 
 echo "=== FinRL Weekly Retraining ===" | tee -a "$LOG_FILE"
+echo "Day: $(date +%A)" | tee -a "$LOG_FILE"
 echo "Start: $(date)" | tee -a "$LOG_FILE"
 
-# Train new model
+# Train new model on past 365 days
 python3 finrl_working_trainer.py 2>&1 | tee -a "$LOG_FILE"
 
 # Check Sharpe ratio from metrics
@@ -20,10 +22,10 @@ if (( $(echo "$SHARPE >= 1.8" | bc -l) )); then
     
     # Deploy: commit and push
     git add finrl_agent* finrl_metrics.json
-    git commit -m "Auto: FinRL weekly retrain (Sharpe=$SHARPE)" 2>&1 | tee -a "$LOG_FILE"
+    git commit -m "Auto: FinRL retrain ($(date +%A), Sharpe=$SHARPE)" 2>&1 | tee -a "$LOG_FILE"
     git push origin main 2>&1 | tee -a "$LOG_FILE"
     
-    echo "✅ Deployed. Bot will restart to load new model." | tee -a "$LOG_FILE"
+    echo "✅ Deployed. Railway will restart to load new model." | tee -a "$LOG_FILE"
 else
     echo "⚠️  Sharpe $SHARPE < 1.8 → Keeping previous model" | tee -a "$LOG_FILE"
     echo "   (New model underperforming, skipping deployment)" | tee -a "$LOG_FILE"
