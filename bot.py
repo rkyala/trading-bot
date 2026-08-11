@@ -67,7 +67,7 @@ except Exception as e:
 TOTAL_BUDGET = 10000
 MAX_POSITION = 600  # Optimized: increased from 500 (backtest +8.66% ROI)
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 65  # Mean-reversion setup confidence (conservative for live trading)
+CONFIDENCE_THRESHOLD = 55  # Mean-reversion setup confidence (60% → 55% for more frequent trades)
 
 # Mean-reversion dip-buy parameters (backtested +8.66% ROI over 3 months)
 SPIKE_MIN_PCT = 5.0  # Detect spikes 5-8%
@@ -1539,8 +1539,11 @@ def get_open_symbols():
             timeout=5
         )
 
-        if resp.status_code != 200:
-            log.debug("Position fetch for dedup failed: %s", resp.status_code)
+        if resp.status_code == 401:
+            log.warning("⚠️  Robinhood 401 (auth failed) on position fetch - proceeding without dedup")
+            return set()
+        elif resp.status_code != 200:
+            log.warning("⚠️  Position fetch failed (%s) - proceeding without dedup", resp.status_code)
             return set()
 
         positions = resp.json().get("results", [])
