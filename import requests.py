@@ -1,0 +1,1 @@
+python3 -c "import pickle, pathlib; p = pathlib.Path.home() / '.tokens' / 'robinhood.pickle'; data = pickle.loads(p.read_bytes()); print(data['refresh_token'])"

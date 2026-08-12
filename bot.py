@@ -1543,44 +1543,72 @@ def should_run_weekly_analysis(state):
 # ============================================================================
 
 def get_open_symbols():
-    """Fetch currently owned symbols to avoid duplicate buying in same cycle."""
-    try:
-        # Ensure token is fresh before checking positions
-        rh_token = get_rh_access_token(force_refresh=True)
-        if not rh_token:
-            log.warning("No Robinhood token after refresh")
-            return set()
+    """
+    Fetch currently owned symbols to avoid duplicate buying in same cycle.
 
-        headers = {"Authorization": f"Bearer {rh_token}"}
-        resp = requests.get(
-            f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
-            headers=headers,
-            timeout=5
-        )
+    Critical safety check: Returns None if auth fails (halts trading).
+    Returns empty set only if successful but no positions owned.
+    """
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Refresh token with fresh auth
+            rh_token = get_rh_access_token(force_refresh=True)
+            if not rh_token:
+                log.error("❌ HALT: Cannot get Robinhood token - auth broken")
+                return None  # Signal to halt, not proceed
 
-        if resp.status_code == 401:
-            log.warning("⚠️  Robinhood 401 (auth failed) on position fetch - proceeding without dedup")
-            return set()
-        elif resp.status_code != 200:
-            log.warning("⚠️  Position fetch failed (%s) - proceeding without dedup", resp.status_code)
-            return set()
+            headers = {"Authorization": f"Bearer {rh_token}"}
+            resp = requests.get(
+                f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
+                headers=headers,
+                timeout=5
+            )
 
-        positions = resp.json().get("results", [])
-        owned_symbols = set()
-        for pos in positions:
-            symbol = pos.get("symbol", "").upper()
-            qty = float(pos.get("quantity", 0))
-            if symbol and qty > 0:
-                owned_symbols.add(symbol)
+            # Handle 401 explicitly - retry once, then halt
+            if resp.status_code == 401:
+                if attempt < max_retries:
+                    log.warning("⚠️  401 auth error on attempt %d/%d - retrying with fresh token",
+                               attempt, max_retries)
+                    time.sleep(0.5)  # Brief pause before retry
+                    continue
+                else:
+                    log.error("❌ HALT: Robinhood 401 (auth failed) after %d attempts - cannot verify positions", max_retries)
+                    return None  # Signal to halt
 
-        if owned_symbols:
-            log.info("🔒 Filtering out already-owned: %s", ", ".join(sorted(owned_symbols)))
+            # Other HTTP errors
+            elif resp.status_code != 200:
+                log.error("❌ HALT: Position fetch failed with status %s - cannot verify positions", resp.status_code)
+                return None  # Signal to halt
 
-        return owned_symbols
+            # Success - parse positions
+            positions = resp.json().get("results", [])
+            owned_symbols = set()
+            for pos in positions:
+                symbol = pos.get("symbol", "").upper()
+                qty = float(pos.get("quantity", 0))
+                if symbol and qty > 0:
+                    owned_symbols.add(symbol)
 
-    except Exception as e:
-        log.debug("Position dedup error (non-critical): %s", e)
-        return set()
+            if owned_symbols:
+                log.info("🔒 Current positions: %s", ", ".join(sorted(owned_symbols)))
+            else:
+                log.debug("✓ No open positions")
+
+            return owned_symbols  # Success
+
+        except Exception as e:
+            if attempt < max_retries:
+                log.warning("⚠️  Position fetch error on attempt %d/%d: %s - retrying", attempt, max_retries, e)
+                time.sleep(0.5)
+                continue
+            else:
+                log.error("❌ HALT: Position dedup failed after %d attempts: %s", max_retries, e)
+                return None  # Signal to halt
+
+    # Should not reach here, but fail safe
+    log.error("❌ HALT: Position dedup exhausted retries")
+    return None
 
 def check_positions_and_alert():
     """
@@ -1753,7 +1781,15 @@ def run_trading_loop():
     log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
 
     # DEDUPLICATE: Skip symbols already owned (avoid buying same stock repeatedly)
+    # CRITICAL: If dedup fails (returns None), halt trading rather than proceeding blind
     owned_symbols = get_open_symbols()
+    if owned_symbols is None:
+        log.critical("🛑 TRADING HALTED: Cannot verify current positions (auth failed). Skipping trades this cycle.")
+        state["dedup_auth_failed"] = True
+        save_state(state)
+        return next_interval  # Skip execution, wait for next cycle
+
+    # Filter out already-owned symbols (owned_symbols is empty set if no positions)
     high_confidence = [d for d in high_confidence if d.get("symbol", "").upper() not in owned_symbols]
 
     if len(high_confidence) < len(decisions):
