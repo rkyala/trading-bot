@@ -404,7 +404,7 @@ def load_state():
         "trades": [],
         "analyzed_candidates": [],
         "daily_pnl": 0.0,
-        "daily_bought_symbols": {},  # Track {symbol: count} bought TODAY to prevent over-buying
+        "daily_bought_symbols": {},  # Track {symbol: total_capital_deployed} per day (max $600/symbol)
         "daily_date": datetime.now(pytz.UTC).date().isoformat(),  # Reset daily_bought_symbols at midnight
         "token_usage": {"input": 0, "output": 0, "hourly_calls": []},
         "bot_halted": False,
@@ -1602,37 +1602,41 @@ def get_open_symbols(client):
         log.error("❌ HALT: MCP position fetch failed: %s", e)
         return None
 
-def enforce_daily_symbol_limits(state, high_confidence_trades, max_buys_per_symbol=1):
+def enforce_daily_symbol_limits(state, high_confidence_trades, max_capital_per_symbol=600):
     """
-    Prevent buying the same symbol multiple times in one day.
+    Limit daily capital deployment per symbol to $600.
+    Allows multiple buys per symbol as long as total daily capital <= $600.
     Resets daily tracking at midnight UTC.
 
     Args:
         state: Bot state dict
         high_confidence_trades: List of trade decisions to filter
-        max_buys_per_symbol: Max number of times to buy same symbol per day (default: 1)
+        max_capital_per_symbol: Max capital per symbol per day (default: $600)
 
     Returns:
-        Filtered list of trades that haven't been bought today
+        Filtered list of trades that won't exceed daily capital limit
     """
     today = datetime.now(pytz.UTC).date().isoformat()
 
     # Reset daily tracking if new day
     if state.get("daily_date") != today:
-        state["daily_bought_symbols"] = {}
+        state["daily_bought_symbols"] = {}  # Now tracks {symbol: total_capital_deployed}
         state["daily_date"] = today
-        log.info("📅 Daily tracking reset (new day)")
+        log.info("📅 Daily capital tracking reset (new day)")
 
-    # Filter out symbols already bought today
+    # Filter trades based on remaining capital per symbol
     filtered_trades = []
     for trade in high_confidence_trades:
         symbol = trade.get("symbol", "").upper()
-        buy_count = state["daily_bought_symbols"].get(symbol, 0)
+        capital_deployed = trade.get("capital_deployed", 0)  # Amount bot will spend on this trade
+        daily_capital = state["daily_bought_symbols"].get(symbol, 0)
+        remaining = max_capital_per_symbol - daily_capital
 
-        if buy_count < max_buys_per_symbol:
+        if capital_deployed <= remaining:
             filtered_trades.append(trade)
         else:
-            log.info("⏸️  SKIP %s: Already bought %d time(s) today", symbol, buy_count)
+            log.info("⏸️  SKIP %s: Daily limit $%.2f (deployed: $%.2f, limit: $%.2f)",
+                     symbol, daily_capital, capital_deployed, max_capital_per_symbol)
 
     return filtered_trades
 
@@ -1817,11 +1821,11 @@ def run_trading_loop():
     if len(high_confidence) < len(decisions):
         log.info("After deduplication: %d new trades", len(high_confidence))
 
-    # DAILY LIMIT: Skip symbols already bought today (prevent over-trading same symbols)
-    high_confidence = enforce_daily_symbol_limits(state, high_confidence, max_buys_per_symbol=1)
+    # DAILY LIMIT: Skip symbols if daily capital > $600 per symbol
+    high_confidence = enforce_daily_symbol_limits(state, high_confidence, max_capital_per_symbol=MAX_POSITION)
 
     if not high_confidence:
-        log.info("No new trades after daily symbol limit check")
+        log.info("No new trades after daily capital limit check")
         save_state(state)
         return next_interval
 
@@ -1831,11 +1835,12 @@ def run_trading_loop():
     if executed:
         state["trades"].extend(executed)
 
-        # Track daily bought symbols to prevent over-buying
+        # Track daily capital deployed per symbol (max $600/symbol/day)
         for trade in executed:
             symbol = trade.get("symbol", "").upper()
-            state["daily_bought_symbols"][symbol] = state["daily_bought_symbols"].get(symbol, 0) + 1
-            log.debug(f"📊 Tracked: {symbol} bought (daily count: {state['daily_bought_symbols'][symbol]})")
+            capital = trade.get("capital_deployed", 0)
+            state["daily_bought_symbols"][symbol] = state["daily_bought_symbols"].get(symbol, 0) + capital
+            log.debug(f"💰 Tracked {symbol}: +${capital:.2f} (daily total: ${state['daily_bought_symbols'][symbol]:.2f})")
 
         log.info("Executed %d orders (from %d trades)", len(executed), len(high_confidence))
 
