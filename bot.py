@@ -1806,32 +1806,33 @@ def run_trading_loop():
         state["daily_date"] = today
         log.info("📅 Daily tracking reset (new day)")
 
-    # SIMPLE FILTER: For each trade, check MCP positions + $600 limit
-    # 1. Get current positions from Robinhood
+    # FILTER: For each stock: if owned AND total > $600 then SKIP, else BUY under $600
+    # Get current positions from Robinhood
     owned_symbols = get_open_symbols(client)
     if owned_symbols is None:
         log.critical("🛑 Cannot verify positions via MCP - HALTING trades this cycle")
         return next_interval
 
-    # 2. Filter: Skip if already own stock OR would exceed $600
     filtered_trades = []
     for trade in high_confidence:
         symbol = trade.get("symbol", "").upper()
         capital_needed = trade.get("capital_deployed", 0)
+        daily_deployed = state.get("daily_bought_symbols", {}).get(symbol, 0)
+        total_capital = daily_deployed + capital_needed
 
-        # Check 1: Already own this stock?
-        if symbol in owned_symbols:
-            log.info("⏸️  SKIP %s: Already owned (in MCP positions)", symbol)
+        # Rule: If stock owned AND total > $600 → SKIP
+        if symbol in owned_symbols and total_capital > MAX_POSITION:
+            log.info("⏸️  SKIP %s: Owned + would exceed $600 (${:.0f} + ${:.0f} = ${:.0f})",
+                     symbol, daily_deployed, capital_needed, total_capital)
             continue
 
-        # Check 2: Would adding this exceed $600 for today?
-        daily_total = state.get("daily_bought_symbols", {}).get(symbol, 0)
-        if daily_total + capital_needed > MAX_POSITION:
-            log.info("⏸️  SKIP %s: Daily limit ($%.0f + $%.0f > $%d)",
-                     symbol, daily_total, capital_needed, MAX_POSITION)
+        # Rule: If total > $600 → SKIP (don't buy, limit per stock)
+        if total_capital > MAX_POSITION:
+            log.info("⏸️  SKIP %s: Exceeds $600 daily limit (${:.0f} + ${:.0f} = ${:.0f})",
+                     symbol, daily_deployed, capital_needed, total_capital)
             continue
 
-        # Passed both checks - add to execute list
+        # Passed: execute trade
         filtered_trades.append(trade)
 
     high_confidence = filtered_trades
