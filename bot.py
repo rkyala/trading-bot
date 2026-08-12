@@ -1556,10 +1556,10 @@ def get_open_symbols(client):
         # Call MCP to fetch positions
         resp = client.beta.messages.create(
             model="claude-opus-4-8",
-            max_tokens=500,
+            max_tokens=1000,
             messages=[{
                 "role": "user",
-                "content": f"Call get_equity_positions for account {RH_ACCOUNT}. Return the symbol list of all positions with quantity > 0."
+                "content": f"Use the get_equity_positions tool to fetch ALL open positions for account {RH_ACCOUNT}. Include positions with any quantity > 0. Return the complete results with symbols and quantities."
             }],
             betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
             mcp_servers=[{
@@ -1575,18 +1575,29 @@ def get_open_symbols(client):
         # Parse MCP response for tool results
         log.debug(f"MCP response has {len(resp.content)} content blocks")
         for i, block in enumerate(resp.content):
-            log.debug(f"  Block {i}: type={getattr(block, 'type', 'unknown')}")
+            block_type = getattr(block, 'type', 'unknown')
+            log.debug(f"  Block {i}: type={block_type}")
 
-            if hasattr(block, 'type') and block.type == "mcp_tool_result":
-                # Extract position data from MCP result
+            # Try mcp_tool_result blocks first
+            if block_type == "mcp_tool_result":
                 try:
                     result_text = block.text if hasattr(block, 'text') else str(block)
-                    log.debug(f"  MCP tool result (first 200 chars): {result_text[:200]}")
+                    log.debug(f"  MCP tool result (first 300 chars): {result_text[:300]}")
 
-                    # Try to parse JSON from result
+                    # Parse JSON from result
                     if isinstance(result_text, str) and result_text.startswith('{'):
                         result_json = json.loads(result_text)
+
+                        # Handle "data.results" format
                         positions = result_json.get("data", {}).get("results", [])
+                        if not positions:
+                            # Try top-level results
+                            positions = result_json.get("results", [])
+                        if not positions:
+                            # Try direct array
+                            if isinstance(result_json, list):
+                                positions = result_json
+
                         log.debug(f"  Parsed {len(positions)} positions from MCP")
 
                         for pos in positions:
@@ -1595,10 +1606,13 @@ def get_open_symbols(client):
                             if symbol and qty > 0:
                                 owned_symbols.add(symbol)
                                 log.info(f"  ✓ Position: {symbol} x {qty}")
-                    else:
-                        log.debug(f"  Result not JSON: {result_text[:100]}")
                 except Exception as parse_error:
-                    log.error(f"Could not parse position data: {parse_error}", exc_info=True)
+                    log.error(f"MCP tool result parse error: {parse_error}", exc_info=True)
+
+            # Also check text blocks for position data (fallback)
+            elif block_type == "text":
+                text = getattr(block, 'text', '')
+                log.debug(f"  Text block (first 100 chars): {text[:100]}")
 
         if owned_symbols:
             log.info("🔒 Filtering out already-owned: %s", ", ".join(sorted(owned_symbols)))
