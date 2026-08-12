@@ -243,10 +243,11 @@ def init_sonnet_cache():
     """Initialize SQLite database for Sonnet response caching."""
     try:
         conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
+
+        # Create new table with stable cache_key (regime + top 3 symbols)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sonnet_cache (
-                data_hash TEXT PRIMARY KEY,
-                regime TEXT NOT NULL,
+                cache_key TEXT PRIMARY KEY,
                 response TEXT NOT NULL,
                 timestamp REAL NOT NULL
             )
@@ -254,54 +255,57 @@ def init_sonnet_cache():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON sonnet_cache(timestamp)")
         conn.commit()
         conn.close()
-        log.info("✓ Sonnet cache initialized")
+        log.info("✓ Sonnet cache initialized (stable key: regime + top3 symbols)")
     except Exception as e:
         log.error("Failed to init Sonnet cache: %s", e)
 
 def get_cached_sonnet_response(candidates_data, regime):
-    """Retrieve cached Sonnet response if fresh (TTL < 30 min)."""
+    """Retrieve cached Sonnet response if fresh (TTL < 30 min).
+    Uses stable cache key: regime + top 3 symbols (not prices, which change).
+    """
     try:
-        # Hash the candidates data to create cache key
-        data_str = json.dumps(candidates_data, sort_keys=True)
-        data_hash = hashlib.md5(data_str.encode()).hexdigest()
-        
+        # Create stable cache key from regime + top 3 symbols
+        # This way cache hits when same stocks stay at top
+        top_symbols = "_".join([c.get("symbol", "").upper() for c in candidates_data[:3]])
+        cache_key = f"{regime}_{top_symbols}"
+
         conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
         result = conn.execute(
-            "SELECT response, timestamp FROM sonnet_cache WHERE data_hash = ? AND regime = ?",
-            (data_hash, regime)
+            "SELECT response, timestamp FROM sonnet_cache WHERE cache_key = ?",
+            (cache_key,)
         ).fetchone()
         conn.close()
-        
+
         if result:
             response_text, timestamp = result
             age = time.time() - timestamp
-            
+
             if age < SONNET_CACHE_TTL:
-                log.info("✓ Sonnet cache HIT (age: %.0f sec)", age)
+                log.info("✓ Sonnet cache HIT: %s (age: %.0f sec)", cache_key, age)
                 return json.loads(response_text)
             else:
-                log.debug("Sonnet cache expired (age: %.0f sec > TTL: %d)", age, SONNET_CACHE_TTL)
-        
+                log.debug("Sonnet cache expired: %s (age: %.0f sec > TTL: %d)", cache_key, age, SONNET_CACHE_TTL)
+
         return None
     except Exception as e:
         log.debug("Sonnet cache retrieval error: %s", e)
         return None
 
 def cache_sonnet_response(candidates_data, regime, response_text):
-    """Cache Sonnet response for future cycles."""
+    """Cache Sonnet response for future cycles using stable key: regime + top 3 symbols."""
     try:
-        # Hash the candidates data
-        data_str = json.dumps(candidates_data, sort_keys=True)
-        data_hash = hashlib.md5(data_str.encode()).hexdigest()
-        
+        # Create stable cache key from regime + top 3 symbols (not prices)
+        top_symbols = "_".join([c.get("symbol", "").upper() for c in candidates_data[:3]])
+        cache_key = f"{regime}_{top_symbols}"
+
         conn = sqlite3.connect(SONNET_CACHE_DB, check_same_thread=False)
         conn.execute(
-            "INSERT OR REPLACE INTO sonnet_cache (data_hash, regime, response, timestamp) VALUES (?, ?, ?, ?)",
-            (data_hash, regime, response_text, time.time())
+            "INSERT OR REPLACE INTO sonnet_cache (cache_key, response, timestamp) VALUES (?, ?, ?)",
+            (cache_key, response_text, time.time())
         )
         conn.commit()
         conn.close()
-        log.debug("✓ Sonnet response cached")
+        log.info("✓ Sonnet response cached: %s", cache_key)
     except Exception as e:
         log.error("Failed to cache Sonnet response: %s", e)
 
