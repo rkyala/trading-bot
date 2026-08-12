@@ -1542,45 +1542,63 @@ def should_run_weekly_analysis(state):
 # POSITION MONITORING & STOP LOSS ALERTS
 # ============================================================================
 
-def get_open_symbols():
-    """Fetch currently owned symbols to avoid duplicate buying in same cycle."""
+def get_open_symbols(client):
+    """Fetch currently owned symbols via Robinhood MCP to avoid duplicate buying in same cycle."""
     try:
         # Ensure token is fresh before checking positions
         rh_token = get_rh_access_token(force_refresh=True)
         if not rh_token:
-            log.warning("No Robinhood token after refresh")
-            return set()
+            log.error("❌ HALT: Cannot get Robinhood token")
+            return None
 
-        headers = {"Authorization": f"Bearer {rh_token}"}
-        resp = requests.get(
-            f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
-            headers=headers,
-            timeout=5
+        # Call MCP to fetch positions
+        resp = client.beta.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=500,
+            messages=[{
+                "role": "user",
+                "content": f"Call get_equity_positions for account {RH_ACCOUNT}. Return the symbol list of all positions with quantity > 0."
+            }],
+            betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
+            mcp_servers=[{
+                "type": "url",
+                "url": "https://agent.robinhood.com/mcp/trading",
+                "name": "robinhood",
+                "authorization_token": rh_token,
+            }]
         )
 
-        if resp.status_code == 401:
-            log.warning("⚠️  Robinhood 401 (auth failed) on position fetch - proceeding without dedup")
-            return set()
-        elif resp.status_code != 200:
-            log.warning("⚠️  Position fetch failed (%s) - proceeding without dedup", resp.status_code)
-            return set()
-
-        positions = resp.json().get("results", [])
         owned_symbols = set()
-        for pos in positions:
-            symbol = pos.get("symbol", "").upper()
-            qty = float(pos.get("quantity", 0))
-            if symbol and qty > 0:
-                owned_symbols.add(symbol)
+
+        # Parse MCP response for tool results
+        for block in resp.content:
+            if hasattr(block, 'type') and block.type == "mcp_tool_result":
+                # Extract position data from MCP result
+                try:
+                    result_text = block.text if hasattr(block, 'text') else str(block)
+                    # Try to parse JSON from result
+                    if isinstance(result_text, str) and result_text.startswith('{'):
+                        result_json = json.loads(result_text)
+                        positions = result_json.get("data", {}).get("results", [])
+                        for pos in positions:
+                            symbol = pos.get("symbol", "").upper()
+                            qty = float(pos.get("quantity", 0))
+                            if symbol and qty > 0:
+                                owned_symbols.add(symbol)
+                                log.debug(f"  Position: {symbol} x {qty}")
+                except Exception as parse_error:
+                    log.debug(f"Could not parse position data: {parse_error}")
 
         if owned_symbols:
             log.info("🔒 Filtering out already-owned: %s", ", ".join(sorted(owned_symbols)))
+        else:
+            log.debug("✓ No open positions (via MCP)")
 
         return owned_symbols
 
     except Exception as e:
-        log.debug("Position dedup error (non-critical): %s", e)
-        return set()
+        log.error("❌ HALT: MCP position fetch failed: %s", e)
+        return None
 
 def check_positions_and_alert():
     """
@@ -1753,7 +1771,11 @@ def run_trading_loop():
     log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
 
     # DEDUPLICATE: Skip symbols already owned (avoid buying same stock repeatedly)
-    owned_symbols = get_open_symbols()
+    owned_symbols = get_open_symbols(client)
+    if owned_symbols is None:
+        log.critical("🛑 Cannot verify positions via MCP - HALTING trades this cycle")
+        return next_interval
+
     high_confidence = [d for d in high_confidence if d.get("symbol", "").upper() not in owned_symbols]
 
     if len(high_confidence) < len(decisions):
