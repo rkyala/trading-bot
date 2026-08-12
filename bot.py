@@ -404,6 +404,8 @@ def load_state():
         "trades": [],
         "analyzed_candidates": [],
         "daily_pnl": 0.0,
+        "daily_bought_symbols": {},  # Track {symbol: count} bought TODAY to prevent over-buying
+        "daily_date": datetime.now(pytz.UTC).date().isoformat(),  # Reset daily_bought_symbols at midnight
         "token_usage": {"input": 0, "output": 0, "hourly_calls": []},
         "bot_halted": False,
         "next_interval_seconds": 1800,
@@ -1600,6 +1602,40 @@ def get_open_symbols(client):
         log.error("❌ HALT: MCP position fetch failed: %s", e)
         return None
 
+def enforce_daily_symbol_limits(state, high_confidence_trades, max_buys_per_symbol=1):
+    """
+    Prevent buying the same symbol multiple times in one day.
+    Resets daily tracking at midnight UTC.
+
+    Args:
+        state: Bot state dict
+        high_confidence_trades: List of trade decisions to filter
+        max_buys_per_symbol: Max number of times to buy same symbol per day (default: 1)
+
+    Returns:
+        Filtered list of trades that haven't been bought today
+    """
+    today = datetime.now(pytz.UTC).date().isoformat()
+
+    # Reset daily tracking if new day
+    if state.get("daily_date") != today:
+        state["daily_bought_symbols"] = {}
+        state["daily_date"] = today
+        log.info("📅 Daily tracking reset (new day)")
+
+    # Filter out symbols already bought today
+    filtered_trades = []
+    for trade in high_confidence_trades:
+        symbol = trade.get("symbol", "").upper()
+        buy_count = state["daily_bought_symbols"].get(symbol, 0)
+
+        if buy_count < max_buys_per_symbol:
+            filtered_trades.append(trade)
+        else:
+            log.info("⏸️  SKIP %s: Already bought %d time(s) today", symbol, buy_count)
+
+    return filtered_trades
+
 def check_positions_and_alert():
     """
     Monitor open positions for stop loss breach (-0.5%).
@@ -1781,11 +1817,26 @@ def run_trading_loop():
     if len(high_confidence) < len(decisions):
         log.info("After deduplication: %d new trades", len(high_confidence))
 
+    # DAILY LIMIT: Skip symbols already bought today (prevent over-trading same symbols)
+    high_confidence = enforce_daily_symbol_limits(state, high_confidence, max_buys_per_symbol=1)
+
+    if not high_confidence:
+        log.info("No new trades after daily symbol limit check")
+        save_state(state)
+        return next_interval
+
     log.info("=== Stage 3: Execution (Split Exits via MCP) ===")
     executed = stage3_execute(client, state, high_confidence, learning_agent=learning_agent)
     
     if executed:
         state["trades"].extend(executed)
+
+        # Track daily bought symbols to prevent over-buying
+        for trade in executed:
+            symbol = trade.get("symbol", "").upper()
+            state["daily_bought_symbols"][symbol] = state["daily_bought_symbols"].get(symbol, 0) + 1
+            log.debug(f"📊 Tracked: {symbol} bought (daily count: {state['daily_bought_symbols'][symbol]})")
+
         log.info("Executed %d orders (from %d trades)", len(executed), len(high_confidence))
 
         # Log autonomous learning status after execution
