@@ -406,6 +406,7 @@ def load_state():
         "daily_pnl": 0.0,
         "daily_bought_symbols": {},  # Track {symbol: total_capital_deployed} per day (max $600/symbol)
         "daily_date": datetime.now(pytz.UTC).date().isoformat(),  # Reset daily_bought_symbols at midnight
+        "position_cache": {},  # Smart cache: {symbol: {timestamp, value, ttl_minutes}}
         "token_usage": {"input": 0, "output": 0, "hourly_calls": []},
         "bot_halted": False,
         "next_interval_seconds": 1800,
@@ -1548,10 +1549,68 @@ def should_run_weekly_analysis(state):
 # POSITION MONITORING & STOP LOSS ALERTS
 # ============================================================================
 
-def get_open_symbols(client):
-    """Fetch currently owned symbols via Robinhood MCP to avoid duplicate buying in same cycle."""
+def should_check_position(state, symbol, position_value):
+    """
+    Smart cache logic:
+    - If position > $600: cache for 3 hours (or until manually sold)
+    - If position <= $600: always check (small positions don't need caching)
+    - If position closed: check again after 3 hours (in case re-entry)
+
+    Returns: (should_check: bool, cache_entry: dict or None)
+    """
+    cache = state.get("position_cache", {})
+    entry = cache.get(symbol)
+
+    if not entry:
+        return (True, None)  # No cache, check now
+
+    timestamp = entry.get("timestamp", 0)
+    cached_value = entry.get("value", 0)
+    time_elapsed = time.time() - timestamp
+    ttl_minutes = entry.get("ttl_minutes", 180)  # 3 hours default
+
+    # If cached position > $600: use cache for 3 hours
+    if cached_value > MAX_POSITION:
+        if time_elapsed < ttl_minutes * 60:
+            return (False, entry)  # Use cache
+        else:
+            return (True, None)  # Cache expired, check now
+
+    # If cached position was closed (0) or <= $600: check every 3 hours for re-entry
+    if cached_value == 0 or cached_value <= MAX_POSITION:
+        if time_elapsed < ttl_minutes * 60:
+            return (False, entry)  # Trust closed/small position, skip check
+        else:
+            return (True, None)  # 3 hours passed, check for re-entry
+
+    return (True, None)
+
+def get_open_symbols(client, state=None):
+    """
+    Fetch positions with smart caching:
+    - Positions > $600: cached 3 hours (save tokens)
+    - Positions <= $600: always check (dedup safety)
+    - Closed: recheck after 3 hours
+    """
     try:
-        # Ensure token is fresh before checking positions
+        # Check cache for large positions if state provided
+        if state and "position_cache" in state:
+            cache = state["position_cache"]
+            cached_symbols = set()
+
+            # Reuse cached large positions
+            for symbol, entry in list(cache.items()):
+                should_check, cached_entry = should_check_position(state, symbol, entry.get("value", 0))
+                if not should_check:
+                    cached_symbols.add(symbol)
+                    log.debug(f"📦 Cache hit: {symbol} (${entry.get('value', 0):.0f}), skip MCP check")
+
+            # If all positions cached, return immediately
+            if cached_symbols:
+                log.info(f"Using cached positions: {sorted(cached_symbols)}")
+                return cached_symbols
+
+        # Need fresh data - call MCP
         rh_token = get_rh_access_token(force_refresh=True)
         if not rh_token:
             log.error("❌ HALT: Cannot get Robinhood token")
@@ -1619,9 +1678,34 @@ def get_open_symbols(client):
                 log.debug(f"  Text block (first 100 chars): {text[:100]}")
 
         if owned_symbols:
-            log.info("🔒 Filtering out already-owned: %s", ", ".join(sorted(owned_symbols)))
+            log.info("🔒 Fetched positions: %s", ", ".join(sorted(owned_symbols)))
+
+            # Cache large positions (> $600) for 3 hours to save tokens
+            if state:
+                for symbol in owned_symbols:
+                    # Get position value from parsed data
+                    pos_value = 0  # Default: need to extract from positions
+                    for pos in positions:
+                        if pos.get("symbol", "").upper() == symbol:
+                            qty = float(pos.get("quantity", 0))
+                            price = float(pos.get("price", 0)) or 100  # fallback
+                            pos_value = qty * price
+                            break
+
+                    # Cache if > $600, TTL 3 hours
+                    if pos_value > MAX_POSITION:
+                        state["position_cache"][symbol] = {
+                            "timestamp": time.time(),
+                            "value": pos_value,
+                            "ttl_minutes": 180  # 3 hours
+                        }
+                        log.info(f"💾 Cached {symbol}: ${pos_value:.0f} (expires in 3h)")
+                    # Clear cache for small positions (already checked)
+                    elif symbol in state.get("position_cache", {}):
+                        del state["position_cache"][symbol]
+                        log.debug(f"Cleared cache for {symbol}: now <= $600")
         else:
-            log.info("ℹ️  No open positions found via MCP (or MCP returned empty)")
+            log.info("ℹ️  No open positions found via MCP")
 
         return owned_symbols
 
@@ -1807,8 +1891,8 @@ def run_trading_loop():
         log.info("📅 Daily tracking reset (new day)")
 
     # FILTER: For each stock: if owned AND total > $600 then SKIP, else BUY under $600
-    # Get current positions from Robinhood
-    owned_symbols = get_open_symbols(client)
+    # Get current positions from Robinhood (with smart caching)
+    owned_symbols = get_open_symbols(client, state)
     if owned_symbols is None:
         log.critical("🛑 Cannot verify positions via MCP - HALTING trades this cycle")
         return next_interval
