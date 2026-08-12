@@ -1573,28 +1573,37 @@ def get_open_symbols(client):
         owned_symbols = set()
 
         # Parse MCP response for tool results
-        for block in resp.content:
+        log.debug(f"MCP response has {len(resp.content)} content blocks")
+        for i, block in enumerate(resp.content):
+            log.debug(f"  Block {i}: type={getattr(block, 'type', 'unknown')}")
+
             if hasattr(block, 'type') and block.type == "mcp_tool_result":
                 # Extract position data from MCP result
                 try:
                     result_text = block.text if hasattr(block, 'text') else str(block)
+                    log.debug(f"  MCP tool result (first 200 chars): {result_text[:200]}")
+
                     # Try to parse JSON from result
                     if isinstance(result_text, str) and result_text.startswith('{'):
                         result_json = json.loads(result_text)
                         positions = result_json.get("data", {}).get("results", [])
+                        log.debug(f"  Parsed {len(positions)} positions from MCP")
+
                         for pos in positions:
                             symbol = pos.get("symbol", "").upper()
                             qty = float(pos.get("quantity", 0))
                             if symbol and qty > 0:
                                 owned_symbols.add(symbol)
-                                log.debug(f"  Position: {symbol} x {qty}")
+                                log.info(f"  ✓ Position: {symbol} x {qty}")
+                    else:
+                        log.debug(f"  Result not JSON: {result_text[:100]}")
                 except Exception as parse_error:
-                    log.debug(f"Could not parse position data: {parse_error}")
+                    log.error(f"Could not parse position data: {parse_error}", exc_info=True)
 
         if owned_symbols:
             log.info("🔒 Filtering out already-owned: %s", ", ".join(sorted(owned_symbols)))
         else:
-            log.debug("✓ No open positions (via MCP)")
+            log.info("ℹ️  No open positions found via MCP (or MCP returned empty)")
 
         return owned_symbols
 
