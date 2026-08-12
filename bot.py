@@ -1235,10 +1235,14 @@ Constraints: Market orders only, no review_equity_order, no repeated verificatio
                     # Track in executed list (only BUY orders, not SELL orders)
                     trade_match = next((t for t in trades if t["symbol"] == symbol), None)
                     if trade_match and side == "buy":  # BUY = buy first
+                        # Calculate ACTUAL capital deployed from fill price (not planned price)
+                        actual_capital = fill_qty * fill_price
+
                         executed_trade = {
                             "symbol": symbol,
                             "price": fill_price,
                             "quantity": fill_qty,
+                            "capital_deployed": actual_capital,  # ACTUAL from MCP fill, not planned
                             "confidence": trade_match["confidence"],
                             "action": "BUY",
                             "status": "executed_via_mcp",
