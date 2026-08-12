@@ -1629,44 +1629,6 @@ def get_open_symbols(client):
         log.error("❌ HALT: MCP position fetch failed: %s", e)
         return None
 
-def enforce_daily_symbol_limits(state, high_confidence_trades, max_capital_per_symbol=600):
-    """
-    Limit daily capital deployment per symbol to $600.
-    Allows multiple buys per symbol as long as total daily capital <= $600.
-    Resets daily tracking at midnight UTC.
-
-    Args:
-        state: Bot state dict
-        high_confidence_trades: List of trade decisions to filter
-        max_capital_per_symbol: Max capital per symbol per day (default: $600)
-
-    Returns:
-        Filtered list of trades that won't exceed daily capital limit
-    """
-    today = datetime.now(pytz.UTC).date().isoformat()
-
-    # Reset daily tracking if new day
-    if state.get("daily_date") != today:
-        state["daily_bought_symbols"] = {}  # Now tracks {symbol: total_capital_deployed}
-        state["daily_date"] = today
-        log.info("📅 Daily capital tracking reset (new day)")
-
-    # Filter trades based on remaining capital per symbol
-    filtered_trades = []
-    for trade in high_confidence_trades:
-        symbol = trade.get("symbol", "").upper()
-        capital_deployed = trade.get("capital_deployed", 0)  # Amount bot will spend on this trade
-        daily_capital = state["daily_bought_symbols"].get(symbol, 0)
-        remaining = max_capital_per_symbol - daily_capital
-
-        if capital_deployed <= remaining:
-            filtered_trades.append(trade)
-        else:
-            log.info("⏸️  SKIP %s: Daily limit $%.2f (deployed: $%.2f, limit: $%.2f)",
-                     symbol, daily_capital, capital_deployed, max_capital_per_symbol)
-
-    return filtered_trades
-
 def check_positions_and_alert():
     """
     Monitor open positions for stop loss breach (-0.5%).
@@ -1837,24 +1799,49 @@ def run_trading_loop():
     high_confidence = [d for d in decisions if d.get("confidence", 0) >= current_threshold]
     log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
 
-    # DEDUPLICATE: Skip symbols already owned (avoid buying same stock repeatedly)
+    # Reset daily tracking at midnight UTC
+    today = datetime.now(pytz.UTC).date().isoformat()
+    if state.get("daily_date") != today:
+        state["daily_bought_symbols"] = {}
+        state["daily_date"] = today
+        log.info("📅 Daily tracking reset (new day)")
+
+    # SIMPLE FILTER: For each trade, check MCP positions + $600 limit
+    # 1. Get current positions from Robinhood
     owned_symbols = get_open_symbols(client)
     if owned_symbols is None:
         log.critical("🛑 Cannot verify positions via MCP - HALTING trades this cycle")
         return next_interval
 
-    high_confidence = [d for d in high_confidence if d.get("symbol", "").upper() not in owned_symbols]
+    # 2. Filter: Skip if already own stock OR would exceed $600
+    filtered_trades = []
+    for trade in high_confidence:
+        symbol = trade.get("symbol", "").upper()
+        capital_needed = trade.get("capital_deployed", 0)
 
-    if len(high_confidence) < len(decisions):
-        log.info("After deduplication: %d new trades", len(high_confidence))
+        # Check 1: Already own this stock?
+        if symbol in owned_symbols:
+            log.info("⏸️  SKIP %s: Already owned (in MCP positions)", symbol)
+            continue
 
-    # DAILY LIMIT: Skip symbols if daily capital > $600 per symbol
-    high_confidence = enforce_daily_symbol_limits(state, high_confidence, max_capital_per_symbol=MAX_POSITION)
+        # Check 2: Would adding this exceed $600 for today?
+        daily_total = state.get("daily_bought_symbols", {}).get(symbol, 0)
+        if daily_total + capital_needed > MAX_POSITION:
+            log.info("⏸️  SKIP %s: Daily limit ($%.0f + $%.0f > $%d)",
+                     symbol, daily_total, capital_needed, MAX_POSITION)
+            continue
+
+        # Passed both checks - add to execute list
+        filtered_trades.append(trade)
+
+    high_confidence = filtered_trades
 
     if not high_confidence:
-        log.info("No new trades after daily capital limit check")
+        log.info("No trades passed MCP position + capital checks")
         save_state(state)
         return next_interval
+
+    log.info("Trades to execute: %d", len(high_confidence))
 
     log.info("=== Stage 3: Execution (Split Exits via MCP) ===")
     executed = stage3_execute(client, state, high_confidence, learning_agent=learning_agent)
