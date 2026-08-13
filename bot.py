@@ -1655,13 +1655,17 @@ def get_open_symbols(client, state=None):
                     if isinstance(result_text, str) and result_text.startswith('{'):
                         result_json = json.loads(result_text)
 
-                        # Handle "data.results" format
-                        positions = result_json.get("data", {}).get("results", [])
+                        # Handle MCP response formats
+                        # Primary: {"data": {"positions": [...]}}
+                        positions = result_json.get("data", {}).get("positions", [])
                         if not positions:
-                            # Try top-level results
-                            positions = result_json.get("results", [])
+                            # Fallback: {"data": {"results": [...]}}
+                            positions = result_json.get("data", {}).get("results", [])
                         if not positions:
-                            # Try direct array
+                            # Fallback: top-level results or positions
+                            positions = result_json.get("results", []) or result_json.get("positions", [])
+                        if not positions:
+                            # Fallback: direct array
                             if isinstance(result_json, list):
                                 positions = result_json
 
