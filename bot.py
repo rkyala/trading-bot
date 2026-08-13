@@ -282,6 +282,16 @@ def get_cached_sonnet_response(candidates_data, regime):
 
             if age < SONNET_CACHE_TTL:
                 log.info("✓ Sonnet cache HIT: %s (age: %.0f sec)", cache_key, age)
+                # Track cache hit for analytics
+                try:
+                    state = load_state()
+                    state["cache_stats"]["hits"] = state["cache_stats"].get("hits", 0) + 1
+                    total = state["cache_stats"]["hits"] + state["cache_stats"].get("misses", 0)
+                    hit_rate = 100.0 * state["cache_stats"]["hits"] / total if total > 0 else 0
+                    log.info("📊 Cache stats: %d hits / %d total (%.1f%% hit rate)",
+                             state["cache_stats"]["hits"], total, hit_rate)
+                except Exception as e:
+                    log.debug("Failed to update cache stats: %s", e)
                 return json.loads(response_text)
             else:
                 log.debug("Sonnet cache expired: %s (age: %.0f sec > TTL: %d)", cache_key, age, SONNET_CACHE_TTL)
@@ -412,6 +422,7 @@ def load_state():
         "daily_date": datetime.now(pytz.UTC).date().isoformat(),  # Reset daily_bought_symbols at midnight
         "position_cache": {},  # Smart cache: {symbol: {timestamp, value, ttl_minutes}}
         "token_usage": {"input": 0, "output": 0, "hourly_calls": []},
+        "cache_stats": {"hits": 0, "misses": 0},  # Track Sonnet cache efficiency
         "bot_halted": False,
         "next_interval_seconds": 1800,
         "performance_analytics": {
@@ -826,7 +837,17 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
     if cached_response:
         # Return cached decisions and interval
         return cached_response.get("decisions", []), cached_response.get("interval", 1800)
-    
+
+    # Track cache miss
+    try:
+        state["cache_stats"]["misses"] = state["cache_stats"].get("misses", 0) + 1
+        total = state["cache_stats"]["hits"] + state["cache_stats"].get("misses", 0)
+        hit_rate = 100.0 * state["cache_stats"]["hits"] / total if total > 0 else 0
+        log.info("📊 Cache MISS: Calling Sonnet (hit rate: %.1f%% across %d calls)",
+                 hit_rate, total)
+    except Exception as e:
+        log.debug("Failed to update cache miss: %s", e)
+
     try:
         resp = client.messages.create(
             model="claude-sonnet-4-6",
