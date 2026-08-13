@@ -237,7 +237,7 @@ def cache_set(cache, key, value):
 # ============================================================================
 
 SONNET_CACHE_DB = "sonnet_responses.db"
-SONNET_CACHE_TTL = 1800  # 30 minutes
+SONNET_CACHE_TTL = 3600  # 60 minutes (survives 2+ 30-min cycles, prevents unnecessary Sonnet calls)
 
 def init_sonnet_cache():
     """Initialize SQLite database for Sonnet response caching."""
@@ -1734,20 +1734,31 @@ def check_positions_and_alert():
         if not state.get("open_positions"):
             return
 
-        rh_token = get_rh_access_token()
-        if not rh_token:
-            return
+        # Try to get token with ONE retry on 401
+        for attempt in range(2):
+            rh_token = get_rh_access_token(force_refresh=(attempt > 0))
+            if not rh_token:
+                return
 
-        # Fetch current positions from Robinhood
-        headers = {"Authorization": f"Bearer {rh_token}"}
-        resp = requests.get(
-            f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
-            headers=headers,
-            timeout=10
-        )
+            # Fetch current positions from Robinhood
+            headers = {"Authorization": f"Bearer {rh_token}"}
+            resp = requests.get(
+                f"https://api.robinhood.com/accounts/{RH_ACCOUNT}/positions/",
+                headers=headers,
+                timeout=10
+            )
+
+            if resp.status_code == 200:
+                break  # Success
+            elif resp.status_code == 401 and attempt == 0:
+                log.debug("401 on first attempt, refreshing token and retrying...")
+                continue  # Retry with force_refresh
+            else:
+                log.warning("Failed to fetch positions: %s (attempt %d)", resp.status_code, attempt + 1)
+                return
 
         if resp.status_code != 200:
-            log.warning("Failed to fetch positions: %s", resp.status_code)
+            log.warning("Failed to fetch positions after retry: %s", resp.status_code)
             return
 
         positions = resp.json().get("results", [])
