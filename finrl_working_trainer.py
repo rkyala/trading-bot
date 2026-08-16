@@ -157,9 +157,9 @@ class TradingEnv(gym.Env):
         # Gym spaces
         # Old: n_stocks * 2 + 1 = 17 for 8 stocks
         # New: cash + (price + position + 8 technical indicators per stock)
-        # = 1 + n_stocks * (1 + 1 + 8) = 1 + n_stocks * 10
-        # For 8 stocks: 1 + 80 = 81 dimensions
-        self.n_features_per_stock = 10  # price, position, rsi, macd, bb, atr, momentum, volume
+        # = 1 + n_stocks * (1 + 1 + 6 technical features) = 1 + n_stocks * 8
+        # For 8 stocks: 1 + 64 = 65 dimensions
+        self.n_features_per_stock = 8  # price, position, rsi, macd, bb, atr, momentum, volume
         obs_dim = 1 + self.n_stocks * self.n_features_per_stock
 
         self.action_space = spaces.MultiDiscrete([3] * self.n_stocks)
