@@ -1749,10 +1749,10 @@ def get_open_symbols(client, state=None):
         owned_symbols = set()
 
         # Parse MCP response for tool results
-        log.debug(f"MCP response has {len(resp.content)} content blocks")
+        log.info(f"🔍 MCP POSITION CHECK: {len(resp.content)} blocks received")
         for i, block in enumerate(resp.content):
             block_type = getattr(block, 'type', 'unknown')
-            log.debug(f"  Block {i}: type={block_type}")
+            log.info(f"  Block {i}: type={block_type}")
 
             # Try mcp_tool_result blocks first
             if block_type == "mcp_tool_result":
@@ -1778,14 +1778,14 @@ def get_open_symbols(client, state=None):
                             if isinstance(result_json, list):
                                 positions = result_json
 
-                        log.debug(f"  Parsed {len(positions)} positions from MCP")
+                        log.info(f"  📊 Parsed {len(positions)} positions from MCP")
 
                         for pos in positions:
                             symbol = pos.get("symbol", "").upper()
                             qty = float(pos.get("quantity", 0))
                             if symbol and qty > 0:
                                 owned_symbols.add(symbol)
-                                log.info(f"  ✓ Position: {symbol} x {qty}")
+                                log.info(f"  ✓ FOUND POSITION: {symbol} x {qty} shares")
                 except Exception as parse_error:
                     log.error(f"MCP tool result parse error: {parse_error}", exc_info=True)
 
@@ -2025,12 +2025,17 @@ def run_trading_loop():
         log.critical("🛑 Cannot verify positions via MCP - HALTING trades this cycle")
         return next_interval
 
+    log.info(f"🔐 DEDUP CHECK: Currently own {sorted(owned_symbols)} | Evaluating {len(high_confidence)} trades")
+
     filtered_trades = []
     for trade in high_confidence:
         symbol = trade.get("symbol", "").upper()
         capital_needed = trade.get("capital_deployed", 0)
         daily_deployed = state.get("daily_bought_symbols", {}).get(symbol, 0)
         total_capital = daily_deployed + capital_needed
+
+        is_owned = symbol in owned_symbols
+        log.info(f"  {symbol}: owned={is_owned}, daily=${daily_deployed:.0f}, new=${capital_needed:.0f}, total=${total_capital:.0f}")
 
         # Rule: If stock owned AND total > $600 → SKIP
         if symbol in owned_symbols and total_capital > MAX_POSITION:
