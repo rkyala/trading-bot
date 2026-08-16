@@ -274,10 +274,10 @@ class TradingEnv(gym.Env):
         """Execute one step"""
         reward = 0.0
 
-        # Get current price data
-        idx = self.step_idx
-        if idx >= self.data_len:
-            idx = self.data_len - 1
+        # Get current price data (clamp to valid range)
+        idx = min(self.step_idx, self.data_len - 1)
+        if idx < 0:
+            idx = 0
 
         # Execute actions
         for i, symbol in enumerate(self.symbols):
@@ -315,7 +315,7 @@ class TradingEnv(gym.Env):
             reward += float(growth * 5)
 
         self.step_idx += 1
-        done = self.step_idx >= self.data_len - 1
+        done = self.step_idx >= self.data_len - 2  # End early to avoid edge cases
 
         return self._get_obs(), float(reward), done, False, {}
 
