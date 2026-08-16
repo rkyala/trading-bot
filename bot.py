@@ -1718,30 +1718,12 @@ def should_check_position(state, symbol, position_value):
 
 def get_open_symbols(client, state=None):
     """
-    Fetch positions with smart caching:
-    - Positions > $600: cached 3 hours (save tokens)
-    - Positions <= $600: always check (dedup safety)
-    - Closed: recheck after 3 hours
+    Fetch positions ALWAYS fresh via MCP (no caching for position dedup safety).
+    CRITICAL: Caching positions is too risky - can miss new purchases or accumulate duplicates.
     """
     try:
-        # Check cache for large positions if state provided
-        if state and "position_cache" in state:
-            cache = state["position_cache"]
-            cached_symbols = set()
-
-            # Reuse cached large positions
-            for symbol, entry in list(cache.items()):
-                should_check, cached_entry = should_check_position(state, symbol, entry.get("value", 0))
-                if not should_check:
-                    cached_symbols.add(symbol)
-                    log.debug(f"📦 Cache hit: {symbol} (${entry.get('value', 0):.0f}), skip MCP check")
-
-            # If all positions cached, return immediately
-            if cached_symbols:
-                log.info(f"Using cached positions: {sorted(cached_symbols)}")
-                return cached_symbols
-
-        # Need fresh data - call MCP
+        # ALWAYS fetch fresh positions via MCP (ignore cache for dedup safety)
+        # Token cost is worth the duplicate-buy prevention
         rh_token = get_rh_access_token(force_refresh=True)
         if not rh_token:
             log.error("❌ HALT: Cannot get Robinhood token")
