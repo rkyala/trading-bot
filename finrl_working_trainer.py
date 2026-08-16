@@ -21,69 +21,114 @@ from gymnasium import spaces
 
 def calculate_rsi(prices, period=14):
     """Calculate RSI (Relative Strength Index)"""
-    if len(prices) < period:
+    if len(prices) < period + 1:
         return 50.0
-    deltas = np.diff(prices[-period-1:])
-    gain = np.mean([d for d in deltas if d > 0])
-    loss = np.mean([abs(d) for d in deltas if d < 0])
-    if loss == 0:
-        return 100.0
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return float(np.clip(rsi, 0, 100))
+    try:
+        deltas = np.diff(prices[-period-1:])
+        gains = np.array([d for d in deltas if d > 0])
+        losses = np.array([abs(d) for d in deltas if d < 0])
+
+        if len(gains) == 0 or len(losses) == 0:
+            return 50.0
+
+        gain = np.mean(gains)
+        loss = np.mean(losses)
+
+        if loss == 0 or np.isnan(gain) or np.isnan(loss):
+            return 50.0
+
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return float(np.clip(rsi, 0, 100))
+    except:
+        return 50.0
 
 def calculate_macd(prices, fast=12, slow=26):
     """Calculate MACD"""
     if len(prices) < slow:
         return 0.0, 0.0
-    fast_ema = pd.Series(prices).ewm(span=fast).mean().iloc[-1]
-    slow_ema = pd.Series(prices).ewm(span=slow).mean().iloc[-1]
-    macd = float(fast_ema - slow_ema)
-    return macd, 0.0
+    try:
+        fast_ema = pd.Series(prices).ewm(span=fast).mean().iloc[-1]
+        slow_ema = pd.Series(prices).ewm(span=slow).mean().iloc[-1]
+        macd = float(fast_ema - slow_ema)
+        if np.isnan(macd):
+            return 0.0, 0.0
+        return np.clip(macd, -50, 50), 0.0
+    except:
+        return 0.0, 0.0
 
 def calculate_bollinger_bands(prices, period=20):
     """Calculate Bollinger Bands"""
     if len(prices) < period:
         return 50.0, 50.0, 50.0
-    sma = np.mean(prices[-period:])
-    std = np.std(prices[-period:])
-    upper = sma + 2 * std
-    lower = sma - 2 * std
-    current = prices[-1]
-    bb_position = (current - lower) / (upper - lower + 1e-8)
-    return float(np.clip(bb_position, 0, 100)), float(upper), float(lower)
+    try:
+        sma = np.mean(prices[-period:])
+        std = np.std(prices[-period:])
+        upper = sma + (2 * std)
+        lower = sma - (2 * std)
+        current = prices[-1]
+
+        if std == 0:
+            return 50.0, sma, sma
+
+        bb_position = (current - lower) / (upper - lower + 1e-8)
+        if np.isnan(bb_position):
+            return 50.0, float(upper), float(lower)
+        return float(np.clip(bb_position, 0, 100)), float(upper), float(lower)
+    except:
+        return 50.0, 0.0, 0.0
 
 def calculate_atr(high, low, close, period=14):
     """Calculate Average True Range"""
     if len(close) < period:
         return 0.0
-    tr_list = []
-    for i in range(len(close)):
-        if i == 0:
-            tr = high[i] - low[i]
-        else:
-            tr = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
-        tr_list.append(tr)
-    atr = np.mean(tr_list[-period:])
-    return float(atr / close[-1]) if close[-1] > 0 else 0.0  # Normalize by price
+    try:
+        tr_list = []
+        for i in range(len(close)):
+            if i == 0:
+                tr = high[i] - low[i]
+            else:
+                tr = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
+            tr_list.append(tr)
+        atr = np.mean(tr_list[-period:])
+        if np.isnan(atr) or close[-1] <= 0:
+            return 0.0
+        result = float(atr / close[-1])
+        return float(np.clip(result, 0, 10))
+    except:
+        return 0.0
 
 def calculate_momentum(prices, period=10):
     """Calculate momentum (price change %)"""
     if len(prices) < period:
         return 0.0
-    change = (prices[-1] - prices[-period]) / prices[-period] if prices[-period] > 0 else 0.0
-    return float(np.clip(change * 100, -50, 50))
+    try:
+        if prices[-period] <= 0:
+            return 0.0
+        change = (prices[-1] - prices[-period]) / prices[-period]
+        if np.isnan(change):
+            return 0.0
+        return float(np.clip(change * 100, -50, 50))
+    except:
+        return 0.0
 
 def calculate_volume_indicator(volume, period=20):
     """Calculate volume strength indicator"""
     if len(volume) < period:
         return 50.0
-    avg_vol = np.mean(volume[-period:])
-    curr_vol = volume[-1]
-    if avg_vol == 0:
+    try:
+        avg_vol = np.mean(volume[-period:])
+        curr_vol = volume[-1]
+
+        if avg_vol <= 0 or curr_vol <= 0:
+            return 50.0
+
+        vol_ratio = min(curr_vol / avg_vol, 3.0)  # Cap at 3x
+        if np.isnan(vol_ratio):
+            return 50.0
+        return float(np.clip((vol_ratio / 3.0) * 100, 0, 100))
+    except:
         return 50.0
-    vol_ratio = min(curr_vol / avg_vol, 3.0)  # Cap at 3x
-    return float((vol_ratio / 3.0) * 100)
 
 print("\n" + "="*70)
 print("  FinRL AGENT TRAINING (Working Version)")
