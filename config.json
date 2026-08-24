@@ -1,0 +1,35 @@
+{
+  "account": {
+    "agentic_account_number": "432591949",
+    "account_size_usd": 10000,
+    "position_size_pct": 0.005
+  },
+  "strategy": {
+    "symbol_source": "dynamic",
+    "dynamic_symbols": {
+      "enabled": true,
+      "sources": ["yfinance_trending"],
+      "max_symbols": 50,
+      "min_market_cap": 10000000000,
+      "min_avg_volume": 1000000,
+      "price_range": {
+        "min": 5,
+        "max": 500
+      }
+    },
+    "entry_criteria": {
+      "min_adx": 20.0,
+      "stoch_oversold": 30.0,
+      "fib_levels": [0.236, 0.382, 0.500, 0.618]
+    },
+    "exit_criteria": {
+      "stoch_recovery": 50.0,
+      "trailing_stop_pct": 0.015
+    }
+  },
+  "robinhood": {
+    "agentic_endpoint": "https://agent.robinhood.com/mcp/trading",
+    "oauth_file": "rh_oauth.json",
+    "protocol_version": "2024-11"
+  }
+}

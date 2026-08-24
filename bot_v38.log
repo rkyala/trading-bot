@@ -1,0 +1,33 @@
+2026-08-23 23:23:45,171 | INFO | 
+====================================================================================================
+2026-08-23 23:23:45,172 | INFO | CYCLE EXECUTION | 2026-08-23 23:23:45
+2026-08-23 23:23:45,172 | INFO | MCP Status: ENABLED
+2026-08-23 23:23:45,172 | INFO | ====================================================================================================
+2026-08-23 23:23:45,947 | INFO | 📊 Volatility Status: NORMAL (VIX 15.1) → Multiplier: 1.0x
+2026-08-23 23:23:47,326 | ERROR | MCP order placement failed: "Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"
+2026-08-23 23:23:47,327 | ERROR | MCP order failed: "Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"
+2026-08-23 23:23:48,284 | INFO | [SCAN COMPLETE] Found 1 entry signals from 14 symbols
+2026-08-23 23:23:48,284 | INFO | [MANAGING] No open positions to manage
+2026-08-23 23:23:48,284 | INFO | [CYCLE COMPLETE] Open positions: 0
+2026-08-23 23:27:29,557 | INFO | 
+====================================================================================================
+2026-08-23 23:27:29,557 | INFO | CYCLE EXECUTION | 2026-08-23 23:27:29
+2026-08-23 23:27:29,557 | INFO | MCP Status: ENABLED
+2026-08-23 23:27:29,558 | INFO | ====================================================================================================
+2026-08-23 23:27:30,275 | INFO | 📊 Volatility Status: NORMAL (VIX 15.1) → Multiplier: 1.0x
+2026-08-23 23:27:31,655 | ERROR | MCP order placement failed: "Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"
+2026-08-23 23:27:31,656 | ERROR | MCP order failed: "Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"
+2026-08-23 23:27:32,655 | INFO | [SCAN COMPLETE] Found 1 entry signals from 14 symbols
+2026-08-23 23:27:32,655 | INFO | [MANAGING] No open positions to manage
+2026-08-23 23:27:32,655 | INFO | [CYCLE COMPLETE] Open positions: 0
+2026-08-23 23:29:07,187 | INFO | 
+====================================================================================================
+2026-08-23 23:29:07,187 | INFO | CYCLE EXECUTION | 2026-08-23 23:29:07
+2026-08-23 23:29:07,187 | INFO | MCP Status: ENABLED
+2026-08-23 23:29:07,187 | INFO | ====================================================================================================
+2026-08-23 23:29:07,966 | INFO | 📊 Volatility Status: NORMAL (VIX 15.1) → Multiplier: 1.0x
+2026-08-23 23:29:09,347 | ERROR | MCP order placement failed: "Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"
+2026-08-23 23:29:09,347 | ERROR | MCP order failed: "Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"
+2026-08-23 23:29:10,271 | INFO | [SCAN COMPLETE] Found 1 entry signals from 14 symbols
+2026-08-23 23:29:10,272 | INFO | [MANAGING] No open positions to manage
+2026-08-23 23:29:10,272 | INFO | [CYCLE COMPLETE] Open positions: 0
