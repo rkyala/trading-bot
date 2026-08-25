@@ -691,6 +691,11 @@ class TradingBot:
             logger.info("=" * 80)
             return  # Exit immediately, no entries allowed
 
+        # INITIALIZE COUNTERS BEFORE RETRY BLOCK
+        signals_found = 0
+        analyzed = []
+        skipped = []
+
         # RETRY FAILED ORDERS (NEW: Auto-retry orders that failed last cycle)
         logger.info("🔄 Checking for failed orders to retry...")
         failed_orders_file = Path("failed_orders.json")
@@ -735,10 +740,6 @@ class TradingBot:
 
             except Exception as e:
                 logger.warning(f"⚠️  Error retrying failed orders: {e}")
-
-        signals_found = 0
-        analyzed = []
-        skipped = []
 
         for i, symbol in enumerate(self.symbols, 1):
             # FIX #2: Skip entry screening if position already open for this symbol
