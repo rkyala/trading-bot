@@ -562,6 +562,11 @@ class TradingBot:
                 logger.warning(f"⚠️  Circuit breaker: Cannot parse account response: {e}")
                 return True  # Proceed but log warning
 
+            # If portfolio_value is 0, treat as unavailable data (allow trading)
+            if portfolio_value == 0:
+                logger.warning(f"⚠️  Circuit breaker: Portfolio value unavailable ($0.00), proceeding with caution")
+                return True
+
             # Calculate drawdown
             initial_capital = self.account_cfg["account_size_usd"]
             drawdown = ((portfolio_value - initial_capital) / initial_capital) * 100
@@ -575,11 +580,6 @@ class TradingBot:
                 return False
 
             return True  # Trading allowed
-
-        except Exception as e:
-            logger.warning(f"⚠️  Circuit breaker parsing failed: {e}")
-            logger.warning(f"   Proceeding with trading (portfolio value unavailable)")
-            return True  # Allow trading if we can't get portfolio value
 
         except Exception as e:
             logger.warning(f"⚠️  Circuit breaker check failed: {e}, proceeding with caution")
