@@ -811,6 +811,28 @@ class TradingBot:
             logger.warning(f"⚠️  Could not read 13-F signals: {e}")
             institutional_signals = {}
 
+        # CRITICAL FIX #11: Get ACTUAL Robinhood positions BEFORE entry screening (prevents duplicate entries)
+        # Must fetch BEFORE retries, so we know which symbols are already owned
+        robinhood_positions = set()
+        try:
+            positions_response = self.mcp.get_positions()
+            if "result" in positions_response and "content" in positions_response["result"]:
+                content_text = positions_response["result"]["content"][0].get("text", "")
+                if content_text:
+                    parsed = json.loads(content_text)
+                    if "data" in parsed and isinstance(parsed["data"], list):
+                        robinhood_positions = {pos.get("symbol") for pos in parsed["data"] if pos.get("symbol")}
+                        logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
+            if not robinhood_positions:
+                logger.warning(f"⚠️  Could not load Robinhood positions - using local tracking only")
+                robinhood_positions = set(self.position_tracker.get_all().keys())
+        except Exception as e:
+            logger.warning(f"⚠️  Error fetching Robinhood positions: {e} - falling back to local tracking")
+            robinhood_positions = set(self.position_tracker.get_all().keys())
+
+        # Pre-fill processed_this_cycle with all symbols already in Robinhood
+        processed_this_cycle.update(robinhood_positions)
+
         # RETRY FAILED ORDERS (NEW: Auto-retry orders that failed last cycle)
         logger.info("🔄 Checking for failed orders to retry...")
         failed_orders_file = Path("failed_orders.json")
@@ -819,7 +841,7 @@ class TradingBot:
                 with open(failed_orders_file) as f:
                     failed_orders = json.load(f)
 
-                for symbol, failed_order in failed_orders.items():
+                for symbol, failed_order in list(failed_orders.items()):
                     retry_count = failed_order.get("retry_count", 0)
 
                     # Only retry up to 3 times, then give up
@@ -846,6 +868,8 @@ class TradingBot:
                             entry_price=failed_order['price'],
                             entry_time=failed_order['entry_time']
                         )
+                        # CRITICAL FIX #14: Mark successful retry as processed (prevents re-entry in same cycle)
+                        processed_this_cycle.add(symbol)
                         del failed_orders[symbol]
                         signals_found += 1
 
@@ -855,24 +879,6 @@ class TradingBot:
 
             except Exception as e:
                 logger.warning(f"⚠️  Error retrying failed orders: {e}")
-
-        # CRITICAL FIX #11: Get ACTUAL Robinhood positions to prevent duplicate entries
-        robinhood_positions = set()
-        try:
-            positions_response = self.mcp.get_positions()
-            if "result" in positions_response and "content" in positions_response["result"]:
-                content_text = positions_response["result"]["content"][0].get("text", "")
-                if content_text:
-                    parsed = json.loads(content_text)
-                    if "data" in parsed and isinstance(parsed["data"], list):
-                        robinhood_positions = {pos.get("symbol") for pos in parsed["data"] if pos.get("symbol")}
-                        logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
-            if not robinhood_positions:
-                logger.warning(f"⚠️  Could not load Robinhood positions - using local tracking only")
-                robinhood_positions = set(self.position_tracker.get_all().keys())
-        except Exception as e:
-            logger.warning(f"⚠️  Error fetching Robinhood positions: {e} - falling back to local tracking")
-            robinhood_positions = set(self.position_tracker.get_all().keys())
 
         for i, symbol in enumerate(self.symbols, 1):
             # CRITICAL FIX #13: Skip symbol if already processed in this cycle (prevents duplicate entries in same run)
@@ -1013,7 +1019,7 @@ class TradingBot:
                             "symbol": symbol,
                             "qty": qty,
                             "price": price,
-                            "entry_time": current_time,
+                            "entry_time": cycle_time,  # CRITICAL FIX #15: Use cycle_time not undefined current_time
                             "first_attempt": datetime.now().isoformat(),
                             "last_attempt": datetime.now().isoformat(),
                             "retry_count": 1,
