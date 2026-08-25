@@ -1,0 +1,59 @@
+===============================================================================
+PARALLEL SIGNAL CHANNEL - MANUAL CRONTAB SETUP
+===============================================================================
+
+The signal channel needs to be added to your crontab to run every 60 seconds.
+
+Due to sandbox restrictions, I cannot directly modify your system crontab.
+Please run ONE of these commands in your terminal:
+
+===============================================================================
+OPTION 1: Interactive Crontab Edit (Recommended)
+===============================================================================
+
+crontab -e
+
+This will open your default editor. Add this line at the end:
+
+* * * * * /Users/ramayalala/trading_bot/venv/bin/python3 /Users/ramayalala/trading_bot/test_async_signal_channel.py >> /Users/ramayalala/trading_bot/signal_channel.log 2>&1
+
+Save and exit (Ctrl+X in nano, :wq in vim).
+
+===============================================================================
+OPTION 2: Non-Interactive Add (If Option 1 Doesn't Work)
+===============================================================================
+
+Run this command in Terminal:
+
+(crontab -l 2>/dev/null || echo "") | grep -v "test_async_signal_channel" > /tmp/cron_new.txt
+echo "* * * * * /Users/ramayalala/trading_bot/venv/bin/python3 /Users/ramayalala/trading_bot/test_async_signal_channel.py >> /Users/ramayalala/trading_bot/signal_channel.log 2>&1" >> /tmp/cron_new.txt
+crontab /tmp/cron_new.txt
+echo "✅ Cron job added"
+
+===============================================================================
+VERIFICATION: Check Cron Job Added
+===============================================================================
+
+After adding, verify it's in your crontab:
+
+crontab -l | grep test_async_signal_channel
+
+You should see:
+* * * * * /Users/ramayalala/trading_bot/venv/bin/python3 /Users/ramayalala/trading_bot/test_async_signal_channel.py >> /Users/ramayalala/trading_bot/signal_channel.log 2>&1
+
+===============================================================================
+MONITORING: Watch the Logs in Real-Time
+===============================================================================
+
+After 60 seconds, verify it's running:
+
+tail -f ~/trading_bot/signal_channel.log
+
+You should see entries like:
+2026-08-24 13:40:00,123 | INFO | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:40:02,456 | INFO | Fetching macro data...
+2026-08-24 13:40:05,789 | INFO | === SCAN COMPLETE ===
+
+New entries should appear every 60 seconds.
+
+===============================================================================

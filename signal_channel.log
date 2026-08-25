@@ -1,0 +1,473 @@
+2026-08-24 13:42:03,106 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:42:03,106 | INFO     | Fetching macro data...
+2026-08-24 13:42:03,867 | INFO     | Scanning 13-F filings...
+2026-08-24 13:42:08,097 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 13:42:12,297 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 13:42:12,586 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:42:12,586 | INFO     | Scanning options activity...
+2026-08-24 13:42:13,251 | INFO     |   Found 0 sweep signals
+2026-08-24 13:42:13,253 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 10.1s)
+2026-08-24 13:42:13,254 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:43:01,384 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:43:01,385 | INFO     | Fetching macro data...
+2026-08-24 13:43:01,884 | INFO     | Scanning 13-F filings...
+2026-08-24 13:43:02,908 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:43:02,909 | INFO     | Scanning options activity...
+2026-08-24 13:43:03,619 | INFO     |   Found 0 sweep signals
+2026-08-24 13:43:03,622 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.2s)
+2026-08-24 13:43:03,623 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:44:03,583 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:44:03,583 | INFO     | Fetching macro data...
+2026-08-24 13:44:04,547 | INFO     | Scanning 13-F filings...
+2026-08-24 13:44:05,666 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:44:05,667 | INFO     | Scanning options activity...
+2026-08-24 13:44:06,217 | INFO     |   Found 0 sweep signals
+2026-08-24 13:44:06,219 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.6s)
+2026-08-24 13:44:06,219 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:45:00,981 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:45:00,981 | INFO     | Fetching macro data...
+2026-08-24 13:45:01,521 | INFO     | Scanning 13-F filings...
+2026-08-24 13:45:09,395 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 13:45:09,640 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:45:09,641 | INFO     | Scanning options activity...
+2026-08-24 13:45:10,233 | INFO     |   Found 0 sweep signals
+2026-08-24 13:45:10,234 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 9.3s)
+2026-08-24 13:45:10,235 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:46:00,959 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:46:00,959 | INFO     | Fetching macro data...
+2026-08-24 13:46:01,524 | INFO     | Scanning 13-F filings...
+2026-08-24 13:46:03,397 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:46:03,397 | INFO     | Scanning options activity...
+2026-08-24 13:46:04,085 | INFO     |   Found 0 sweep signals
+2026-08-24 13:46:04,087 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 3.1s)
+2026-08-24 13:46:04,088 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:47:00,836 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:47:00,836 | INFO     | Fetching macro data...
+2026-08-24 13:47:01,391 | INFO     | Scanning 13-F filings...
+2026-08-24 13:47:05,610 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 13:47:07,356 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:47:07,356 | INFO     | Scanning options activity...
+2026-08-24 13:47:07,999 | INFO     |   Found 0 sweep signals
+2026-08-24 13:47:08,003 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 7.2s)
+2026-08-24 13:47:08,003 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:48:00,899 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:48:00,900 | INFO     | Fetching macro data...
+2026-08-24 13:48:01,393 | INFO     | Scanning 13-F filings...
+2026-08-24 13:48:05,576 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 13:48:09,771 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 13:48:10,064 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:48:10,064 | INFO     | Scanning options activity...
+2026-08-24 13:48:10,681 | INFO     |   Found 0 sweep signals
+2026-08-24 13:48:10,683 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 9.8s)
+2026-08-24 13:48:10,684 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:49:03,138 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:49:03,139 | INFO     | Fetching macro data...
+2026-08-24 13:49:03,860 | INFO     | Scanning 13-F filings...
+2026-08-24 13:49:09,655 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 13:49:09,890 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:49:09,890 | INFO     | Scanning options activity...
+2026-08-24 13:49:10,521 | INFO     |   Found 0 sweep signals
+2026-08-24 13:49:10,522 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 7.4s)
+2026-08-24 13:49:10,523 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:50:01,379 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:50:01,380 | INFO     | Fetching macro data...
+2026-08-24 13:50:01,840 | INFO     | Scanning 13-F filings...
+2026-08-24 13:50:05,012 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:50:05,012 | INFO     | Scanning options activity...
+2026-08-24 13:50:05,661 | INFO     |   Found 0 sweep signals
+2026-08-24 13:50:05,663 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 4.3s)
+2026-08-24 13:50:05,664 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:51:02,025 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:51:02,026 | INFO     | Fetching macro data...
+2026-08-24 13:51:02,968 | INFO     | Scanning 13-F filings...
+2026-08-24 13:51:05,883 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:51:05,906 | INFO     | Scanning options activity...
+2026-08-24 13:51:06,607 | INFO     |   Found 0 sweep signals
+2026-08-24 13:51:06,631 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 4.6s)
+2026-08-24 13:51:06,631 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:52:01,551 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:52:01,553 | INFO     | Fetching macro data...
+2026-08-24 13:52:02,285 | INFO     | Scanning 13-F filings...
+2026-08-24 13:52:06,920 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 13:52:07,229 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:52:07,229 | INFO     | Scanning options activity...
+2026-08-24 13:52:07,964 | INFO     |   Found 0 sweep signals
+2026-08-24 13:52:07,968 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.4s)
+2026-08-24 13:52:07,968 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:53:01,399 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:53:01,400 | INFO     | Fetching macro data...
+2026-08-24 13:53:02,151 | INFO     | Scanning 13-F filings...
+2026-08-24 13:53:03,244 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:53:03,244 | INFO     | Scanning options activity...
+2026-08-24 13:53:03,786 | INFO     |   Found 0 sweep signals
+2026-08-24 13:53:03,790 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.4s)
+2026-08-24 13:53:03,790 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:54:02,315 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:54:02,321 | INFO     | Fetching macro data...
+2026-08-24 13:54:03,214 | INFO     | Scanning 13-F filings...
+2026-08-24 13:54:08,985 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 13:54:09,188 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:54:09,189 | INFO     | Scanning options activity...
+2026-08-24 13:54:09,813 | INFO     |   Found 0 sweep signals
+2026-08-24 13:54:09,816 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 7.5s)
+2026-08-24 13:54:09,816 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:55:01,631 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:55:01,632 | INFO     | Fetching macro data...
+2026-08-24 13:55:02,176 | INFO     | Scanning 13-F filings...
+2026-08-24 13:55:06,416 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 13:55:09,072 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:55:09,073 | INFO     | Scanning options activity...
+2026-08-24 13:55:09,790 | INFO     |   Found 0 sweep signals
+2026-08-24 13:55:09,793 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 8.2s)
+2026-08-24 13:55:09,794 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:56:02,777 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:56:02,777 | INFO     | Fetching macro data...
+2026-08-24 13:56:03,356 | INFO     | Scanning 13-F filings...
+2026-08-24 13:56:04,614 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:56:04,614 | INFO     | Scanning options activity...
+2026-08-24 13:56:05,278 | INFO     |   Found 0 sweep signals
+2026-08-24 13:56:05,280 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.5s)
+2026-08-24 13:56:05,281 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:57:01,462 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:57:01,463 | INFO     | Fetching macro data...
+2026-08-24 13:57:02,179 | INFO     | Scanning 13-F filings...
+2026-08-24 13:57:04,432 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:57:04,432 | INFO     | Scanning options activity...
+2026-08-24 13:57:05,180 | INFO     |   Found 0 sweep signals
+2026-08-24 13:57:05,182 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 3.7s)
+2026-08-24 13:57:05,182 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:58:01,422 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:58:01,423 | INFO     | Fetching macro data...
+2026-08-24 13:58:02,089 | INFO     | Scanning 13-F filings...
+2026-08-24 13:58:03,203 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:58:03,203 | INFO     | Scanning options activity...
+2026-08-24 13:58:03,811 | INFO     |   Found 0 sweep signals
+2026-08-24 13:58:03,814 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.4s)
+2026-08-24 13:58:03,814 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 13:59:02,063 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 13:59:02,066 | INFO     | Fetching macro data...
+2026-08-24 13:59:02,758 | INFO     | Scanning 13-F filings...
+2026-08-24 13:59:06,924 | INFO     |   Found 0 new 13-F signals
+2026-08-24 13:59:06,925 | INFO     | Scanning options activity...
+2026-08-24 13:59:07,584 | INFO     |   Found 0 sweep signals
+2026-08-24 13:59:07,588 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 5.5s)
+2026-08-24 13:59:07,588 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:00:02,619 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:00:02,620 | INFO     | Fetching macro data...
+2026-08-24 14:00:03,270 | INFO     | Scanning 13-F filings...
+2026-08-24 14:00:07,491 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:00:11,611 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:00:11,830 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:00:11,830 | INFO     | Scanning options activity...
+2026-08-24 14:00:12,591 | INFO     |   Found 0 sweep signals
+2026-08-24 14:00:12,595 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 10.0s)
+2026-08-24 14:00:12,595 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:01:01,374 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:01:01,374 | INFO     | Fetching macro data...
+2026-08-24 14:01:01,874 | INFO     | Scanning 13-F filings...
+2026-08-24 14:01:06,110 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:01:07,502 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:01:07,503 | INFO     | Scanning options activity...
+2026-08-24 14:01:08,205 | INFO     |   Found 0 sweep signals
+2026-08-24 14:01:08,209 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.8s)
+2026-08-24 14:01:08,209 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:02:02,635 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:02:02,636 | INFO     | Fetching macro data...
+2026-08-24 14:02:03,344 | INFO     | Scanning 13-F filings...
+2026-08-24 14:02:07,973 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:02:08,225 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:02:08,225 | INFO     | Scanning options activity...
+2026-08-24 14:02:08,893 | INFO     |   Found 0 sweep signals
+2026-08-24 14:02:08,897 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.3s)
+2026-08-24 14:02:08,897 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:03:03,765 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:03:03,767 | INFO     | Fetching macro data...
+2026-08-24 14:03:04,570 | INFO     | Scanning 13-F filings...
+2026-08-24 14:03:08,817 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:03:12,968 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:03:13,165 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:03:13,165 | INFO     | Scanning options activity...
+2026-08-24 14:03:13,938 | INFO     |   Found 0 sweep signals
+2026-08-24 14:03:13,966 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 10.2s)
+2026-08-24 14:03:13,967 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:04:01,573 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:04:01,574 | INFO     | Fetching macro data...
+2026-08-24 14:04:02,210 | INFO     | Scanning 13-F filings...
+2026-08-24 14:04:03,763 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:04:03,763 | INFO     | Scanning options activity...
+2026-08-24 14:04:04,468 | INFO     |   Found 0 sweep signals
+2026-08-24 14:04:04,472 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.9s)
+2026-08-24 14:04:04,473 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:05:01,325 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:05:01,326 | INFO     | Fetching macro data...
+2026-08-24 14:05:01,875 | INFO     | Scanning 13-F filings...
+2026-08-24 14:05:06,108 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:05:09,228 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:05:09,236 | INFO     | Scanning options activity...
+2026-08-24 14:05:09,785 | INFO     |   Found 0 sweep signals
+2026-08-24 14:05:09,789 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 8.5s)
+2026-08-24 14:05:09,789 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:06:01,561 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:06:01,561 | INFO     | Fetching macro data...
+2026-08-24 14:06:02,109 | INFO     | Scanning 13-F filings...
+2026-08-24 14:06:06,339 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:06:10,513 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:06:10,768 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:06:10,769 | INFO     | Scanning options activity...
+2026-08-24 14:06:11,488 | INFO     |   Found 0 sweep signals
+2026-08-24 14:06:11,491 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 9.9s)
+2026-08-24 14:06:11,491 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:07:01,346 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:07:01,347 | INFO     | Fetching macro data...
+2026-08-24 14:07:01,945 | INFO     | Scanning 13-F filings...
+2026-08-24 14:07:06,180 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:07:06,829 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:07:06,830 | INFO     | Scanning options activity...
+2026-08-24 14:07:07,503 | INFO     |   Found 0 sweep signals
+2026-08-24 14:07:07,506 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.2s)
+2026-08-24 14:07:07,506 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:08:01,306 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:08:01,307 | INFO     | Fetching macro data...
+2026-08-24 14:08:01,597 | INFO     | Scanning 13-F filings...
+2026-08-24 14:08:02,595 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:08:02,596 | INFO     | Scanning options activity...
+2026-08-24 14:08:03,328 | INFO     |   Found 0 sweep signals
+2026-08-24 14:08:03,330 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.0s)
+2026-08-24 14:08:03,331 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:09:01,123 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:09:01,124 | INFO     | Fetching macro data...
+2026-08-24 14:09:01,659 | INFO     | Scanning 13-F filings...
+2026-08-24 14:09:02,675 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:09:02,675 | INFO     | Scanning options activity...
+2026-08-24 14:09:03,279 | INFO     |   Found 0 sweep signals
+2026-08-24 14:09:03,282 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.2s)
+2026-08-24 14:09:03,283 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:10:01,095 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:10:01,096 | INFO     | Fetching macro data...
+2026-08-24 14:10:01,669 | INFO     | Scanning 13-F filings...
+2026-08-24 14:10:02,898 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:10:02,898 | INFO     | Scanning options activity...
+2026-08-24 14:10:03,717 | INFO     |   Found 0 sweep signals
+2026-08-24 14:10:03,720 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.6s)
+2026-08-24 14:10:03,720 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:11:01,568 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:11:01,569 | INFO     | Fetching macro data...
+2026-08-24 14:11:01,941 | INFO     | Scanning 13-F filings...
+2026-08-24 14:11:03,196 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:11:03,197 | INFO     | Scanning options activity...
+2026-08-24 14:11:03,906 | INFO     |   Found 0 sweep signals
+2026-08-24 14:11:03,908 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.3s)
+2026-08-24 14:11:03,909 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:12:01,720 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:12:01,721 | INFO     | Fetching macro data...
+2026-08-24 14:12:02,276 | INFO     | Scanning 13-F filings...
+2026-08-24 14:12:06,524 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:12:08,202 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:12:08,202 | INFO     | Scanning options activity...
+2026-08-24 14:12:08,910 | INFO     |   Found 0 sweep signals
+2026-08-24 14:12:08,914 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 7.2s)
+2026-08-24 14:12:08,914 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:13:01,768 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:13:01,768 | INFO     | Fetching macro data...
+2026-08-24 14:13:02,285 | INFO     | Scanning 13-F filings...
+2026-08-24 14:13:05,082 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:13:05,082 | INFO     | Scanning options activity...
+2026-08-24 14:13:06,328 | INFO     |   Found 0 sweep signals
+2026-08-24 14:13:06,331 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 4.6s)
+2026-08-24 14:13:06,331 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:14:01,176 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:14:01,177 | INFO     | Fetching macro data...
+2026-08-24 14:14:01,719 | INFO     | Scanning 13-F filings...
+2026-08-24 14:14:05,913 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:14:06,530 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:14:06,530 | INFO     | Scanning options activity...
+2026-08-24 14:14:07,207 | INFO     |   Found 0 sweep signals
+2026-08-24 14:14:07,211 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.0s)
+2026-08-24 14:14:07,211 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:15:01,760 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:15:01,762 | INFO     | Fetching macro data...
+2026-08-24 14:15:02,449 | INFO     | Scanning 13-F filings...
+2026-08-24 14:15:06,702 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:15:09,296 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:15:09,308 | INFO     | Scanning options activity...
+2026-08-24 14:15:10,102 | INFO     |   Found 0 sweep signals
+2026-08-24 14:15:10,106 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 8.3s)
+2026-08-24 14:15:10,106 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:16:00,951 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:16:00,952 | INFO     | Fetching macro data...
+2026-08-24 14:16:01,501 | INFO     | Scanning 13-F filings...
+2026-08-24 14:16:02,615 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:16:02,615 | INFO     | Scanning options activity...
+2026-08-24 14:16:03,295 | INFO     |   Found 0 sweep signals
+2026-08-24 14:16:03,298 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.3s)
+2026-08-24 14:16:03,299 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:17:01,078 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:17:01,078 | INFO     | Fetching macro data...
+2026-08-24 14:17:01,640 | INFO     | Scanning 13-F filings...
+2026-08-24 14:17:05,850 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:17:09,985 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:17:10,169 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:17:10,170 | INFO     | Scanning options activity...
+2026-08-24 14:17:10,778 | INFO     |   Found 0 sweep signals
+2026-08-24 14:17:10,782 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 9.7s)
+2026-08-24 14:17:10,782 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:18:01,675 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:18:01,676 | INFO     | Fetching macro data...
+2026-08-24 14:18:02,208 | INFO     | Scanning 13-F filings...
+2026-08-24 14:18:03,262 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:18:03,263 | INFO     | Scanning options activity...
+2026-08-24 14:18:04,022 | INFO     |   Found 0 sweep signals
+2026-08-24 14:18:04,025 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 2.3s)
+2026-08-24 14:18:04,025 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:19:00,826 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:19:00,828 | INFO     | Fetching macro data...
+2026-08-24 14:19:01,357 | INFO     | Scanning 13-F filings...
+2026-08-24 14:19:05,588 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:19:09,746 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:19:09,938 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:19:09,938 | INFO     | Scanning options activity...
+2026-08-24 14:19:10,623 | INFO     |   Found 0 sweep signals
+2026-08-24 14:19:10,627 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 9.8s)
+2026-08-24 14:19:10,628 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:20:01,813 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:20:01,814 | INFO     | Fetching macro data...
+2026-08-24 14:20:02,356 | INFO     | Scanning 13-F filings...
+2026-08-24 14:20:06,558 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:20:07,142 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:20:07,142 | INFO     | Scanning options activity...
+2026-08-24 14:20:07,716 | INFO     |   Found 0 sweep signals
+2026-08-24 14:20:07,719 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 5.9s)
+2026-08-24 14:20:07,720 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:21:01,556 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:21:01,557 | INFO     | Fetching macro data...
+2026-08-24 14:21:02,104 | INFO     | Scanning 13-F filings...
+2026-08-24 14:21:06,337 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:21:10,481 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:21:10,776 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:21:10,776 | INFO     | Scanning options activity...
+2026-08-24 14:21:11,424 | INFO     |   Found 0 sweep signals
+2026-08-24 14:21:11,427 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 9.9s)
+2026-08-24 14:21:11,428 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:22:01,284 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:22:01,284 | INFO     | Fetching macro data...
+2026-08-24 14:22:01,807 | INFO     | Scanning 13-F filings...
+2026-08-24 14:22:05,906 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:22:05,906 | INFO     | Scanning options activity...
+2026-08-24 14:22:06,639 | INFO     |   Found 0 sweep signals
+2026-08-24 14:22:06,642 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 5.4s)
+2026-08-24 14:22:06,642 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:23:01,794 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:23:01,795 | INFO     | Fetching macro data...
+2026-08-24 14:23:02,224 | INFO     | Scanning 13-F filings...
+2026-08-24 14:23:06,892 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:23:07,084 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:23:07,084 | INFO     | Scanning options activity...
+2026-08-24 14:23:07,808 | INFO     |   Found 0 sweep signals
+2026-08-24 14:23:07,811 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.0s)
+2026-08-24 14:23:07,811 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:24:01,613 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:24:01,614 | INFO     | Fetching macro data...
+2026-08-24 14:24:02,185 | INFO     | Scanning 13-F filings...
+2026-08-24 14:24:06,394 | WARNING  | 13-F scan timeout for Berkshire Hathaway
+2026-08-24 14:24:10,519 | WARNING  | 13-F scan timeout for Sequoia Capital
+2026-08-24 14:24:10,780 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:24:10,781 | INFO     | Scanning options activity...
+2026-08-24 14:24:11,613 | INFO     |   Found 0 sweep signals
+2026-08-24 14:24:11,616 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 10.0s)
+2026-08-24 14:24:11,617 | INFO     | === SCAN COMPLETE ===
+
+2026-08-24 14:25:02,106 | INFO     | === PARALLEL SIGNAL CHANNEL SCAN ===
+2026-08-24 14:25:02,107 | INFO     | Fetching macro data...
+2026-08-24 14:25:02,633 | INFO     | Scanning 13-F filings...
+2026-08-24 14:25:07,655 | INFO     |   Found 0 new 13-F signals
+2026-08-24 14:25:07,656 | INFO     | Scanning options activity...
+2026-08-24 14:25:08,261 | INFO     |   Found 0 sweep signals
+2026-08-24 14:25:08,264 | INFO     | 
+✨ Queue Status: 0 active signals (completed in 6.2s)
+2026-08-24 14:25:08,264 | INFO     | === SCAN COMPLETE ===
+

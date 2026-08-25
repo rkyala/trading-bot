@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/Users/ramayalala/trading_bot/robinhood_mcp_local.py", line 11, in <module>
+    import requests
+ModuleNotFoundError: No module named 'requests'

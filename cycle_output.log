@@ -1,0 +1,189 @@
+2026-08-24 13:42:03,030 | [+] MCP subprocess started (unbuffered)
+2026-08-24 13:42:03,200 | ✅ MCP initialized
+2026-08-24 13:42:03,201 | ================================================================================
+2026-08-24 13:42:03,201 | FETCHING SYMBOLS
+2026-08-24 13:42:03,201 | ================================================================================
+2026-08-24 13:42:03,201 | ================================================================================
+2026-08-24 13:42:03,201 | FETCHING TOP TRENDING SYMBOLS FROM YFINANCE
+2026-08-24 13:42:03,201 | ================================================================================
+2026-08-24 13:42:03,201 | [*] Fetching top 100 trending symbols from yfinance...
+2026-08-24 13:42:03,201 |     Analyzing 100 popular stocks...
+2026-08-24 13:42:04,968 |     Progress: 10/100
+2026-08-24 13:42:05,248 |     Progress: 20/100
+2026-08-24 13:42:05,681 |     Progress: 30/100
+2026-08-24 13:42:06,005 |     Progress: 40/100
+2026-08-24 13:42:06,515 |     Progress: 50/100
+2026-08-24 13:42:07,612 |     Progress: 60/100
+2026-08-24 13:42:08,324 | HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: GRUBHUB"}}}
+2026-08-24 13:42:08,345 |     Progress: 70/100
+2026-08-24 13:42:09,068 | $SQ: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")
+2026-08-24 13:42:09,120 |     Progress: 80/100
+2026-08-24 13:42:09,473 |     Progress: 90/100
+2026-08-24 13:42:10,214 | $GRUBHUB: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")
+2026-08-24 13:42:10,781 | $RSX: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")
+2026-08-24 13:42:11,652 | $ARKS: possibly delisted; no price data found  (period=5d) (Yahoo error = "No data found, symbol may be delisted")
+2026-08-24 13:42:11,653 |     Progress: 100/100
+2026-08-24 13:42:11,677 | ✅ Found 96 trending symbols from yfinance
+2026-08-24 13:42:11,678 | 
+📊 TOP 20 TRENDING:
+2026-08-24 13:42:11,678 |     1. INTC   | Score:    5839.13 | Momentum:   -9.78% | Vol:  457.7M | Volatility:   1.3% | Price: $   87.91
+2026-08-24 13:42:11,678 |     2. COIN   | Score:    3165.79 | Momentum:  +20.36% | Vol:   65.8M | Volatility:   2.4% | Price: $  180.62
+2026-08-24 13:42:11,679 |     3. WMT    | Score:    2880.06 | Momentum:   -8.22% | Vol:  204.0M | Volatility:   1.7% | Price: $  105.94
+2026-08-24 13:42:11,679 |     4. NVDA   | Score:    2457.31 | Momentum:   -4.63% | Vol:  918.9M | Volatility:   0.6% | Price: $  209.79
+2026-08-24 13:42:11,679 |     5. TSLA   | Score:    1689.82 | Momentum:   +4.76% | Vol:  305.3M | Volatility:   1.2% | Price: $  352.89
+2026-08-24 13:42:11,679 |     6. RIVN   | Score:    1657.23 | Momentum:  +15.83% | Vol:  104.6M | Volatility:   1.0% | Price: $   16.87
+2026-08-24 13:42:11,679 |     7. BABA   | Score:    1067.76 | Momentum:   -7.13% | Vol:   97.9M | Volatility:   1.5% | Price: $  118.37
+2026-08-24 13:42:11,679 |     8. CMG    | Score:    1001.50 | Momentum:  +11.99% | Vol:   71.7M | Volatility:   1.2% | Price: $   37.74
+2026-08-24 13:42:11,679 |     9. MU     | Score:     932.23 | Momentum:   -4.11% | Vol:  145.3M | Volatility:   1.6% | Price: $  918.23
+2026-08-24 13:42:11,679 |    10. FSLY   | Score:     749.68 | Momentum:  -15.11% | Vol:   22.5M | Volatility:   2.2% | Price: $   23.28
+2026-08-24 13:42:11,679 |    11. ARKG   | Score:     612.75 | Momentum:  +10.93% | Vol:   35.1M | Volatility:   1.6% | Price: $   48.06
+2026-08-24 13:42:11,679 |    12. LCID   | Score:     544.41 | Momentum:  -13.20% | Vol:   41.5M | Volatility:   1.0% | Price: $    5.20
+2026-08-24 13:42:11,680 |    13. CRWD   | Score:     478.22 | Momentum:   -9.58% | Vol:   35.1M | Volatility:   1.4% | Price: $  190.96
+2026-08-24 13:42:11,680 |    14. SNAP   | Score:     446.68 | Momentum:   +3.03% | Vol:  153.4M | Volatility:   1.0% | Price: $    5.43
+2026-08-24 13:42:11,680 |    15. PLTR   | Score:     393.83 | Momentum:   +2.88% | Vol:  130.9M | Volatility:   1.0% | Price: $  178.20
+2026-08-24 13:42:11,680 |    16. AMD    | Score:     379.66 | Momentum:   -4.68% | Vol:   83.3M | Volatility:   1.0% | Price: $  459.07
+2026-08-24 13:42:11,680 |    17. GLD    | Score:     372.83 | Momentum:   +5.44% | Vol:   92.9M | Volatility:   0.7% | Price: $  424.98
+2026-08-24 13:42:11,680 |    18. XPEV   | Score:     341.26 | Momentum:   -5.71% | Vol:   42.9M | Volatility:   1.4% | Price: $   11.15
+2026-08-24 13:42:11,680 |    19. NIO    | Score:     286.90 | Momentum:   -3.10% | Vol:  113.0M | Volatility:   0.8% | Price: $    4.38
+2026-08-24 13:42:11,680 |    20. EWZ    | Score:     269.44 | Momentum:   +3.38% | Vol:   96.8M | Volatility:   0.8% | Price: $   35.22
+2026-08-24 13:42:11,680 |    ... and 76 more
+2026-08-24 13:42:11,681 | ================================================================================
+2026-08-24 13:42:11,681 | FILTERING BY MARKET CAP (min: $10.0B, vol: 1.0M)
+2026-08-24 13:42:11,681 | ================================================================================
+2026-08-24 13:42:13,135 | ✅ [  1/96] INTC   | Cap: $461.98B | Vol:  119.1M | Price: $    0.00
+2026-08-24 13:42:14,042 | ✅ [  2/96] COIN   | Cap: $ 47.65B | Vol:    8.5M | Price: $    0.00
+2026-08-24 13:42:14,984 | ✅ [  3/96] WMT    | Cap: $843.04B | Vol:   24.7M | Price: $    0.00
+2026-08-24 13:42:15,920 | ✅ [  4/96] NVDA   | Cap: $5080.96B | Vol:  140.6M | Price: $    0.00
+2026-08-24 13:42:16,978 | ✅ [  5/96] TSLA   | Cap: $1393.56B | Vol:   42.1M | Price: $    0.00
+2026-08-24 13:42:18,049 | ✅ [  6/96] RIVN   | Cap: $ 24.43B | Vol:   32.6M | Price: $    0.00
+2026-08-24 13:42:19,029 | ✅ [  7/96] BABA   | Cap: $283.69B | Vol:   12.3M | Price: $    0.00
+2026-08-24 13:42:20,148 | ✅ [  8/96] CMG    | Cap: $ 47.86B | Vol:   20.1M | Price: $    0.00
+2026-08-24 13:42:21,163 | ✅ [  9/96] MU     | Cap: $1036.74B | Vol:   48.2M | Price: $    0.00
+2026-08-24 13:42:26,708 | ✅ [ 13/96] CRWD   | Cap: $194.53B | Vol:   10.7M | Price: $    0.00
+2026-08-24 13:42:28,688 | ✅ [ 15/96] PLTR   | Cap: $428.31B | Vol:   43.2M | Price: $    0.00
+2026-08-24 13:42:29,761 | ✅ [ 16/96] AMD    | Cap: $749.40B | Vol:   28.8M | Price: $    0.00
+2026-08-24 13:42:32,396 | ✅ [ 18/96] XPEV   | Cap: $ 10.67B | Vol:    7.2M | Price: $    0.00
+2026-08-24 13:42:33,286 | ✅ [ 19/96] NIO    | Cap: $ 10.97B | Vol:   29.7M | Price: $    0.00
+2026-08-24 13:42:36,084 | ✅ [ 21/96] CRM    | Cap: $171.50B | Vol:   14.9M | Price: $    0.00
+2026-08-24 13:42:39,142 | ✅ [ 23/96] NFLX   | Cap: $334.74B | Vol:   42.6M | Price: $    0.00
+2026-08-24 13:42:40,071 | ✅ [ 24/96] CPNG   | Cap: $ 29.47B | Vol:   21.6M | Price: $    0.00
+2026-08-24 13:42:42,873 | ✅ [ 26/96] KO     | Cap: $394.39B | Vol:   17.6M | Price: $    0.00
+2026-08-24 13:42:43,804 | ✅ [ 27/96] T      | Cap: $176.14B | Vol:   62.9M | Price: $    0.00
+2026-08-24 13:42:46,717 | ✅ [ 29/96] OKTA   | Cap: $ 22.73B | Vol:    3.6M | Price: $    0.00
+2026-08-24 13:42:47,666 | ✅ [ 30/96] DDOG   | Cap: $ 82.27B | Vol:    5.2M | Price: $    0.00
+2026-08-24 13:42:48,614 | ✅ [ 31/96] UBER   | Cap: $160.26B | Vol:   20.7M | Price: $    0.00
+2026-08-24 13:42:49,548 | ✅ [ 32/96] BA     | Cap: $166.06B | Vol:    5.9M | Price: $    0.00
+2026-08-24 13:42:50,448 | ✅ [ 33/96] NET    | Cap: $100.99B | Vol:    3.7M | Price: $    0.00
+2026-08-24 13:42:53,148 | ✅ [ 35/96] VZ     | Cap: $208.34B | Vol:   27.0M | Price: $    0.00
+2026-08-24 13:42:54,132 | ✅ [ 36/96] META   | Cap: $1427.89B | Vol:   18.5M | Price: $    0.00
+2026-08-24 13:42:55,035 | ✅ [ 37/96] GOOGL  | Cap: $4260.42B | Vol:   32.0M | Price: $    0.00
+2026-08-24 13:42:58,262 | ✅ [ 39/96] V      | Cap: $710.86B | Vol:    8.1M | Price: $    0.00
+2026-08-24 13:42:59,260 | ✅ [ 40/96] AAPL   | Cap: $4536.53B | Vol:   56.4M | Price: $    0.00
+2026-08-24 13:43:00,546 | ✅ [ 41/96] INTU   | Cap: $101.28B | Vol:    5.1M | Price: $    0.00
+2026-08-24 13:43:01,647 | ✅ [ 42/96] ADBE   | Cap: $109.74B | Vol:    6.4M | Price: $    0.00
+2026-08-24 13:43:02,598 | ✅ [ 43/96] F      | Cap: $ 55.55B | Vol:   56.6M | Price: $    0.00
+2026-08-24 13:43:03,478 | ✅ [ 44/96] GM     | Cap: $ 78.80B | Vol:    7.5M | Price: $    0.00
+2026-08-24 13:43:04,419 | ✅ [ 45/96] ABT    | Cap: $201.81B | Vol:   11.9M | Price: $    0.00
+2026-08-24 13:43:05,328 | ✅ [ 46/96] ABNB   | Cap: $112.12B | Vol:    4.2M | Price: $    0.00
+2026-08-24 13:43:06,191 | ✅ [ 47/96] AMZN   | Cap: $2829.79B | Vol:   49.7M | Price: $    0.00
+2026-08-24 13:43:07,100 | ✅ [ 48/96] DASH   | Cap: $ 99.38B | Vol:    4.6M | Price: $    0.00
+2026-08-24 13:43:10,182 | ✅ [ 50/96] MSFT   | Cap: $3620.32B | Vol:   39.6M | Price: $    0.00
+2026-08-24 13:43:13,200 | ✅ [ 52/96] PG     | Cap: $339.40B | Vol:    9.2M | Price: $    0.00
+2026-08-24 13:43:14,106 | ✅ [ 53/96] LLY    | Cap: $1111.22B | Vol:    3.0M | Price: $    0.00
+2026-08-24 13:43:24,951 | ✅ [ 60/96] BKNG   | Cap: $160.22B | Vol:    7.0M | Price: $    0.00
+2026-08-24 13:43:27,631 | ✅ [ 62/96] RBLX   | Cap: $ 27.39B | Vol:   11.9M | Price: $    0.00
+2026-08-24 13:43:32,422 | ✅ [ 65/96] JD     | Cap: $ 39.25B | Vol:    8.6M | Price: $    0.00
+2026-08-24 13:43:35,505 | ✅ [ 67/96] JNJ    | Cap: $656.71B | Vol:    8.0M | Price: $    0.00
+2026-08-24 13:43:38,283 | ✅ [ 69/96] PDD    | Cap: $124.58B | Vol:    8.6M | Price: $    0.00
+2026-08-24 13:43:39,132 | ✅ [ 70/96] PINS   | Cap: $ 13.25B | Vol:   15.1M | Price: $    0.00
+2026-08-24 13:43:40,160 | ✅ [ 71/96] ZM     | Cap: $ 30.53B | Vol:    3.7M | Price: $    0.00
+2026-08-24 13:43:41,091 | ✅ [ 72/96] U      | Cap: $ 20.42B | Vol:    9.6M | Price: $    0.00
+2026-08-24 13:43:45,980 | ✅ [ 75/96] PYPL   | Cap: $ 52.75B | Vol:   15.9M | Price: $    0.00
+2026-08-24 13:43:47,030 | ✅ [ 76/96] JPM    | Cap: $947.48B | Vol:    8.8M | Price: $    0.00
+2026-08-24 13:43:47,951 | ✅ [ 77/96] MCD    | Cap: $192.61B | Vol:    4.6M | Price: $    0.00
+2026-08-24 13:43:48,830 | ✅ [ 78/96] QCOM   | Cap: $166.78B | Vol:   16.8M | Price: $    0.00
+2026-08-24 13:43:49,791 | ✅ [ 79/96] XOM    | Cap: $672.57B | Vol:   15.8M | Price: $    0.00
+2026-08-24 13:43:52,943 | ✅ [ 81/96] SNOW   | Cap: $113.37B | Vol:    7.1M | Price: $    0.00
+2026-08-24 13:43:54,095 | ✅ [ 82/96] CSCO   | Cap: $436.95B | Vol:   23.9M | Price: $    0.00
+2026-08-24 13:43:56,961 | ✅ [ 84/96] CVX    | Cap: $398.91B | Vol:    8.7M | Price: $    0.00
+2026-08-24 13:43:57,896 | ✅ [ 85/96] IBM    | Cap: $219.29B | Vol:   10.8M | Price: $    0.00
+2026-08-24 13:43:58,826 | ✅ [ 86/96] SBUX   | Cap: $122.12B | Vol:    7.5M | Price: $    0.00
+2026-08-24 13:44:06,064 | ✅ [ 90/96] AXP    | Cap: $228.18B | Vol:    3.0M | Price: $    0.00
+2026-08-24 13:44:07,187 | ✅ [ 91/96] BRK-B  | Cap: $1075.25B | Vol:    4.8M | Price: $    0.00
+2026-08-24 13:44:12,527 | ✅ [ 94/96] SHOP   | Cap: $192.37B | Vol:    9.4M | Price: $    0.00
+2026-08-24 13:44:16,886 | ================================================================================
+2026-08-24 13:44:16,886 | ✅ FILTERED: 96 → 61 symbols
+2026-08-24 13:44:16,886 |    Passed: 61 | Skipped: 35
+2026-08-24 13:44:16,886 | ================================================================================
+2026-08-24 13:44:16,886 | ✅ Ready to scan 50 liquid, established equities
+
+2026-08-24 13:44:16,886 | ================================================================================
+
+2026-08-24 13:44:16,886 | ================================================================================
+2026-08-24 13:44:16,886 | CYCLE | 2026-08-24 13:44:16 | PRODUCTION BOT (ENTRY + EXIT)
+2026-08-24 13:44:16,886 | Scanning 50 symbols for entry + managing 2 open positions
+2026-08-24 13:44:16,887 | ================================================================================
+2026-08-24 13:44:16,887 | 
+📋 PHASE 1: Exit Management
+2026-08-24 13:44:16,887 | --------------------------------------------------------------------------------
+2026-08-24 13:44:18,716 | 📊 Exits Executed: 0
+2026-08-24 13:44:18,717 | 
+📋 PHASE 2: Entry Screening
+2026-08-24 13:44:18,717 | --------------------------------------------------------------------------------
+2026-08-24 13:44:19,760 | ✅ [ 1/50] INTC   | ADX:    7.7 | Stoch:   50.3
+2026-08-24 13:44:20,534 | ✅ [ 2/50] COIN   | ADX:   15.2 | Stoch:    1.0
+2026-08-24 13:44:21,180 | ✅ [ 3/50] WMT    | ADX:   12.7 | Stoch:   98.6
+2026-08-24 13:44:21,862 | ✅ [ 4/50] NVDA   | ADX:   15.1 | Stoch:   16.0
+2026-08-24 13:44:22,482 | ✅ [ 5/50] TSLA   | ADX:   23.5 | Stoch:    6.5
+2026-08-24 13:44:23,472 | ✅ [ 6/50] RIVN   | ADX:   11.8 | Stoch:   52.4
+2026-08-24 13:44:24,394 | ✅ [ 7/50] BABA   | ADX:   22.4 | Stoch:   47.7
+2026-08-24 13:44:25,194 | ✅ [ 8/50] CMG    | ADX:    7.2 | Stoch:   82.4
+2026-08-24 13:44:25,855 | ✅ [ 9/50] MU     | ADX:    8.3 | Stoch:   35.3
+2026-08-24 13:44:26,696 | ✅ [11/50] PLTR   | ADX:   36.4 | Stoch:   73.0
+2026-08-24 13:44:27,358 | ✅ [12/50] AMD    | ADX:    7.7 | Stoch:   32.9
+2026-08-24 13:44:28,081 | ✅ [13/50] XPEV   | ADX:   15.8 | Stoch:    4.7
+2026-08-24 13:44:28,935 | ✅ [14/50] NIO    | ADX:    7.4 | Stoch:    8.6
+2026-08-24 13:44:29,568 | ✅ [15/50] CRM    | ADX:   20.0 | Stoch:   40.5
+2026-08-24 13:44:30,215 | ✅ [16/50] NFLX   | ADX:   22.5 | Stoch:   84.7
+2026-08-24 13:44:30,865 | ✅ [17/50] CPNG   | ADX:    6.9 | Stoch:   48.9
+2026-08-24 13:44:31,597 | ✅ [18/50] KO     | ADX:   20.2 | Stoch:   54.2
+2026-08-24 13:44:32,347 | ✅ [19/50] T      | ADX:   14.8 | Stoch:   87.5
+2026-08-24 13:44:33,323 | ✅ [20/50] OKTA   | ADX:   10.1 | Stoch:   19.9
+2026-08-24 13:44:34,712 | ✅ [21/50] DDOG   | ADX:   10.1 | Stoch:   31.4
+2026-08-24 13:44:35,457 | ✅ [22/50] UBER   | ADX:   13.4 | Stoch:   41.4
+2026-08-24 13:44:36,216 | ✅ [23/50] BA     | ADX:   18.2 | Stoch:   26.8
+2026-08-24 13:44:36,883 | ✅ [24/50] NET    | ADX:   16.6 | Stoch:   21.1
+2026-08-24 13:44:37,744 | ✅ [25/50] VZ     | ADX:    7.8 | Stoch:   87.0
+2026-08-24 13:44:38,408 | ✅ [26/50] META   | ADX:    8.8 | Stoch:   97.4
+2026-08-24 13:44:39,012 | ✅ [27/50] GOOGL  | ADX:   12.8 | Stoch:   62.7
+2026-08-24 13:44:39,629 | ✅ [28/50] V      | ADX:    4.2 | Stoch:   89.6
+2026-08-24 13:44:40,301 | ✅ [29/50] AAPL   | ADX:   18.1 | Stoch:   53.5
+2026-08-24 13:44:40,983 | ✅ [30/50] INTU   | ADX:   23.2 | Stoch:   74.5
+2026-08-24 13:44:41,770 | ✅ [31/50] ADBE   | ADX:   16.3 | Stoch:   56.4
+2026-08-24 13:44:42,517 | ✅ [32/50] F      | ADX:    7.2 | Stoch:   19.3
+2026-08-24 13:44:43,214 | ✅ [33/50] GM     | ADX:   16.2 | Stoch:   53.5
+2026-08-24 13:44:43,936 | ✅ [34/50] ABT    | ADX:   19.0 | Stoch:   53.3
+2026-08-24 13:44:44,585 | ✅ [35/50] ABNB   | ADX:   40.6 | Stoch:   57.0
+2026-08-24 13:44:45,239 | ✅ [36/50] AMZN   | ADX:   21.4 | Stoch:   82.4
+2026-08-24 13:44:45,914 | ✅ [37/50] DASH   | ADX:   24.7 | Stoch:   84.1
+2026-08-24 13:44:46,605 | ✅ [38/50] MSFT   | ADX:   31.7 | Stoch:   69.5
+2026-08-24 13:44:47,516 | ✅ [39/50] PG     | ADX:    4.5 | Stoch:   65.4
+2026-08-24 13:44:48,267 | ✅ [40/50] LLY    | ADX:   14.4 | Stoch:   48.8
+2026-08-24 13:44:48,911 | ✅ [41/50] BKNG   | ADX:   28.0 | Stoch:   67.8
+2026-08-24 13:44:49,526 | ✅ [42/50] RBLX   | ADX:   28.2 | Stoch:    3.0
+2026-08-24 13:44:50,183 | ✅ [43/50] JD     | ADX:   25.5 | Stoch:   15.8
+2026-08-24 13:44:50,183 | 🎯 ENTRY SIGNAL: JD BUY 1 @ $29.07
+2026-08-24 13:44:51,070 | ✅ Entry order executed: {'jsonrpc': '2.0', 'id': 2, 'result': {'content': [{'type': 'text', 'text': '{"data":{"order":{"id":"6a8c9122-4a98-4ec9-b106-699f80635619","instrument_id":"b1e0ba21-bf54-454a-a409-89fe275bbe05","symbol":"","side":"buy","type":"market","state":"unconfirmed","quantity":"1.000000","cumulative_quantity":"0.000000","price":"29.070000","stop_price":null,"average_price":null,"fees":"0.000000","dollar_based_amount":null,"time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","created_at":"2026-08-24T18:44:50.879327Z","last_transaction_at":"2026-08-24T18:44:50.879327Z","executions":[]}},"guide":"The order has been submitted â\x80\x94 not necessarily filled. Describe with state. Tell the user the order was placed and summarize symbol, side, type, quantity (or dollar_based_amount), and limit/stop prices; remind them it may not have filled yet and that they can check status or cancel via id. On error, the order was NOT placed â\x80\x94 report the error verbatim."}'}], 'structuredContent': {'data': {'order': {'id': '6a8c9122-4a98-4ec9-b106-699f80635619', 'instrument_id': 'b1e0ba21-bf54-454a-a409-89fe275bbe05', 'symbol': '', 'side': 'buy', 'type': 'market', 'state': 'unconfirmed', 'quantity': '1.000000', 'cumulative_quantity': '0.000000', 'price': '29.070000', 'stop_price': None, 'average_price': None, 'fees': '0.000000', 'dollar_based_amount': None, 'time_in_force': 'gfd', 'market_hours': 'regular_hours', 'trigger': 'immediate', 'placed_agent': 'agentic', 'created_at': '2026-08-24T18:44:50.879327Z', 'last_transaction_at': '2026-08-24T18:44:50.879327Z', 'executions': []}}, 'guide': 'The order has been submitted â\x80\x94 not necessarily filled. Describe with state. Tell the user the order was placed and summarize symbol, side, type, quantity (or dollar_based_amount), and limit/stop prices; remind them it may not have filled yet and that they can check status or cancel via id. On error, the order was NOT placed â\x80\x94 report the error verbatim.'}}}
+2026-08-24 13:44:51,072 | 📝 Position tracked: JD 1@ $29.07 @ 2026-08-24 13:44:16
+2026-08-24 13:44:51,811 | ✅ [44/50] JNJ    | ADX:   13.8 | Stoch:   74.1
+2026-08-24 13:44:52,486 | ✅ [45/50] PDD    | ADX:   17.6 | Stoch:   24.3
+2026-08-24 13:44:53,187 | ✅ [46/50] PINS   | ADX:    5.8 | Stoch:   67.7
+2026-08-24 13:44:53,891 | ✅ [48/50] U      | ADX:   42.2 | Stoch:   46.0
+2026-08-24 13:44:54,512 | ✅ [49/50] PYPL   | ADX:   21.5 | Stoch:   29.9
+2026-08-24 13:44:55,197 | ✅ [50/50] JPM    | ADX:    8.8 | Stoch:   71.8
+2026-08-24 13:44:55,197 | ================================================================================
+2026-08-24 13:44:55,197 | 📊 Entry Analysis: 48 analyzed | 0 skipped | 1 signals
+2026-08-24 13:44:55,197 |    Analyzed: INTC, COIN, WMT, NVDA, TSLA, RIVN, BABA, CMG, MU, PLTR, AMD, XPEV, NIO, CRM, NFLX, CPNG, KO, T, OKTA, DDOG +28
+2026-08-24 13:44:55,198 | ================================================================================
+
+2026-08-24 13:44:55,202 | [*] MCP subprocess terminated

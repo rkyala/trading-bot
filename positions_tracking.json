@@ -1,0 +1,47 @@
+{
+  "CRWD": {
+    "qty": 1,
+    "entry_price": 189.88999938964844,
+    "highest_price": 191.27999877929688,
+    "entry_time": "2026-08-24 13:03:13",
+    "entry_timestamp": "2026-08-24T13:03:23.398524",
+    "cycles_held": 2,
+    "retry_count": 0
+  },
+  "ZM": {
+    "qty": 1,
+    "entry_price": 103.59200286865234,
+    "highest_price": 104.40499877929688,
+    "entry_time": "2026-08-24 13:03:13",
+    "entry_timestamp": "2026-08-24T13:03:48.764894",
+    "cycles_held": 2,
+    "retry_count": 0
+  },
+  "JD": {
+    "qty": 1,
+    "entry_price": 29.065000534057617,
+    "highest_price": 29.21500015258789,
+    "entry_time": "2026-08-24 13:44:16",
+    "entry_timestamp": "2026-08-24T13:44:51.071572",
+    "cycles_held": 1,
+    "retry_count": 0
+  },
+  "TSLA": {
+    "qty": 1,
+    "entry_price": 350.5849914550781,
+    "highest_price": 350.5849914550781,
+    "entry_time": "2026-08-24 14:25:47",
+    "entry_timestamp": "2026-08-24T14:25:55.378851",
+    "cycles_held": 0,
+    "retry_count": 0
+  },
+  "RBLX": {
+    "qty": 1,
+    "entry_price": 38.560001373291016,
+    "highest_price": 38.560001373291016,
+    "entry_time": "2026-08-24 14:25:47",
+    "entry_timestamp": "2026-08-24T14:26:19.673194",
+    "cycles_held": 0,
+    "retry_count": 0
+  }
+}

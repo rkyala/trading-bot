@@ -1,0 +1,27 @@
+================================================================================
+ADD 9:00 AM CDT BOT CYCLE
+================================================================================
+
+Run this command in your terminal:
+
+crontab -e
+
+Then add this line at the BEGINNING of the bot cycles (before the 14:30 entry):
+
+0 14 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+
+Save and exit.
+
+================================================================================
+RESULT: New crontab will have 13 bot cycles
+================================================================================
+
+9:00 AM CDT  (14:00 UTC) ← NEW
+9:30 AM CDT  (14:30 UTC)
+10:00 AM CDT (15:00 UTC)
+... every 30 minutes ...
+3:00 PM CDT  (20:00 UTC)
+
+Total: 13 cycles (was 12)
+
+================================================================================

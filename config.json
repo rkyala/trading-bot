@@ -2,7 +2,7 @@
   "account": {
     "agentic_account_number": "432591949",
     "account_size_usd": 10000,
-    "position_size_pct": 0.005
+    "position_size_pct": 0.015
   },
   "strategy": {
     "symbol_source": "dynamic",
@@ -24,12 +24,24 @@
     },
     "exit_criteria": {
       "stoch_recovery": 50.0,
-      "trailing_stop_pct": 0.015
+      "trailing_stop_pct": 0.015,
+      "max_cycles": 6,
+      "max_retry_attempts": 3
+    },
+    "order_execution": {
+      "order_type": "limit",
+      "slippage_tolerance_pct": 0.5,
+      "timeout_seconds": 60
     }
   },
   "robinhood": {
     "agentic_endpoint": "https://agent.robinhood.com/mcp/trading",
     "oauth_file": "rh_oauth.json",
     "protocol_version": "2024-11"
+  },
+  "macro_signals": {
+    "fred_api_key": "c4ed8c00ed0694c114e4c6b75e755b2f",
+    "fed_rate_cache_minutes": 5,
+    "13f_scan_cache_hours": 4
   }
 }

@@ -1,0 +1,373 @@
+<svg viewBox="0 0 1600 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      :root {
+        --primary: #3b82f6;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --purple: #8b5cf6;
+        --gray-light: #f3f4f6;
+        --gray-dark: #1f2937;
+      }
+
+      * { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+      .bg-gradient { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+      .container { background: var(--gray-light); }
+
+      .header-main { font-size: 32px; font-weight: 800; fill: var(--gray-dark); letter-spacing: -0.5px; }
+      .header-sub { font-size: 14px; fill: #6b7280; font-weight: 500; letter-spacing: 0.5px; }
+
+      .component-title { font-size: 15px; font-weight: 700; fill: var(--gray-dark); }
+      .component-desc { font-size: 12px; fill: #6b7280; }
+      .component-stat { font-size: 11px; fill: #9ca3af; font-weight: 500; }
+
+      .card { fill: white; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.1)); }
+      .card-signal { stroke: #10b981; stroke-width: 2; }
+      .card-bot { stroke: #3b82f6; stroke-width: 2; }
+      .card-dash { stroke: #f59e0b; stroke-width: 2; }
+      .card-broker { stroke: #8b5cf6; stroke-width: 2; }
+
+      .status-dot { animation: pulse 2s infinite; }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      .status-active { fill: #10b981; }
+      .status-warning { fill: #f59e0b; }
+      .status-inactive { fill: #d1d5db; }
+
+      .arrow { stroke-width: 2.5; fill: none; stroke-linecap: round; }
+      .arrow-signal { stroke: #10b981; }
+      .arrow-bot { stroke: #3b82f6; }
+      .arrow-dash { stroke: #f59e0b; }
+      .arrow-broker { stroke: #8b5cf6; }
+
+      .label-time { font-size: 11px; fill: #9ca3af; font-style: italic; font-weight: 500; }
+      .label-badge { font-size: 10px; fill: white; font-weight: 600; }
+
+      .badge { rx: 4; }
+      .badge-signal { fill: #10b981; }
+      .badge-bot { fill: #3b82f6; }
+      .badge-dash { fill: #f59e0b; }
+      .badge-broker { fill: #8b5cf6; }
+
+      .metric-box { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .metric-label { font-size: 12px; fill: #6b7280; font-weight: 600; }
+      .metric-value { font-size: 18px; fill: var(--gray-dark); font-weight: 700; }
+      .metric-unit { font-size: 10px; fill: #9ca3af; }
+
+      .tier-header { font-size: 13px; font-weight: 700; fill: #6b7280; letter-spacing: 1px; text-transform: uppercase; }
+
+      .connector { stroke: #e5e7eb; stroke-width: 1.5; fill: none; stroke-dasharray: 4,4; }
+
+      .icon { font-size: 20px; }
+
+      .pulse-ring { stroke: #10b981; stroke-width: 1.5; fill: none; }
+      @keyframes pulse-ring {
+        0% { r: 12; opacity: 1; }
+        100% { r: 24; opacity: 0; }
+      }
+      .pulse { animation: pulse-ring 2s infinite; }
+    </style>
+
+    <marker id="arrowhead-signal" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#10b981"/>
+    </marker>
+    <marker id="arrowhead-bot" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowhead-dash" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowhead-broker" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1600" height="1000" fill="white"/>
+
+  <!-- Header -->
+  <rect width="1600" height="80" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="40" y="50" class="header-main">🤖 Trading Bot Architecture</text>
+  <text x="40" y="70" class="header-sub">Complete System Overview | Production Deployment</text>
+
+  <!-- ============ TIER 1: DATA SOURCES ============ -->
+  <text x="40" y="120" class="tier-header">📊 Data Sources Layer</text>
+
+  <!-- SEC EDGAR Card -->
+  <g>
+    <rect x="40" y="140" width="160" height="140" rx="12" class="card card-signal"/>
+    <circle cx="130" cy="160" r="8" class="status-dot status-active"/>
+    <text x="50" y="185" class="component-title">SEC EDGAR</text>
+    <text x="50" y="203" class="component-desc">13-F Filings</text>
+    <text x="50" y="220" class="component-stat">Institutional Holdings</text>
+    <text x="50" y="255" class="label-time">Quarterly (45-day lag)</text>
+  </g>
+
+  <!-- Yahoo Finance Card -->
+  <g>
+    <rect x="230" y="140" width="160" height="140" rx="12" class="card card-bot"/>
+    <circle cx="320" cy="160" r="8" class="status-dot status-active"/>
+    <text x="240" y="185" class="component-title">Yahoo Finance</text>
+    <text x="240" y="203" class="component-desc">Market Data</text>
+    <text x="240" y="220" class="component-stat">Prices, Volume, Trends</text>
+    <text x="240" y="255" class="label-time">Real-time (cached 5m)</text>
+  </g>
+
+  <!-- FRED API Card -->
+  <g>
+    <rect x="420" y="140" width="160" height="140" rx="12" class="card card-signal"/>
+    <circle cx="510" cy="160" r="8" class="status-dot status-warning"/>
+    <text x="430" y="185" class="component-title">FRED API</text>
+    <text x="430" y="203" class="component-desc">Macro Data</text>
+    <text x="430" y="220" class="component-stat">Fed Rates, Economic</text>
+    <text x="430" y="255" class="label-time">Needs API Key</text>
+  </g>
+
+  <!-- Robinhood API Card -->
+  <g>
+    <rect x="610" y="140" width="160" height="140" rx="12" class="card card-broker"/>
+    <circle cx="700" cy="160" r="8" class="status-dot status-active"/>
+    <text x="620" y="185" class="component-title">Robinhood</text>
+    <text x="620" y="203" class="component-desc">Brokerage API</text>
+    <text x="620" y="220" class="component-stat">Orders & Holdings</text>
+    <text x="620" y="255" class="label-time">MCP Integration</text>
+  </g>
+
+  <!-- ============ ARROW DOWN ============ -->
+  <path d="M 300 280 L 300 320" class="arrow connector"/>
+
+  <!-- ============ TIER 2: PROCESSING LAYER ============ -->
+  <text x="40" y="340" class="tier-header">⚡ Processing Layer (Parallel Execution)</text>
+
+  <!-- Signal Channel Component -->
+  <g>
+    <rect x="30" y="360" width="340" height="180" rx="14" class="card card-signal"/>
+    <rect x="40" y="365" width="320" height="35" fill="#10b981" opacity="0.1" rx="10"/>
+
+    <circle cx="330" cy="382" r="6" class="status-dot status-active"/>
+    <text x="50" y="390" class="component-title">🟢 Signal Channel</text>
+    <text x="300" y="390" class="label-badge" text-anchor="end" style="fill: #10b981;">LIVE</text>
+
+    <text x="50" y="415" class="component-desc">test_async_signal_channel.py</text>
+
+    <rect x="45" y="430" width="310" height="95" fill="none" stroke="#10b981" stroke-width="1" stroke-dasharray="3,3" rx="8"/>
+
+    <text x="60" y="450" class="component-stat">✓ Fetch Fed Rate (cached 5m)</text>
+    <text x="60" y="468" class="component-stat">✓ Scan 13-F Filings (cached 4h)</text>
+    <text x="60" y="486" class="component-stat">✓ Options Sweeps (future)</text>
+    <text x="60" y="504" class="component-stat">✓ Write macro_triggers.json</text>
+    <text x="60" y="522" class="component-stat">✓ TTL-based expiry management</text>
+
+    <text x="50" y="545" class="label-time">Execution: 4-7 seconds | Interval: Every 60s</text>
+  </g>
+
+  <!-- Bot Component -->
+  <g>
+    <rect x="390" y="360" width="340" height="180" rx="14" class="card card-bot"/>
+    <rect x="400" y="365" width="320" height="35" fill="#3b82f6" opacity="0.1" rx="10"/>
+
+    <circle cx="720" cy="382" r="6" class="status-dot status-active"/>
+    <text x="410" y="390" class="component-title">🔵 Trading Bot</text>
+    <text x="730" y="390" class="label-badge" text-anchor="end" style="fill: #3b82f6;">LIVE</text>
+
+    <text x="410" y="415" class="component-desc">bot_production_final.py</text>
+
+    <rect x="415" y="430" width="310" height="95" fill="none" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3,3" rx="8"/>
+
+    <text x="430" y="450" class="component-stat">Phase 1: Exit Management (2 positions)</text>
+    <text x="430" y="468" class="component-stat">  • Evaluate stop-loss / take-profit</text>
+    <text x="430" y="486" class="component-stat">Phase 2: Entry Screening (50 symbols)</text>
+    <text x="430" y="504" class="component-stat">  • ADX > 20, Stoch < 30, Fib confluence</text>
+    <text x="430" y="522" class="component-stat">  • Check macro signal queue</text>
+
+    <text x="410" y="545" class="label-time">Execution: 3-4 minutes | Interval: Every 30m</text>
+  </g>
+
+  <!-- Dashboard Component -->
+  <g>
+    <rect x="750" y="360" width="340" height="180" rx="14" class="card card-dash"/>
+    <rect x="760" y="365" width="320" height="35" fill="#f59e0b" opacity="0.1" rx="10"/>
+
+    <circle cx="1080" cy="382" r="6" class="status-dot status-active"/>
+    <text x="770" y="390" class="component-title">🟡 Live Dashboard</text>
+    <text x="1090" y="390" class="label-badge" text-anchor="end" style="fill: #f59e0b;">LIVE</text>
+
+    <text x="770" y="415" class="component-desc">dashboard_server.py:8888</text>
+
+    <rect x="775" y="430" width="310" height="95" fill="none" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,3" rx="8"/>
+
+    <text x="790" y="450" class="component-stat">✓ Market status (OPEN/CLOSED)</text>
+    <text x="790" y="468" class="component-stat">✓ Current cycle results</text>
+    <text x="790" y="486" class="component-stat">✓ Analyzed symbols (50)</text>
+    <text x="790" y="504" class="component-stat">✓ Open positions (3)</text>
+    <text x="790" y="522" class="component-stat">✓ Entry signals found</text>
+
+    <text x="770" y="545" class="label-time">Refresh: 2 seconds | URL: localhost:8888</text>
+  </g>
+
+  <!-- ============ ARROWS FROM SOURCES TO PROCESSING ============ -->
+  <path d="M 120 280 L 180 360" class="arrow arrow-signal" marker-end="url(#arrowhead-signal)"/>
+  <path d="M 310 280 L 340 360" class="arrow arrow-bot" marker-end="url(#arrowhead-bot)"/>
+  <path d="M 500 280 L 530 360" class="arrow arrow-signal" marker-end="url(#arrowhead-signal)"/>
+  <path d="M 690 280 L 700 360" class="arrow arrow-broker" marker-end="url(#arrowhead-broker)"/>
+
+  <!-- ============ CROSS CONNECTIONS ============ -->
+  <path d="M 370 450 Q 380 440 390 450" class="arrow arrow-signal" marker-end="url(#arrowhead-signal)" stroke-dasharray="4,4"/>
+  <path d="M 730 450 Q 750 440 750 450" class="arrow arrow-signal" marker-end="url(#arrowhead-signal)" stroke-dasharray="4,4"/>
+
+  <!-- ============ TIER 3: STATE MANAGEMENT ============ -->
+  <text x="40" y="630" class="tier-header">💾 State Management Layer</text>
+
+  <!-- Positions Tracking -->
+  <g>
+    <rect x="40" y="650" width="210" height="130" rx="12" class="card" stroke="#e5e7eb" stroke-width="1.5"/>
+    <rect x="50" y="660" width="190" height="28" fill="#3b82f6" opacity="0.1" rx="8"/>
+    <text x="55" y="679" class="component-title">📋 Positions</text>
+    <text x="55" y="703" class="component-desc">positions_tracking.json</text>
+    <text x="55" y="723" class="component-stat">CRWD: $189.89 (1)</text>
+    <text x="55" y="738" class="component-stat">ZM: $103.59 (1)</text>
+    <text x="55" y="753" class="component-stat">JD: $29.07 (1)</text>
+    <text x="55" y="768" class="component-stat">3 positions | $322.55 total</text>
+  </g>
+
+  <!-- Signal Queue -->
+  <g>
+    <rect x="270" y="650" width="210" height="130" rx="12" class="card card-signal" stroke-width="1.5"/>
+    <rect x="280" y="660" width="190" height="28" fill="#10b981" opacity="0.1" rx="8"/>
+    <text x="285" y="679" class="component-title">📡 Signal Queue</text>
+    <text x="285" y="703" class="component-desc">macro_triggers.json</text>
+    <text x="285" y="723" class="component-stat">Active: 0 signals</text>
+    <text x="285" y="738" class="component-stat">TTL: Dynamic expiry</text>
+    <text x="285" y="753" class="component-stat">Last update: 13:51 UTC</text>
+    <text x="285" y="768" class="component-stat">Confidence: 72% avg</text>
+  </g>
+
+  <!-- Config & Cache -->
+  <g>
+    <rect x="500" y="650" width="210" height="130" rx="12" class="card" stroke="#e5e7eb" stroke-width="1.5"/>
+    <rect x="510" y="660" width="190" height="28" fill="#f59e0b" opacity="0.1" rx="8"/>
+    <text x="515" y="679" class="component-title">⚙️ Config & Cache</text>
+    <text x="515" y="703" class="component-desc">config.json + .cache files</text>
+    <text x="515" y="723" class="component-stat">Entry/exit rules</text>
+    <text x="515" y="738" class="component-stat">Position sizing: 0.5%</text>
+    <text x="515" y="753" class="component-stat">Risk limits: -40% halt</text>
+    <text x="515" y="768" class="component-stat">Account: $10,000</text>
+  </g>
+
+  <!-- Cron Schedule -->
+  <g>
+    <rect x="730" y="650" width="360" height="130" rx="12" class="card" stroke="#e5e7eb" stroke-width="1.5"/>
+    <rect x="740" y="660" width="340" height="28" fill="#8b5cf6" opacity="0.1" rx="8"/>
+    <text x="745" y="679" class="component-title">⏱️ Execution Schedule</text>
+    <text x="745" y="705" class="component-stat">Signal Channel: ★ ★ ★ ★ ★ (every 60 sec)</text>
+    <text x="745" y="725" class="component-stat">Trading Bot: ● ● ○ ○ ○ (every 30 min, 9:30 AM - 4 PM CDT)</text>
+    <text x="745" y="745" class="component-stat">Dashboard: ◆ ◆ ◆ ◆ ◆ (every 2 sec, real-time)</text>
+    <text x="745" y="765" class="component-stat">Next bot cycle: 2:15 PM CDT | Next signal scan: every 60s</text>
+  </g>
+
+  <!-- ============ ARROWS TO STATE ============ -->
+  <path d="M 200 540 L 145 650" class="arrow connector"/>
+  <path d="M 560 540 L 375 650" class="arrow connector"/>
+  <path d="M 920 540 L 900 650" class="arrow connector"/>
+
+  <!-- ============ TIER 4: BROKER EXECUTION ============ -->
+  <text x="40" y="850" class="tier-header">🎯 Broker Integration & Execution</text>
+
+  <!-- MCP Server -->
+  <g>
+    <rect x="40" y="870" width="370" height="110" rx="12" class="card card-broker" stroke-width="2"/>
+    <rect x="50" y="878" width="350" height="30" fill="#8b5cf6" opacity="0.15" rx="8"/>
+
+    <circle cx="400" cy="893" r="6" class="status-dot status-active"/>
+    <text x="60" y="903" class="component-title">🟣 Robinhood MCP Server</text>
+    <text x="410" y="903" class="label-badge" text-anchor="end" style="fill: #8b5cf6;">READY</text>
+
+    <text x="60" y="925" class="component-desc">robinhood_mcp_local.py | OAuth 2.0 Authentication</text>
+    <text x="60" y="945" class="component-stat">• Atomic order execution (market orders only)</text>
+    <text x="60" y="960" class="component-stat">• Error detection & retry logic | • Position verification</text>
+    <text x="60" y="975" class="component-stat">• Non-blocking to main bot | • Full MCP protocol support</text>
+  </g>
+
+  <!-- Live Trading Account -->
+  <g>
+    <rect x="430" y="870" width="370" height="110" rx="12" class="card card-broker" stroke-width="2"/>
+    <rect x="440" y="878" width="350" height="30" fill="#8b5cf6" opacity="0.15" rx="8"/>
+
+    <circle cx="790" cy="893" r="6" class="status-dot status-active"/>
+    <text x="450" y="903" class="component-title">🟣 Robinhood Live Account</text>
+    <text x="800" y="903" class="label-badge" text-anchor="end" style="fill: #8b5cf6;">ACTIVE</text>
+
+    <text x="450" y="925" class="component-desc">Account: 432591949 (Agentic) | Margin Enabled</text>
+    <text x="450" y="945" class="component-stat">• Execute buy/sell orders in real-time</text>
+    <text x="450" y="960" class="component-stat">• Update positions | • Track fills & slippage</text>
+    <text x="450" y="975" class="component-stat">• Capital: $10,000 | • Circuit breaker: -40% halt</text>
+  </g>
+
+  <!-- ============ STATUS METRICS (Top Right) ============ -->
+  <g>
+    <rect x="1110" y="140" width="440" height="390" rx="14" fill="white" stroke="#e5e7eb" stroke-width="2"/>
+
+    <!-- Header -->
+    <rect x="1120" y="150" width="420" height="45" fill="#f3f4f6" rx="10"/>
+    <text x="1330" y="183" class="component-title" text-anchor="middle">System Status</text>
+
+    <!-- Metrics Grid -->
+    <g>
+      <!-- Signal Channel -->
+      <rect x="1120" y="210" width="200" height="85" rx="10" class="metric-box"/>
+      <circle cx="1320" cy="230" r="6" class="status-active"/>
+      <text x="1130" y="230" class="metric-label">Signal Channel</text>
+      <text x="1130" y="256" class="metric-value">LIVE</text>
+      <text x="1130" y="270" class="metric-unit">Every 60s | 4-7s execution</text>
+      <text x="1130" y="283" class="metric-unit">4 scans completed</text>
+
+      <!-- Trading Bot -->
+      <rect x="1330" y="210" width="200" height="85" rx="10" class="metric-box"/>
+      <circle cx="1530" cy="230" r="6" class="status-active"/>
+      <text x="1340" y="230" class="metric-label">Trading Bot</text>
+      <text x="1340" y="256" class="metric-value">LIVE</text>
+      <text x="1340" y="270" class="metric-unit">Every 30m | 3 positions</text>
+      <text x="1340" y="283" class="metric-unit">Next: 2:15 PM CDT</text>
+
+      <!-- Dashboard -->
+      <rect x="1120" y="310" width="200" height="85" rx="10" class="metric-box"/>
+      <circle cx="1320" cy="330" r="6" class="status-active"/>
+      <text x="1130" y="330" class="metric-label">Dashboard</text>
+      <text x="1130" y="356" class="metric-value">LIVE</text>
+      <text x="1130" y="370" class="metric-unit">Every 2s | Port 8888</text>
+      <text x="1130" y="383" class="metric-unit">Real-time updates</text>
+
+      <!-- Broker -->
+      <rect x="1330" y="310" width="200" height="85" rx="10" class="metric-box"/>
+      <circle cx="1530" cy="330" r="6" class="status-active"/>
+      <text x="1340" y="330" class="metric-label">Robinhood MCP</text>
+      <text x="1340" y="356" class="metric-value">READY</text>
+      <text x="1340" y="370" class="metric-unit">OAuth Authenticated</text>
+      <text x="1340" y="383" class="metric-unit">Market orders only</text>
+    </g>
+
+    <!-- Portfolio Section -->
+    <rect x="1120" y="410" width="410" height="110" rx="10" fill="#f9fafb"/>
+    <text x="1130" y="435" class="metric-label">Current Portfolio</text>
+
+    <text x="1140" y="460" class="component-stat">CRWD (Crowdstrike)</text>
+    <text x="1420" y="460" class="component-stat" text-anchor="end">1 @ $189.89</text>
+
+    <text x="1140" y="480" class="component-stat">ZM (Zoom)</text>
+    <text x="1420" y="480" class="component-stat" text-anchor="end">1 @ $103.59</text>
+
+    <text x="1140" y="500" class="component-stat">JD (JD.com) 🆕</text>
+    <text x="1420" y="500" class="component-stat" text-anchor="end">1 @ $29.07</text>
+
+    <rect x="1120" y="515" width="410" height="1" fill="#e5e7eb"/>
+
+    <text x="1140" y="540" class="component-stat" style="font-weight: 600;">Total Value</text>
+    <text x="1420" y="540" class="metric-value" text-anchor="end">$322.55</text>
+  </g>
+
+</svg>
