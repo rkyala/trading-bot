@@ -93,7 +93,7 @@ class MCPServer:
         if name == "place_equity_order":
             return self.place_order(arguments)
         elif name == "get_equity_positions":
-            return self.get_positions()
+            return self.get_positions(arguments)  # CRITICAL FIX #17: Pass arguments (includes account_number)
         elif name == "get_portfolio":
             return self.get_portfolio()
         else:
@@ -168,9 +168,13 @@ class MCPServer:
 
         return self._proxy_to_agentic("place_equity_order", agentic_args)
 
-    def get_positions(self) -> dict:
-        """Get positions via Robinhood Agentic MCP"""
-        return self._proxy_to_agentic("get_equity_positions", {})
+    def get_positions(self, arguments: dict = None) -> dict:
+        """Get positions via Robinhood Agentic MCP with account_number"""
+        args = arguments or {}
+        # Add account number if not provided
+        if "account_number" not in args:
+            args["account_number"] = AGENTIC_ACCOUNT
+        return self._proxy_to_agentic("get_equity_positions", args)
 
     def get_portfolio(self) -> dict:
         """Get portfolio via Robinhood Agentic MCP"""

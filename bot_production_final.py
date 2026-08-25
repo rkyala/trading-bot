@@ -232,10 +232,13 @@ class LocalMCPClient:
         })
 
     def get_positions(self):
-        """Get positions via MCP"""
+        """Get positions via MCP with required account_number parameter"""
+        account_number = self.config["account"]["agentic_account_number"]
         return self._rpc("tools/call", {
             "name": "get_equity_positions",
-            "arguments": {}
+            "arguments": {
+                "account_number": account_number
+            }
         })
 
     def get_accounts(self):
