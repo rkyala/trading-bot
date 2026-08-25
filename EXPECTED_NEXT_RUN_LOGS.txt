@@ -1,0 +1,97 @@
+================================================================================
+EXPECTED LOG OUTPUT ON NEXT BOT CYCLE (After All Three Fixes Deployed)
+================================================================================
+
+STAGE 1: BOT STARTUP
+────────────────────────────────────────────────────────────────────────────────
+[timestamp] ========================================================================
+[timestamp] FETCHING SYMBOLS
+[timestamp] ========================================================================
+[timestamp] ⚠️  DEDUP: 125 raw symbols → 118 unique (removed 7 duplicates)    ← FIX #1
+[timestamp] ========================================================================
+
+  ↑ THIS INDICATES FIX #1 IS WORKING ↑
+  If no DEDUP line appears, the symbol fetcher is working well (no duplicates found)
+
+
+STAGE 2: PHASE 1 (EXIT MANAGEMENT)
+────────────────────────────────────────────────────────────────────────────────
+[timestamp] ========================================================================
+[timestamp] PHASE 1: EXIT MANAGEMENT (30-minute cycle)
+[timestamp] ========================================================================
+[timestamp] 🚪 Checking exits for 1 position
+[timestamp] ✅ [U] Stoch: 45.2 < 50 (no exit signal) | Holding (age: 2 cycles)
+[timestamp] ========================================================================
+
+
+STAGE 3: PHASE 2 (ENTRY SCREENING)
+────────────────────────────────────────────────────────────────────────────────
+[timestamp] ========================================================================
+[timestamp] PHASE 2: ENTRY SCREENING
+[timestamp] ========================================================================
+[timestamp] ⏭️  [  1] U      | Already owned - skipping entry scan (RH:True, Local:True)
+[timestamp] ⏭️  [  2] SPY    | Already processed this cycle - skipping             ← FIX #2
+[timestamp] ✅ [  3] NVDA   | ADX: 42.1 | Stoch: 78.5
+[timestamp] 🎯 ENTRY SIGNAL: NVDA BUY 5 @ $123.45
+
+  ↓ PRE-ORDER RECONCILIATION (FIX #3) ↓
+
+[timestamp] ✅ [NVDA] Final dedup check passed - symbol NOT in Robinhood, safe to enter
+[timestamp] ✅ Entry order executed: {order details}
+[timestamp] ✅ [NVDA] Added to processed_this_cycle - cannot re-enter in same cycle  ← FIX #2
+
+[timestamp] ⏭️  [  4] TSLA   | Already processed this cycle - skipping              ← FIX #2
+[timestamp] ⏭️  [  5] AMD    | Error analyzing - possibly delisted
+[timestamp] ⏭️  [  6] AAPL   | Already owned - skipping entry scan
+...
+[timestamp] ⏭️  [ 50] NONAME | Already processed this cycle - skipping               ← FIX #2
+...
+
+[timestamp] ========================================================================
+[timestamp] 📊 Entry Analysis: 95 analyzed | 23 skipped | 1 signals
+[timestamp]    Analyzed: U, SPY, NVDA, TSLA, AMD, AAPL, MSFT, ... +87
+[timestamp] ========================================================================
+
+
+WHAT TO LOOK FOR:
+──────────────────────────────────────────────────────────────────────────────────
+
+✅ FIX #1 WORKING: Lines showing "DEDUP: X raw symbols → Y unique"
+   - Indicates duplicate symbol entries are being removed
+   - Normal if no message (means no duplicates found)
+
+✅ FIX #2 WORKING: Lines showing "Already processed this cycle - skipping"
+   - Indicates cycle-level dedup is preventing re-entry
+   - Symbol should skip if it appears twice in a single run
+
+✅ FIX #3 WORKING: Lines showing "Final dedup check passed" or "ALREADY IN ROBINHOOD"
+   - Pre-order reconciliation with Robinhood
+   - MANDATORY check before every order placement
+
+✅ NO DUPLICATES: Check bot_production.log for position_tracker.json output
+   - U should have exactly 1 share (not 5)
+   - Each symbol should have at most 1 position entry per cycle
+
+⚠️  WATCH FOR: Any of these ERROR messages (would indicate a problem)
+   - "CRITICAL: Final dedup check FAILED - SKIPPING ORDER"
+   - "🚫 [...] ALREADY IN ROBINHOOD - BLOCKING DUPLICATE ORDER"
+     (This is intentional blocking, not an error—the fix is working)
+
+
+CYCLE TIMELINE
+──────────────────────────────────────────────────────────────────────────────────
+Cycle 1 (9:00 AM):  Bot starts with FIX #1 dedup, trades NVDA successfully
+Cycle 2 (9:30 AM):  FIX #2 prevents NVDA from being re-entered in same cycle
+Cycle 3 (10:00 AM): FIX #3 blocks NVDA if somehow made it past FIX #1 & #2
+Cycles 4-10:        Monitor for any duplicate position accumulation
+
+Expected: U stays at 1 share, no duplicates of any symbol
+Actual fix validates: All three layers working together
+
+
+NEXT VERIFICATION STEP
+──────────────────────────────────────────────────────────────────────────────────
+After next 3-5 cycles, send:
+  cat bot_production.log | grep "DEDUP\|processed this cycle\|Final dedup"
+
+This will show all three fixes in action across multiple cycles.

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Production Trading Bot - Local MCP Bridge with FULL POSITION MANAGEMENT
 Entry + Exit Logic: Mean-reversion signals with automatic take-profit, stop-loss, time-based exits
@@ -486,6 +486,89 @@ class ExitSignalGenerator:
 
 
 # ============================================================================
+# EARNINGS CHECKER (PREVENTS EARNINGS-DAY TRADES)
+# ============================================================================
+
+class EarningsChecker:
+    """Check if stock has earnings coming soon and skip entry if so"""
+
+    @staticmethod
+    def has_imminent_earnings(symbol: str, hours_ahead: int = 24) -> Optional[Dict]:
+        """
+        Check if symbol has earnings coming within N hours
+        Returns earnings info if found, None if safe to trade
+
+        Args:
+            symbol: Stock symbol to check
+            hours_ahead: Hours into future to check (default 24 = today + tomorrow)
+
+        Returns:
+            Dict with earnings info if imminent, None if safe to trade
+        """
+        try:
+            from datetime import datetime, timedelta
+            import pytz
+
+            # Get ticker and extract earnings date
+            ticker = yf.Ticker(symbol)
+
+            # Try multiple paths to find earnings date
+            earnings_unix = None
+            earnings_info = ticker.info
+
+            # Path 1: earningsDate (Unix timestamp)
+            if "earningsDate" in earnings_info:
+                earnings_unix = earnings_info.get("earningsDate")
+
+            # Path 2: earningsDateList (array of Unix timestamps)
+            elif "earningsDateList" in earnings_info and earnings_info["earningsDateList"]:
+                earnings_unix = earnings_info["earningsDateList"][0]
+
+            # Path 3: Try to extract from quarterly earnings dates
+            elif "earningsDates" in earnings_info and earnings_info["earningsDates"]:
+                earnings_unix = earnings_info["earningsDates"][0]
+
+            if not earnings_unix:
+                logger.debug(f"   [DEBUG] {symbol}: No earnings date found in ticker info")
+                return None
+
+            # Convert Unix timestamp to datetime (market timezone)
+            market_tz = pytz.timezone('US/Eastern')
+            earnings_datetime = datetime.fromtimestamp(earnings_unix, tz=market_tz)
+            now = datetime.now(tz=market_tz)
+
+            # Calculate hours until earnings
+            hours_until = (earnings_datetime - now).total_seconds() / 3600
+
+            # If earnings are within the lookahead window, block entry
+            if 0 <= hours_until <= hours_ahead:
+                return {
+                    "symbol": symbol,
+                    "earnings_datetime": earnings_datetime.strftime("%Y-%m-%d %H:%M %Z"),
+                    "hours_until": round(hours_until, 1),
+                    "blocked": True
+                }
+
+            # If earnings are in past but recent, might affect stock behavior
+            elif -2 <= hours_until < 0:
+                return {
+                    "symbol": symbol,
+                    "earnings_datetime": earnings_datetime.strftime("%Y-%m-%d %H:%M %Z"),
+                    "hours_until": round(hours_until, 1),
+                    "blocked": True,
+                    "reason": "Just released"
+                }
+
+            # Safe to trade
+            return None
+
+        except Exception as e:
+            logger.debug(f"   [DEBUG] {symbol} earnings check failed: {e}")
+            # On error, assume safe (don't block trading on failed checks)
+            return None
+
+
+# ============================================================================
 # TRADING BOT (WITH FULL POSITION MANAGEMENT)
 # ============================================================================
 
@@ -504,7 +587,12 @@ class TradingBot:
         logger.info("=" * 80)
         logger.info("FETCHING SYMBOLS")
         logger.info("=" * 80)
-        self.symbols = DynamicSymbolFetcher.get_trending_symbols(config)
+        raw_symbols = DynamicSymbolFetcher.get_trending_symbols(config)
+
+        # CRITICAL FIX #1: Deduplicate symbols at initialization (prevents re-entering same symbol in one cycle)
+        self.symbols = list(dict.fromkeys(raw_symbols))
+        if len(self.symbols) < len(raw_symbols):
+            logger.warning(f"⚠️  DEDUP: {len(raw_symbols)} raw symbols → {len(self.symbols)} unique (removed {len(raw_symbols)-len(self.symbols)} duplicates)")
         logger.info("=" * 80 + "\n")
 
         if not self.symbols:
@@ -546,13 +634,17 @@ class TradingBot:
                         # Extract equity value - try multiple paths
                         if "data" in parsed and "account" in parsed["data"]:
                             portfolio_value = float(parsed["data"]["account"].get("equity", 0))
+                            logger.info(f"✅ Found equity via data.account path: ${portfolio_value:.2f}")
                         elif "account" in parsed:
                             portfolio_value = float(parsed["account"].get("equity", 0))
+                            logger.info(f"✅ Found equity via account path: ${portfolio_value:.2f}")
                         elif "equity" in parsed:
                             portfolio_value = float(parsed["equity"])
+                            logger.info(f"✅ Found equity via direct path: ${portfolio_value:.2f}")
                         else:
                             # Log what we got for debugging
-                            logger.debug(f"DEBUG: Could not find equity in parsed data: {json.dumps(parsed)[:200]}")
+                            logger.error(f"❌ Could not find equity in parsed data. Full response: {json.dumps(parsed)}")
+                            logger.error(f"Response keys available: {list(parsed.keys())}")
 
                 # Fallback to direct extraction
                 if portfolio_value == 0:
@@ -696,6 +788,29 @@ class TradingBot:
         analyzed = []
         skipped = []
 
+        # CRITICAL FIX #13: Track symbols processed this cycle (prevents duplicate entries in same run)
+        processed_this_cycle = set()
+
+        # ======================================================================
+        # INTEGRATION: Read 13-F Institutional Signals (NEW)
+        # ======================================================================
+        institutional_signals = {}
+        macro_triggers_file = Path("macro_triggers.json")
+        try:
+            if macro_triggers_file.exists():
+                with open(macro_triggers_file) as f:
+                    macro_data = json.load(f)
+                    institutional_signals = macro_data.get("signals", {})
+                    if institutional_signals:
+                        logger.info(f"🏛️  13-F INSTITUTIONAL SIGNALS LOADED: {len(institutional_signals)} active signals")
+                        for symbol, signal_data in institutional_signals.items():
+                            logger.info(f"   • {symbol}: {signal_data.get('reason', 'institutional activity')}")
+            else:
+                logger.debug("📭 No macro_triggers.json (13-F scanner may not have run yet)")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not read 13-F signals: {e}")
+            institutional_signals = {}
+
         # RETRY FAILED ORDERS (NEW: Auto-retry orders that failed last cycle)
         logger.info("🔄 Checking for failed orders to retry...")
         failed_orders_file = Path("failed_orders.json")
@@ -741,10 +856,34 @@ class TradingBot:
             except Exception as e:
                 logger.warning(f"⚠️  Error retrying failed orders: {e}")
 
+        # CRITICAL FIX #11: Get ACTUAL Robinhood positions to prevent duplicate entries
+        robinhood_positions = set()
+        try:
+            positions_response = self.mcp.get_positions()
+            if "result" in positions_response and "content" in positions_response["result"]:
+                content_text = positions_response["result"]["content"][0].get("text", "")
+                if content_text:
+                    parsed = json.loads(content_text)
+                    if "data" in parsed and isinstance(parsed["data"], list):
+                        robinhood_positions = {pos.get("symbol") for pos in parsed["data"] if pos.get("symbol")}
+                        logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
+            if not robinhood_positions:
+                logger.warning(f"⚠️  Could not load Robinhood positions - using local tracking only")
+                robinhood_positions = set(self.position_tracker.get_all().keys())
+        except Exception as e:
+            logger.warning(f"⚠️  Error fetching Robinhood positions: {e} - falling back to local tracking")
+            robinhood_positions = set(self.position_tracker.get_all().keys())
+
         for i, symbol in enumerate(self.symbols, 1):
-            # FIX #2: Skip entry screening if position already open for this symbol
-            if self.position_tracker.get_position(symbol):
-                logger.debug(f"⏭️  [{i:2}/{len(self.symbols)}] {symbol:6} | Already in open positions - skipping entry scan")
+            # CRITICAL FIX #13: Skip symbol if already processed in this cycle (prevents duplicate entries in same run)
+            if symbol in processed_this_cycle:
+                logger.info(f"⏭️  [{i:2}/{len(self.symbols)}] {symbol:6} | Already processed this cycle - skipping")
+                continue
+
+            # CRITICAL FIX #2: Skip entry screening if position already open for this symbol
+            # Check BOTH Robinhood (source of truth) AND local tracking
+            if symbol in robinhood_positions or self.position_tracker.get_position(symbol):
+                logger.info(f"⏭️  [{i:2}/{len(self.symbols)}] {symbol:6} | Already owned - skipping entry scan (RH:{symbol in robinhood_positions}, Local:{bool(self.position_tracker.get_position(symbol))})")
                 continue
 
             data = MarketDataFetcher.get_technicals(symbol)
@@ -754,15 +893,42 @@ class TradingBot:
                 continue
 
             analyzed.append(symbol)
-            logger.info(f"✅ [{i:2}/{len(self.symbols)}] {symbol:6} | ADX: {data.get('adx', 0):6.1f} | Stoch: {data.get('stoch_k', 0):6.1f}")
+
+            # INTEGRATION: Check for 13-F institutional backing (NEW)
+            institutional_boost = ""
+            if symbol in institutional_signals:
+                inst_signal = institutional_signals[symbol]
+                institutional_boost = f" | 🏛️  {inst_signal.get('reason', 'INSTITUTIONAL BACKING')}"
+                logger.info(f"✅ [{i:2}/{len(self.symbols)}] {symbol:6} | ADX: {data.get('adx', 0):6.1f} | Stoch: {data.get('stoch_k', 0):6.1f}{institutional_boost}")
+            else:
+                logger.info(f"✅ [{i:2}/{len(self.symbols)}] {symbol:6} | ADX: {data.get('adx', 0):6.1f} | Stoch: {data.get('stoch_k', 0):6.1f}")
 
             signal = self.entry_signal_gen.generate_signal(data)
             if not signal:
-                continue
+                # Check if there's institutional signal (can generate entry even without technical signal)
+                if symbol in institutional_signals:
+                    logger.info(f"⚡ [{symbol}] No technical signal, but INSTITUTIONAL SIGNAL DETECTED - boosting confidence")
+                    # Create synthetic signal from institutional data
+                    signal = {
+                        "symbol": symbol,
+                        "signal_type": "BUY",
+                        "price": data.get("price", 0),
+                        "adx": data.get("adx", 0),
+                        "stoch_k": data.get("stoch_k", 0),
+                        "source": "INSTITUTIONAL"
+                    }
+                else:
+                    continue
 
             signals_found += 1
             symbol = signal["symbol"]
             price = signal["price"]
+
+            # SAFETY FILTER: Skip if price exceeds $150/share (capital concentration limit)
+            max_price_per_share = 150.0
+            if price > max_price_per_share:
+                logger.info(f"⏭️  [{symbol}] Price ${price:.2f} exceeds ${max_price_per_share} cap - skipping entry")
+                continue
 
             # CRITICAL FIX #10: Position size bounds for edge cases
             # Calculate theoretical position size
@@ -789,7 +955,38 @@ class TradingBot:
                 logger.info(f"⏭️  [{symbol}] Price ${price:.2f} exceeds allocation - skipping")
                 continue
 
+            # EARNINGS FILTER: Skip entry if earnings coming soon (today/tomorrow)
+            earnings_check = EarningsChecker.has_imminent_earnings(symbol, hours_ahead=24)
+            if earnings_check:
+                hours = earnings_check.get("hours_until", "?")
+                earnings_date = earnings_check.get("earnings_datetime", "unknown")
+                logger.info(f"⏭️  [{symbol}] ⚠️  EARNINGS {hours}h away ({earnings_date}) - SKIPPING entry (earnings volatility risk)")
+                continue
+
             logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty} @ ${price:.2f}")
+
+            # CRITICAL FIX #12: Final dedup check RIGHT BEFORE order placement (MANDATORY)
+            # Re-fetch Robinhood positions to catch any trades entered THIS CYCLE
+            # If check FAILS, we MUST skip the order (not proceed blindly)
+            try:
+                final_positions_response = self.mcp.get_positions()
+                final_rh_positions = set()
+                if "result" in final_positions_response and "content" in final_positions_response["result"]:
+                    content_text = final_positions_response["result"]["content"][0].get("text", "")
+                    if content_text:
+                        parsed = json.loads(content_text)
+                        if "data" in parsed and isinstance(parsed["data"], list):
+                            final_rh_positions = {pos.get("symbol") for pos in parsed["data"] if pos.get("symbol")}
+
+                if symbol in final_rh_positions:
+                    logger.error(f"🚫 [{symbol}] ALREADY IN ROBINHOOD - BLOCKING DUPLICATE ORDER (final dedup caught it)")
+                    continue
+                else:
+                    logger.info(f"✅ [{symbol}] Final dedup check passed - symbol NOT in Robinhood, safe to enter")
+            except Exception as e:
+                logger.error(f"🚫 CRITICAL: Final dedup check FAILED: {e} - SKIPPING ORDER (cannot verify position status)")
+                logger.error(f"   Refusing to place order when dedup check fails - safety first!")
+                continue
 
             # BUG FIX: MCP doesn't support price parameter for limit orders
             # Revert to market orders for now (MCP schema limitation)
@@ -863,6 +1060,10 @@ class TradingBot:
                 # Track position with ACTUAL execution price (not stale snapshot)
                 self.position_tracker.add_position(symbol, qty, float(fill_price), cycle_time)
 
+                # CRITICAL FIX #13: Mark symbol as processed in this cycle
+                processed_this_cycle.add(symbol)
+                logger.info(f"✅ [{symbol}] Added to processed_this_cycle - cannot re-enter in same cycle")
+
                 if abs(float(fill_price) - price) > 0.01:
                     logger.info(f"   Fill price ${float(fill_price):.2f} differs from snapshot ${price:.2f} (slippage: {((float(fill_price)-price)/price)*100:+.2f}%)")
 
@@ -884,17 +1085,26 @@ class TradingBot:
 
 def main():
     """Main entry point with proper error handling"""
+    import traceback
     config = ConfigLoader.load()
 
     bot = TradingBot(config)
     try:
         bot.run_cycle()
+        logger.info("✅ Cycle completed successfully")
     except KeyboardInterrupt:
         logger.info("[*] Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Bot error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
     finally:
-        bot.stop()
+        try:
+            logger.info("[*] Cleaning up...")
+            bot.stop()
+            logger.info("✅ Cleanup completed")
+        except Exception as e:
+            logger.error(f"❌ Cleanup error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
 
 if __name__ == "__main__":
