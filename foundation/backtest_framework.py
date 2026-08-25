@@ -92,10 +92,6 @@ class BacktestEngine:
         max_position_value = self.current_balance * self.position_size_pct  # 1.5% of balance
         qty = max(1, int(max_position_value / entry_price))
 
-        # Hard cap: never exceed $150 per position (0.5% safety margin)
-        hard_cap = int((self.current_balance * 0.005) / entry_price)
-        qty = min(qty, hard_cap)
-
         return qty
 
     def enter_trade(self, symbol: str, entry_price: float,
