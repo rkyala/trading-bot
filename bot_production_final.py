@@ -819,13 +819,25 @@ class TradingBot:
         robinhood_positions = set()
         try:
             positions_response = self.mcp.get_positions()
-            if "result" in positions_response and "content" in positions_response["result"]:
+            logger.debug(f"[DEBUG] positions_response keys: {positions_response.keys() if isinstance(positions_response, dict) else 'not dict'}")
+
+            if "error" in positions_response:
+                logger.warning(f"⚠️  MCP error fetching positions: {positions_response.get('error')}")
+            elif "result" in positions_response and "content" in positions_response["result"]:
                 content_text = positions_response["result"]["content"][0].get("text", "")
                 if content_text:
                     parsed = json.loads(content_text)
-                    if "data" in parsed and isinstance(parsed["data"], list):
-                        robinhood_positions = {pos.get("symbol") for pos in parsed["data"] if pos.get("symbol")}
-                        logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
+                    # Try both data.positions and data.data structures
+                    if "data" in parsed:
+                        data_obj = parsed["data"]
+                        # Structure 1: data.positions (array)
+                        if "positions" in data_obj and isinstance(data_obj["positions"], list):
+                            robinhood_positions = {pos.get("symbol") for pos in data_obj["positions"] if pos.get("symbol")}
+                            logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
+                        # Structure 2: data itself is array (legacy)
+                        elif isinstance(data_obj, list):
+                            robinhood_positions = {pos.get("symbol") for pos in data_obj if pos.get("symbol")}
+                            logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
             if not robinhood_positions:
                 logger.warning(f"⚠️  Could not load Robinhood positions - using local tracking only")
                 robinhood_positions = set(self.position_tracker.get_all().keys())
