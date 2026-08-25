@@ -842,6 +842,12 @@ class TradingBot:
                     failed_orders = json.load(f)
 
                 for symbol, failed_order in list(failed_orders.items()):
+                    # CRITICAL FIX #16: Skip retry if already processed/owned (prevents duplicate retries)
+                    if symbol in processed_this_cycle:
+                        logger.info(f"⏭️  {symbol} already owned/processed - removing from retry queue")
+                        del failed_orders[symbol]
+                        continue
+
                     retry_count = failed_order.get("retry_count", 0)
 
                     # Only retry up to 3 times, then give up
