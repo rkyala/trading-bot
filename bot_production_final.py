@@ -279,6 +279,7 @@ class MarketDataFetcher:
         NOTE: Stochastic uses 30m candles for accurate intraday exit signals
         NOTE: backoff_ms adds delay between API calls to avoid rate limiting
         NOTE: use_cache reduces yfinance API load (default: enabled)
+        NOTE: IMPROVEMENT #3: Exponential backoff retry for yfinance rate limits
         """
         try:
             from datetime import datetime, timedelta
@@ -294,11 +295,26 @@ class MarketDataFetcher:
 
             time.sleep(backoff_ms / 1000.0)  # Rate limit protection: small delay between yfinance calls
 
-            # CRITICAL FIX #8: Use daily candles for ADX (avoids overnight gap distortion)
-            # ADX measured on daily trend to avoid false signals at market open
-            df_daily = yf.Ticker(symbol).history(period="60d", interval="1d").dropna()
-            if len(df_daily) < 20:
-                return None
+            # IMPROVEMENT #3: Exponential backoff retry for yfinance (max 3 attempts)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # CRITICAL FIX #8: Use daily candles for ADX (avoids overnight gap distortion)
+                    # ADX measured on daily trend to avoid false signals at market open
+                    df_daily = yf.Ticker(symbol).history(period="60d", interval="1d").dropna()
+                    if len(df_daily) < 20:
+                        logger.warning(f"⏭️  [{symbol}] Insufficient daily candles: {len(df_daily)} < 20")
+                        return None
+                    break  # Success
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Exponential: 1s, 2s, 4s
+                        logger.warning(f"⚠️  [{symbol}] Daily candle fetch failed (attempt {attempt + 1}/{max_retries}): {type(e).__name__}")
+                        logger.info(f"   Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"❌ [{symbol}] Daily candle fetch failed after {max_retries} retries")
+                        return None
 
             # Calculate ADX from daily candles (stable trend indicator)
             high_d = df_daily['High'].astype(float)
@@ -324,8 +340,27 @@ class MarketDataFetcher:
             adx_d = di_diff_d.rolling(14).mean()
 
             # CRITICAL FIX #1: Use 30-minute candles ONLY for Stochastic (intraday exit signals)
-            df_30m = yf.Ticker(symbol).history(period="5d", interval="30m").dropna()
-            if len(df_30m) < 30:
+            # IMPROVEMENT #3: Exponential backoff retry for 30m candles
+            df_30m = None
+            for attempt in range(max_retries):
+                try:
+                    df_30m = yf.Ticker(symbol).history(period="5d", interval="30m").dropna()
+                    if len(df_30m) < 30:
+                        logger.warning(f"⏭️  [{symbol}] Insufficient 30m candles: {len(df_30m)} < 30")
+                        return None
+                    break  # Success
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Exponential: 1s, 2s, 4s
+                        logger.warning(f"⚠️  [{symbol}] 30m candle fetch failed (attempt {attempt + 1}/{max_retries}): {type(e).__name__}")
+                        logger.info(f"   Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"❌ [{symbol}] 30m candle fetch failed after {max_retries} retries")
+                        return None
+
+            if df_30m is None or df_30m.empty:
+                logger.warning(f"⏭️  [{symbol}] No 30m data after retries")
                 return None
 
             high_30m = df_30m['High'].astype(float)
@@ -344,24 +379,34 @@ class MarketDataFetcher:
 
             stoch_d = stoch_k.rolling(3).mean()
 
-            result = {
+            # IMPROVEMENT #3: Validate NaN values before returning
+            result_data = {
                 "symbol": symbol,
-                "price": close_30m.iloc[-1],  # Current 30m price for position tracking
-                "adx": adx_d.iloc[-1],  # ADX from daily (gap-protected)
-                "stoch_k": stoch_k.iloc[-1],  # Stoch from 30m (sensitive)
-                "stoch_d": stoch_d.iloc[-1],
-                "high_14": high_max.iloc[-1],
-                "low_14": low_min.iloc[-1],
-                "range_14": range_hl.iloc[-1]
+                "price": float(close_30m.iloc[-1]),  # Current 30m price for position tracking
+                "adx": float(adx_d.iloc[-1]),  # ADX from daily (gap-protected)
+                "stoch_k": float(stoch_k.iloc[-1]),  # Stoch from 30m (sensitive)
+                "stoch_d": float(stoch_d.iloc[-1]),
+                "high_14": float(high_max.iloc[-1]),
+                "low_14": float(low_min.iloc[-1]),
+                "range_14": float(range_hl.iloc[-1])
             }
+
+            # Validate no NaN values in result
+            for key, value in result_data.items():
+                if pd.isna(value):
+                    logger.warning(f"⚠️  [{symbol}] NaN in {key} - skipping technical analysis")
+                    return None
+                if not isinstance(value, (int, float)) or value < 0 and key != "adx":
+                    logger.warning(f"⚠️  [{symbol}] Invalid {key} value: {value}")
+                    return None
 
             # OPTIMIZATION #19: Cache the result for 5 minutes (reduce API load)
             if use_cache:
                 from datetime import datetime
-                MarketDataFetcher._cache[symbol] = (datetime.now(), result)
+                MarketDataFetcher._cache[symbol] = (datetime.now(), result_data)
                 logger.debug(f"📦 [{symbol}] Cached for {MarketDataFetcher._cache_ttl_seconds}s")
 
-            return result
+            return result_data
         except Exception as e:
             logger.debug(f"Error analyzing {symbol}: {e}")
             return None
