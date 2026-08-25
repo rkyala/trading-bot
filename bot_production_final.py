@@ -533,15 +533,26 @@ class TradingBot:
             try:
                 # Handle nested MCP response structure
                 result = response.get("result", {})
+
+                # DEBUG: Log the response structure
+                logger.debug(f"DEBUG: get_accounts response keys: {result.keys() if isinstance(result, dict) else 'not a dict'}")
+
                 if "content" in result and isinstance(result["content"], list) and len(result["content"]) > 0:
                     content_text = result["content"][0].get("text", "")
                     if content_text:
                         parsed = json.loads(content_text)
-                        # Extract equity value
-                        if "account" in parsed:
+                        logger.debug(f"DEBUG: Parsed content keys: {parsed.keys() if isinstance(parsed, dict) else 'not a dict'}")
+
+                        # Extract equity value - try multiple paths
+                        if "data" in parsed and "account" in parsed["data"]:
+                            portfolio_value = float(parsed["data"]["account"].get("equity", 0))
+                        elif "account" in parsed:
                             portfolio_value = float(parsed["account"].get("equity", 0))
                         elif "equity" in parsed:
                             portfolio_value = float(parsed["equity"])
+                        else:
+                            # Log what we got for debugging
+                            logger.debug(f"DEBUG: Could not find equity in parsed data: {json.dumps(parsed)[:200]}")
 
                 # Fallback to direct extraction
                 if portfolio_value == 0:
