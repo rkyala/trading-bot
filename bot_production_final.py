@@ -691,6 +691,51 @@ class TradingBot:
             logger.info("=" * 80)
             return  # Exit immediately, no entries allowed
 
+        # RETRY FAILED ORDERS (NEW: Auto-retry orders that failed last cycle)
+        logger.info("🔄 Checking for failed orders to retry...")
+        failed_orders_file = Path("failed_orders.json")
+        if failed_orders_file.exists():
+            try:
+                with open(failed_orders_file) as f:
+                    failed_orders = json.load(f)
+
+                for symbol, failed_order in failed_orders.items():
+                    retry_count = failed_order.get("retry_count", 0)
+
+                    # Only retry up to 3 times, then give up
+                    if retry_count >= 3:
+                        logger.warning(f"⚠️  {symbol}: Exceeded max retries (3), removing from retry list")
+                        del failed_orders[symbol]
+                        continue
+
+                    # Try to place the order again
+                    logger.info(f"🔄 RETRY #{retry_count + 1}: {symbol} BUY 1 @ ${failed_order['price']:.2f}")
+                    response = self.mcp.place_order(symbol, failed_order['qty'], side="buy")
+
+                    if "error" in response:
+                        # Still failed - increment retry count
+                        failed_order["retry_count"] = retry_count + 1
+                        failed_order["last_attempt"] = datetime.now().isoformat()
+                        logger.warning(f"❌ RETRY FAILED for {symbol}: {response.get('error')}")
+                    else:
+                        # Retry succeeded!
+                        logger.info(f"✅ RETRY SUCCEEDED for {symbol}!")
+                        self.position_tracker.add_position(
+                            symbol=symbol,
+                            qty=failed_order['qty'],
+                            entry_price=failed_order['price'],
+                            entry_time=failed_order['entry_time']
+                        )
+                        del failed_orders[symbol]
+                        signals_found += 1
+
+                # Update failed orders file
+                with open(failed_orders_file, 'w') as f:
+                    json.dump(failed_orders, f, indent=2)
+
+            except Exception as e:
+                logger.warning(f"⚠️  Error retrying failed orders: {e}")
+
         signals_found = 0
         analyzed = []
         skipped = []
@@ -753,8 +798,39 @@ class TradingBot:
             response = self.mcp.place_order(symbol, qty, side="buy")
 
             if "error" in response:
-                # Order failed - DO NOT add to position tracking
+                # Order failed - Save to failed_orders.json for retry next cycle
                 logger.error(f"❌ Entry order FAILED for {symbol}: {response.get('error', 'Unknown error')}")
+
+                # Save failed order for retry
+                failed_orders_file = Path("failed_orders.json")
+                try:
+                    failed_orders = {}
+                    if failed_orders_file.exists():
+                        with open(failed_orders_file) as f:
+                            failed_orders = json.load(f)
+
+                    if symbol not in failed_orders:
+                        # First failure - initialize
+                        failed_orders[symbol] = {
+                            "symbol": symbol,
+                            "qty": qty,
+                            "price": price,
+                            "entry_time": current_time,
+                            "first_attempt": datetime.now().isoformat(),
+                            "last_attempt": datetime.now().isoformat(),
+                            "retry_count": 1,
+                            "error": str(response.get('error', 'Unknown error'))
+                        }
+                        logger.info(f"💾 Saved {symbol} to failed orders for retry next cycle")
+                    else:
+                        # Update existing failed order
+                        failed_orders[symbol]["last_attempt"] = datetime.now().isoformat()
+                        failed_orders[symbol]["retry_count"] = failed_orders[symbol].get("retry_count", 0) + 1
+
+                    with open(failed_orders_file, 'w') as f:
+                        json.dump(failed_orders, f, indent=2)
+                except Exception as e:
+                    logger.warning(f"⚠️  Could not save failed order: {e}")
             else:
                 # Order succeeded - extract actual fill price from MCP response (CRITICAL FIX #9)
                 logger.info(f"✅ Entry order executed: {response}")

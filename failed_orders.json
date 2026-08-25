@@ -1,0 +1,12 @@
+{
+  "U": {
+    "symbol": "U",
+    "qty": 1,
+    "price": 45.27,
+    "entry_time": "2026-08-25 09:13:56",
+    "first_attempt": "2026-08-25T09:13:56.640000",
+    "last_attempt": "2026-08-25T09:13:56.640000",
+    "retry_count": 1,
+    "error": "Broken pipe"
+  }
+}
