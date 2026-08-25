@@ -577,6 +577,11 @@ class TradingBot:
             return True  # Trading allowed
 
         except Exception as e:
+            logger.warning(f"⚠️  Circuit breaker parsing failed: {e}")
+            logger.warning(f"   Proceeding with trading (portfolio value unavailable)")
+            return True  # Allow trading if we can't get portfolio value
+
+        except Exception as e:
             logger.warning(f"⚠️  Circuit breaker check failed: {e}, proceeding with caution")
             return True  # Proceed on unexpected errors
 
