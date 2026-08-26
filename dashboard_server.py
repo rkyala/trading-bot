@@ -1,50 +1,41 @@
 #!/usr/bin/env python3
-"""Trading Bot Dashboard - Last & Next Cycle (FIXED)"""
+"""Trading Bot Dashboard Enhanced - with Analytics & Block Trades"""
 
 import json
 import re
+import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-import subprocess
 
 LOG_FILE = Path("/Users/ramayalala/trading_bot/bot_production.log")
+BLOCK_CSV = Path("/Users/ramayalala/trading_bot/block_trades.csv")
 PORT = 8888
 
 
 def get_next_cycle_time():
     """Calculate CORRECT next cycle time based on current CDT time"""
     now_utc = datetime.utcnow()
-    cdt_offset = timedelta(hours=-5)  # CDT = UTC-5
+    cdt_offset = timedelta(hours=-5)
     now_cdt = now_utc + cdt_offset
     
-    # Cron schedule times (CDT)
     cron_times = [
-        (9, 30), (10, 0), (10, 30), (11, 0), (11, 30), (12, 0),
-        (12, 30), (13, 0), (13, 30), (14, 0), (14, 30), (15, 0),
-        (15, 30), (16, 0)  # 4:00 PM CDT
+        (9, 0), (9, 30), (10, 0), (10, 30), (11, 0), (11, 30), (12, 0),
+        (12, 30), (13, 0), (13, 30), (14, 0), (14, 30), (15, 0), (15, 30)
     ]
     
     weekday = now_cdt.weekday()
     hour = now_cdt.hour
     minute = now_cdt.minute
     
-    # Check if it's a weekday
-    if weekday >= 5:  # Weekend (5=Sat, 6=Sun)
-        # Find next Monday
-        days_until_monday = 0 - weekday
-        if days_until_monday <= 0:
-            days_until_monday += 7
-        next_date = now_cdt + timedelta(days=days_until_monday)
-        return f"09:30 (Mon)"
+    if weekday >= 5:
+        return f"09:00 (Mon)"
     
-    # It's a weekday - find next cron time
     for h, m in cron_times:
         if h > hour or (h == hour and m > minute):
             return f"{h:02d}:{m:02d}"
     
-    # All cycles passed for today - next is tomorrow 9:30 AM
-    return "09:30 (tomorrow)"
+    return "09:00 (tomorrow)"
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -58,6 +49,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_json_response(self.get_status())
         elif self.path == "/api/cycles":
             self.send_json_response(self.get_cycles())
+        elif self.path == "/api/analytics":
+            self.send_json_response(self.get_analytics())
+        elif self.path == "/api/block_trades":
+            self.send_json_response(self.get_block_trades())
         else:
             self.send_error(404)
 
@@ -67,7 +62,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trading Bot</title>
+    <title>Trading Bot Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -76,7 +71,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             color: #e2e8f0;
             padding: 20px;
         }
-        .container { max-width: 1600px; margin: 0 auto; }
+        .container { max-width: 1800px; margin: 0 auto; }
         header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #475569; }
         h1 { font-size: 2.5em; margin-bottom: 15px; background: linear-gradient(135deg, #60a5fa, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .status-bar { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
@@ -84,24 +79,16 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         .badge { padding: 6px 12px; border-radius: 20px; font-weight: bold; }
         .badge-open { background: #10b981; color: white; }
         .badge-closed { background: #ef4444; color: white; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 30px; }
         .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; }
         .card h2 { font-size: 1.2em; margin-bottom: 15px; color: #60a5fa; border-bottom: 1px solid #334155; padding-bottom: 10px; }
         .stat-row { display: flex; justify-content: space-between; padding: 10px; margin: 8px 0; background: #0f172a; border-radius: 6px; }
         .stat-label { color: #94a3b8; }
         .stat-value { font-weight: bold; color: #60a5fa; }
-        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
-        .cycle-card { background: #1e293b; border: 2px solid #334155; border-radius: 12px; padding: 20px; }
-        .cycle-card.active { border-color: #10b981; }
-        .cycle-card.next { border-color: #60a5fa; }
-        .cycle-title { font-size: 1.3em; font-weight: bold; margin-bottom: 15px; color: #60a5fa; }
-        .cycle-time { font-size: 1.2em; color: #10b981; margin-bottom: 15px; font-weight: bold; }
-        .cycle-time.next { color: #60a5fa; }
-        .symbol-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 6px; margin-top: 10px; }
-        .symbol-tag { padding: 6px; border-radius: 4px; font-size: 0.8em; text-align: center; font-weight: bold; }
-        .analyzed { background: #10b981; color: white; }
-        .skipped { background: #ef4444; color: white; }
-        .signal { background: #fbbf24; color: #000; }
+        .block-table { width: 100%; border-collapse: collapse; font-size: 0.9em; margin-top: 15px; }
+        .block-table th, .block-table td { padding: 8px; text-align: left; border-bottom: 1px solid #334155; }
+        .block-table th { background: #0f172a; color: #60a5fa; font-weight: bold; }
+        .block-table tr:hover { background: #0f172a; }
         .footer { text-align: center; color: #94a3b8; margin-top: 30px; }
     </style>
 </head>
@@ -117,30 +104,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         <div class="grid">
             <div class="card">
-                <h2>📊 Stats</h2>
+                <h2>📊 Bot Stats</h2>
                 <div id="stats-container">Loading...</div>
             </div>
             <div class="card">
-                <h2>⚙️ Status</h2>
-                <div id="status-container">Loading...</div>
+                <h2>📈 Analytics</h2>
+                <div id="analytics-container">Loading...</div>
             </div>
             <div class="card">
-                <h2>📅 Schedule</h2>
-                <div id="schedule-container">Loading...</div>
+                <h2>⚙️ System Status</h2>
+                <div id="status-container">Loading...</div>
             </div>
         </div>
 
-        <div class="two-col">
-            <div class="cycle-card active">
-                <div class="cycle-title">📊 LAST CYCLE (COMPLETED)</div>
-                <div id="last-cycle-time" class="cycle-time">--:--:--</div>
-                <div id="last-cycle-container">Loading...</div>
-            </div>
-            <div class="cycle-card next">
-                <div class="cycle-title">⏭️ NEXT CYCLE (SCHEDULED)</div>
-                <div id="next-cycle-time" class="cycle-time next">--:--</div>
-                <div id="next-cycle-container">Loading...</div>
-            </div>
+        <div class="card">
+            <h2>🚨 Block Trades (Real-time Institutional Flows)</h2>
+            <div id="block-trades-container">Loading...</div>
         </div>
 
         <div class="footer">Auto-refreshing | Updated: <span id="last-updated">--</span></div>
@@ -162,7 +141,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             const h = cdt.getHours();
             const m = cdt.getMinutes();
             const d = cdt.getDay();
-            return (d >= 1 && d <= 5) && (h > 9 && h < 16 || (h === 9 && m >= 30));
+            return (d >= 1 && d <= 5) && (h >= 9 && h <= 15);
         }
 
         function updateTime() {
@@ -179,10 +158,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         async function updateAll() {
             try {
-                const [stats, status, cycles] = await Promise.all([
+                const [stats, analytics, status, blockTrades] = await Promise.all([
                     fetch('/api/stats').then(r => r.json()),
+                    fetch('/api/analytics').then(r => r.json()),
                     fetch('/api/status').then(r => r.json()),
-                    fetch('/api/cycles').then(r => r.json())
+                    fetch('/api/block_trades').then(r => r.json())
                 ]);
 
                 document.getElementById('stats-container').innerHTML = `
@@ -192,56 +172,29 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     <div class="stat-row"><span>Skipped:</span><span class="stat-value">${stats.skipped}</span></div>
                 `;
 
+                document.getElementById('analytics-container').innerHTML = `
+                    <div class="stat-row"><span>Stocks Checked:</span><span class="stat-value">${analytics.stocks_checked}</span></div>
+                    <div class="stat-row"><span>Entries Placed:</span><span class="stat-value">${analytics.entries}</span></div>
+                    <div class="stat-row"><span>Exits Executed:</span><span class="stat-value">${analytics.exits}</span></div>
+                    <div class="stat-row"><span>Block Trades:</span><span class="stat-value">${analytics.block_trades}</span></div>
+                `;
+
                 document.getElementById('status-container').innerHTML = `
-                    <div class="stat-row"><span>MCP:</span><span class="stat-value">${status.mcp_running ? '✅' : '⏸️'}</span></div>
                     <div class="stat-row"><span>Bot:</span><span class="stat-value">${status.bot_running ? '✅' : '⏸️'}</span></div>
-                    <div class="stat-row"><span>Log:</span><span class="stat-value">${status.log_size}</span></div>
+                    <div class="stat-row"><span>Log Size:</span><span class="stat-value">${status.log_size}</span></div>
                 `;
 
-                document.getElementById('schedule-container').innerHTML = `
-                    <div class="stat-row"><span>Frequency:</span><span class="stat-value">30 min</span></div>
-                    <div class="stat-row"><span>Hours:</span><span class="stat-value">9:30 - 4 PM</span></div>
-                    <div class="stat-row"><span>Days:</span><span class="stat-value">Mon-Fri</span></div>
-                `;
-
-                document.getElementById('last-cycle-time').textContent = cycles.last_cycle_time || 'Never';
-                let lastHtml = '';
-                if (cycles.last_cycle_data) {
-                    const d = cycles.last_cycle_data;
-                    if (d.analyzed && d.analyzed.length > 0) {
-                        lastHtml += '<div style="margin-bottom:15px;"><strong>✅ Analyzed (' + d.analyzed.length + '):</strong><div class="symbol-list">';
-                        d.analyzed.slice(0, 20).forEach(s => lastHtml += '<div class="symbol-tag analyzed">' + s + '</div>');
-                        if (d.analyzed.length > 20) lastHtml += '<div style="text-align:center;color:#94a3b8;">+' + (d.analyzed.length - 20) + '</div>';
-                        lastHtml += '</div></div>';
-                    }
-                    if (d.skipped && d.skipped.length > 0) {
-                        lastHtml += '<div><strong>⏭️ Skipped (' + d.skipped.length + '):</strong><div class="symbol-list">';
-                        d.skipped.forEach(s => lastHtml += '<div class="symbol-tag skipped">' + s + '</div>');
-                        lastHtml += '</div></div>';
-                    }
-                    if (d.signals && d.signals.length > 0) {
-                        lastHtml += '<div style="margin-top:15px;"><strong>🎯 Signals (' + d.signals.length + '):</strong><div class="symbol-list">';
-                        d.signals.forEach(s => lastHtml += '<div class="symbol-tag signal">' + s + '</div>');
-                        lastHtml += '</div></div>';
-                    } else {
-                        lastHtml += '<div style="color:#94a3b8;padding:10px;background:#0f172a;border-radius:6px;">No signals (market not ideal)</div>';
-                    }
+                let blockHtml = '';
+                if (blockTrades.trades && blockTrades.trades.length > 0) {
+                    blockHtml = '<table class="block-table"><thead><tr><th>Timestamp</th><th>Symbol</th><th>Price</th><th>Size</th><th>Value</th></tr></thead><tbody>';
+                    blockTrades.trades.forEach(trade => {
+                        blockHtml += `<tr><td>${trade.timestamp}</td><td><strong>${trade.symbol}</strong></td><td>$${parseFloat(trade.price).toFixed(2)}</td><td>${parseInt(trade.size).toLocaleString()}</td><td>$${parseFloat(trade.notional_value).toLocaleString('en-US', {maximumFractionDigits: 0})}</td></tr>`;
+                    });
+                    blockHtml += '</tbody></table>';
                 } else {
-                    lastHtml = '<div style="color:#94a3b8;">Waiting for first cycle...</div>';
+                    blockHtml = '<div style="color:#94a3b8;padding:10px;">No block trades detected yet</div>';
                 }
-                document.getElementById('last-cycle-container').innerHTML = lastHtml;
-
-                document.getElementById('next-cycle-time').textContent = cycles.next_cycle_time || '--:--';
-                let nextHtml = '<div style="color:#94a3b8;line-height:1.8;font-size:0.9em;">';
-                nextHtml += '⏳ Queued for execution...<br><br>';
-                nextHtml += '<strong>Process:</strong><br>';
-                nextHtml += '1. Fetch 50 trending<br>';
-                nextHtml += '2. Filter $10B+ cap<br>';
-                nextHtml += '3. ADX + Stochastic<br>';
-                nextHtml += '4. Fibonacci check<br>';
-                nextHtml += '5. Log results<br>';
-                nextHtml += '</div>';
-                document.getElementById('next-cycle-container').innerHTML = nextHtml;
+                document.getElementById('block-trades-container').innerHTML = blockHtml;
 
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
 
@@ -280,65 +233,72 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "skipped": content.count("possibly delisted") + content.count("Error analyzing")
         }
 
-    def get_status(self):
-        mcp = subprocess.run(["pgrep", "-f", "robinhood_mcp_local.py"], capture_output=True).returncode == 0
-        bot = subprocess.run(["pgrep", "-f", "bot_production_final.py"], capture_output=True).returncode == 0
-        if LOG_FILE.exists():
-            size = f"{LOG_FILE.stat().st_size / 1024:.1f}KB"
-        else:
-            size = "0B"
-        return {"mcp_running": mcp, "bot_running": bot, "log_file": "bot_production.log", "log_size": size}
-
-    def get_cycles(self):
-        last_time = ""
-        analyzed, skipped, signals = [], [], []
+    def get_analytics(self):
+        """Get analytics from logs"""
+        if not LOG_FILE.exists():
+            return {"stocks_checked": 0, "entries": 0, "exits": 0, "block_trades": 0}
         
-        if LOG_FILE.exists():
-            content = LOG_FILE.read_text()
-            lines = content.split('\n')
-            
-            for i in range(len(lines)-1, -1, -1):
-                if 'CYCLE |' in lines[i]:
-                    try:
-                        last_time = lines[i].split('|')[1].strip()
-                    except:
-                        pass
-                    break
-            
-            for line in lines:
-                m = re.search(r'✅ \[.*?\] (\w+)', line)
-                if m and m.group(1) not in analyzed:
-                    analyzed.append(m.group(1))
-                m = re.search(r'SIGNAL: (\w+)', line)
-                if m and m.group(1) not in signals:
-                    signals.append(m.group(1))
-            
-            for line in lines:
-                if 'possibly delisted' in line or 'Error analyzing' in line:
-                    m = re.search(r'\$(\w+):', line)
-                    if m and m.group(1) not in skipped and m.group(1) not in analyzed:
-                        skipped.append(m.group(1))
+        content = LOG_FILE.read_text()
         
-        next_time = get_next_cycle_time()
+        # Count stocks checked
+        stocks = set(re.findall(r'\[(\w{1,5})\]', content))
+        stocks = {s for s in stocks if s not in ["MCP", "UTC", "EST", "CDT"]}
+        
+        # Count entries
+        entries = content.count("Order placed")
+        
+        # Count exits
+        exits = content.count("Exit order executed")
+        
+        # Count block trades
+        block_trades = 0
+        if BLOCK_CSV.exists():
+            try:
+                with open(BLOCK_CSV) as f:
+                    block_trades = sum(1 for line in f) - 1
+            except:
+                pass
         
         return {
-            "last_cycle_time": last_time,
-            "last_cycle_data": {
-                "analyzed": analyzed[:50],
-                "skipped": skipped[:50],
-                "signals": signals[:10]
-            },
-            "next_cycle_time": next_time
+            "stocks_checked": len(stocks),
+            "entries": entries,
+            "exits": exits,
+            "block_trades": block_trades
         }
+
+    def get_status(self):
+        size = "0B"
+        if LOG_FILE.exists():
+            size = f"{LOG_FILE.stat().st_size / 1024:.1f}KB"
+        return {
+            "bot_running": subprocess.run(["pgrep", "-f", "bot_production_final.py"], capture_output=True).returncode == 0,
+            "log_file": "bot_production.log",
+            "log_size": size
+        }
+
+    def get_block_trades(self):
+        """Get latest block trades"""
+        trades = []
+        if BLOCK_CSV.exists():
+            try:
+                with open(BLOCK_CSV) as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        trades.append(row)
+                    trades = trades[-10:]  # Last 10
+            except:
+                pass
+        return {"trades": trades, "total": len(trades)}
 
     def log_message(self, *args, **kwargs):
         pass
 
 
 if __name__ == "__main__":
+    import subprocess
     server = HTTPServer(('', PORT), DashboardHandler)
-    print(f"✅ Dashboard at http://localhost:{PORT}")
-    print("   Last & Next cycles (FIXED TIME CALC)\n")
+    print(f"✅ Enhanced Dashboard at http://localhost:{PORT}")
+    print("   Analytics + Block Trades + Bot Status\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
