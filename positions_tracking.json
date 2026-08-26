@@ -1,20 +1,38 @@
 {
-  "RBLX": {
-    "qty": 1.321003963011889,
-    "entry_price": 37.85,
-    "highest_price": 37.98,
-    "entry_time": "2026-08-26 12:37:43",
-    "entry_timestamp": "2026-08-26T12:37:45.210897",
-    "cycles_held": 3,
+  "INTC": {
+    "qty": 15.33,
+    "entry_price": 99.98,
+    "highest_price": 99.98,
+    "entry_time": "auto-synced",
+    "entry_timestamp": "2026-08-26T14:36:00",
+    "cycles_held": 0,
     "retry_count": 0
   },
-  "JD": {
-    "qty": 1.7355085039916696,
-    "entry_price": 28.81,
-    "highest_price": 28.81,
-    "entry_time": "2026-08-26 12:40:39",
-    "entry_timestamp": "2026-08-26T12:40:41.468117",
-    "cycles_held": 2,
+  "LRCX": {
+    "qty": 3.76,
+    "entry_price": 333.85,
+    "highest_price": 333.85,
+    "entry_time": "auto-synced",
+    "entry_timestamp": "2026-08-26T14:36:00",
+    "cycles_held": 0,
+    "retry_count": 0
+  },
+  "KEYS": {
+    "qty": 1.18,
+    "entry_price": 337.47,
+    "highest_price": 337.47,
+    "entry_time": "auto-synced",
+    "entry_timestamp": "2026-08-26T14:36:00",
+    "cycles_held": 0,
+    "retry_count": 0
+  },
+  "BKNG": {
+    "qty": 0.7614,
+    "entry_price": 209.43,
+    "highest_price": 209.43,
+    "entry_time": "auto-synced",
+    "entry_timestamp": "2026-08-26T14:36:00",
+    "cycles_held": 0,
     "retry_count": 0
   },
   "NFLX": {
@@ -23,6 +41,33 @@
     "highest_price": 81.605,
     "entry_time": "2026-08-26 12:11:23",
     "entry_timestamp": "2026-08-26T12:11:25.070503",
+    "cycles_held": 0,
+    "retry_count": 0
+  },
+  "JD": {
+    "qty": 1.7355085039916696,
+    "entry_price": 28.81,
+    "highest_price": 28.81,
+    "entry_time": "2026-08-26 12:40:39",
+    "entry_timestamp": "2026-08-26T12:40:41.468117",
+    "cycles_held": 3,
+    "retry_count": 0
+  },
+  "RBLX": {
+    "qty": 1.321003963011889,
+    "entry_price": 37.85,
+    "highest_price": 37.98,
+    "entry_time": "2026-08-26 12:37:43",
+    "entry_timestamp": "2026-08-26T12:37:45.210897",
+    "cycles_held": 4,
+    "retry_count": 0
+  },
+  "U": {
+    "qty": 1.0,
+    "entry_price": 45.28,
+    "highest_price": 45.28,
+    "entry_time": "auto-synced",
+    "entry_timestamp": "2026-08-26T14:36:00",
     "cycles_held": 0,
     "retry_count": 0
   }
