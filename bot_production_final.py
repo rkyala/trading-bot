@@ -9,6 +9,7 @@ import logging
 import subprocess
 import sys
 import math
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -179,7 +180,7 @@ class LocalMCPClient:
 
         except Exception as e:
             logger.error(f"❌ Failed to start MCP: {e}")
-            sys.exit(1)
+            raise RuntimeError(f"Failed to initialize LocalMCPClient: {e}")
 
     def _rpc(self, method: str, params: dict = None) -> dict:
         """Send JSON-RPC request to local MCP server"""
@@ -195,22 +196,22 @@ class LocalMCPClient:
             self.process.stdin.write(json.dumps(req) + "\n")
             self.process.stdin.flush()
 
-            # CRITICAL FIX #7: Skip non-JSON lines on stdout (debug logs, print statements)
-            # Robinhood MCP should route logs to stderr, but be defensive
+            # CRITICAL FIX #7: Robust JSON parsing (strip whitespace, handle any valid JSON)
+            # Skip non-JSON lines (debug logs, print statements) and parse valid responses
             while True:
                 line = self.process.stdout.readline()
                 if not line:
                     return {"error": "No response from MCP process"}
 
                 line_str = line.strip()
+                if not line_str:
+                    continue
 
-                # Only parse valid JSON-RPC responses
-                if line_str.startswith("{") and line_str.endswith("}"):
-                    try:
-                        return json.loads(line_str)
-                    except json.JSONDecodeError:
-                        continue
-                # Skip non-JSON lines (debug output, log statements)
+                # Attempt to parse any line as JSON (no restrictive startswith/endswith checks)
+                try:
+                    return json.loads(line_str)
+                except json.JSONDecodeError:
+                    # Skip non-JSON lines (debug output, log statements)
                 else:
                     continue
 
@@ -469,80 +470,47 @@ class ExitSignalGenerator:
 # ============================================================================
 
 class EarningsChecker:
-    """Check if stock has earnings coming soon and skip entry if so"""
+    """Check if stock has earnings coming soon using cached Schwab data"""
 
     @staticmethod
     def has_imminent_earnings(symbol: str, hours_ahead: int = 24) -> Optional[Dict]:
         """
-        Check if symbol has earnings coming within N hours
+        Check earnings availability from local schwab_signals.json cache
+        WITHOUT making external yfinance API calls.
+
         Returns earnings info if found, None if safe to trade
 
         Args:
             symbol: Stock symbol to check
-            hours_ahead: Hours into future to check (default 24 = today + tomorrow)
+            hours_ahead: Hours into future to check (not used with Schwab cache)
 
         Returns:
-            Dict with earnings info if imminent, None if safe to trade
+            Dict with earnings block info if imminent, None if safe to trade
         """
         try:
-            from datetime import datetime, timedelta
-            import pytz
-
-            # Get ticker and extract earnings date
-            ticker = yf.Ticker(symbol)
-
-            # Try multiple paths to find earnings date
-            earnings_unix = None
-            earnings_info = ticker.info
-
-            # Path 1: earningsDate (Unix timestamp)
-            if "earningsDate" in earnings_info:
-                earnings_unix = earnings_info.get("earningsDate")
-
-            # Path 2: earningsDateList (array of Unix timestamps)
-            elif "earningsDateList" in earnings_info and earnings_info["earningsDateList"]:
-                earnings_unix = earnings_info["earningsDateList"][0]
-
-            # Path 3: Try to extract from quarterly earnings dates
-            elif "earningsDates" in earnings_info and earnings_info["earningsDates"]:
-                earnings_unix = earnings_info["earningsDates"][0]
-
-            if not earnings_unix:
-                logger.debug(f"   [DEBUG] {symbol}: No earnings date found in ticker info")
+            signals_file = Path("schwab_signals.json")
+            if not signals_file.exists():
+                # No cached signals - assume safe to trade
                 return None
 
-            # Convert Unix timestamp to datetime (market timezone)
-            market_tz = pytz.timezone('US/Eastern')
-            earnings_datetime = datetime.fromtimestamp(earnings_unix, tz=market_tz)
-            now = datetime.now(tz=market_tz)
+            signals_data = json.loads(signals_file.read_text())
 
-            # Calculate hours until earnings
-            hours_until = (earnings_datetime - now).total_seconds() / 3600
+            # Check if signal includes earnings_imminent flag from Schwab
+            for signal in signals_data.get("signals", []):
+                if signal.get("symbol") == symbol:
+                    # If Schwab cache marks earnings as imminent, block entry
+                    if signal.get("earnings_imminent", False):
+                        return {
+                            "symbol": symbol,
+                            "blocked": True,
+                            "reason": "Imminent earnings reported by Schwab"
+                        }
 
-            # If earnings are within the lookahead window, block entry
-            if 0 <= hours_until <= hours_ahead:
-                return {
-                    "symbol": symbol,
-                    "earnings_datetime": earnings_datetime.strftime("%Y-%m-%d %H:%M %Z"),
-                    "hours_until": round(hours_until, 1),
-                    "blocked": True
-                }
-
-            # If earnings are in past but recent, might affect stock behavior
-            elif -2 <= hours_until < 0:
-                return {
-                    "symbol": symbol,
-                    "earnings_datetime": earnings_datetime.strftime("%Y-%m-%d %H:%M %Z"),
-                    "hours_until": round(hours_until, 1),
-                    "blocked": True,
-                    "reason": "Just released"
-                }
-
-            # Safe to trade
+            # No earnings block found in cache - safe to trade
             return None
 
         except Exception as e:
-            logger.debug(f"   [DEBUG] {symbol} earnings check failed: {e}")
+            logger.debug(f"Schwab earnings check failed for {symbol}: {e}")
             # On error, assume safe (don't block trading on failed checks)
             return None
 
@@ -814,11 +782,14 @@ class TradingBot:
                             robinhood_positions = {pos.get("symbol") for pos in data_obj if pos.get("symbol")}
                             logger.info(f"🔍 Robinhood positions loaded: {robinhood_positions if robinhood_positions else 'none'}")
             if not robinhood_positions:
-                logger.warning(f"⚠️  Could not load Robinhood positions - using local tracking only")
-                robinhood_positions = set(self.position_tracker.get_all().keys())
+                logger.warning(f"⚠️  Could not load Robinhood positions securely - aborting entry phase")
+                logger.warning(f"   Reason: Empty response from Robinhood API. Cannot verify position state.")
+                logger.warning(f"   Action: Skipping entry screening to prevent duplicate orders")
+                return  # CRITICAL: Abort entry phase if we can't verify positions
         except Exception as e:
-            logger.warning(f"⚠️  Error fetching Robinhood positions: {e} - falling back to local tracking")
-            robinhood_positions = set(self.position_tracker.get_all().keys())
+            logger.warning(f"⚠️  Error fetching Robinhood positions: {e}")
+            logger.warning(f"   Cannot verify broker state - aborting entry phase for safety")
+            return  # CRITICAL: Abort if we can't securely query positions
 
         # Pre-fill processed_this_cycle with all symbols already in Robinhood
         processed_this_cycle.update(robinhood_positions)
