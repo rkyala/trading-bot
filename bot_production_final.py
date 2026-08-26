@@ -221,33 +221,19 @@ class LocalMCPClient:
     def place_order(self, symbol: str, qty: float, price: float = None, side: str = "buy"):
         """
         Place order via MCP (buy or sell)
-        Supports both fractional shares and dollar-based ordering
-
-        Strategy: Use dollar_amount for precise $150 position sizing
-        Robinhood supports: market orders with fractional shares via dollar_amount parameter
+        Robinhood MCP requires 'quantity' parameter (rounded to whole shares for market orders)
         """
-        # Calculate exact dollar amount (qty * price)
-        if price and price > 0:
-            dollar_amount = round(qty * price, 2)  # E.g., 0.5352 * $93.42 = $50.00
-            return self._rpc("tools/call", {
-                "name": "place_equity_order",
-                "arguments": {
-                    "symbol": symbol,
-                    "dollar_amount": dollar_amount,  # Exact $150 or $50
-                    "side": side
-                }
-            })
-        else:
-            # Fallback: use quantity (rounded to whole shares)
-            qty_whole = math.ceil(qty)
-            return self._rpc("tools/call", {
-                "name": "place_equity_order",
-                "arguments": {
-                    "symbol": symbol,
-                    "quantity": qty_whole,
-                    "side": side
-                }
-            })
+        # Use whole shares (Robinhood MCP requirement)
+        qty_whole = math.ceil(qty)
+
+        return self._rpc("tools/call", {
+            "name": "place_equity_order",
+            "arguments": {
+                "symbol": symbol,
+                "quantity": qty_whole,
+                "side": side
+            }
+        })
 
     def get_positions(self):
         """Get positions via MCP with required account_number parameter"""
