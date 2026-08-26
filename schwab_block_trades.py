@@ -258,7 +258,7 @@ class SchwabBlockTradeMonitor:
             logger.debug(f"Error processing quote tick: {e}")
 
     async def run(self):
-        """Main streaming loop (ASYNC)"""
+        """Main streaming loop with WebSocket resilience (FIXED)"""
         # Check if market is open
         now = datetime.now(self.eastern)
         if now.weekday() >= 5:  # Weekend
@@ -269,57 +269,98 @@ class SchwabBlockTradeMonitor:
             logger.info(f"🕐 Outside market hours (9 AM - 4 PM EST). Current: {now.strftime('%I:%M %p')}")
             return
 
-        self._init_clients()
+        reconnect_attempts = 0
+        max_reconnect_attempts = 3
+        backoff_seconds = 2
 
-        logger.info("📡 Logging into Schwab Stream...")
-        try:
-            await self.stream_client.login()
-            logger.info("✅ Stream authenticated")
-        except Exception as e:
-            logger.error(f"❌ Stream login failed: {e}")
-            return
-
-        # CRITICAL: Register handler BEFORE subscribing
-        self.stream_client.add_level_one_equity_handler(self._handle_quote_message)
-
-        logger.info(f"📊 Subscribing to Level 1 quotes for {len(self.watchlist)} symbols...")
-        try:
-            await self.stream_client.level_one_equity_subs(self.watchlist)
-            logger.info("✅ Subscriptions active")
-        except Exception as e:
-            logger.error(f"❌ Subscription failed: {e}")
-            return
-
-        logger.info("=" * 80)
-        logger.info("🟢 BLOCK TRADE DETECTOR ACTIVE (Level 1 Mode - Tiered OR Detection)")
-        logger.info(f"   Monitoring: {len(self.watchlist)} symbols across 3 liquidity tiers")
-        logger.info("   Detection Logic: Surge + (Min Shares OR Min Notional) per tier")
-        logger.info("")
-        for tier_name, tier_config in BLOCK_TRADE_CONFIG["tier_params"].items():
-            symbols = ", ".join(tier_config["symbols"][:3]) + ("..." if len(tier_config["symbols"]) > 3 else "")
-            logger.info(f"   📊 {tier_name.upper():12s}: Min {tier_config['min_shares']:>5,} sh | ${tier_config['min_notional']:>7,} | {tier_config['surge_threshold']}x surge | ({symbols})")
-        logger.info("=" * 80)
-
-        # Stream event loop
-        while True:
-            # Check if market is still open
-            now = datetime.now(self.eastern)
-            if now.weekday() >= 5:  # Weekend
-                logger.info("📅 Market closed (weekend). Stopping stream.")
-                break
-
-            if now.hour >= 16 and now.minute >= 5:  # After 4:05 PM
-                logger.info("🌙 Market closed (4:05 PM EST). Stopping stream.")
-                break
-
+        while reconnect_attempts < max_reconnect_attempts:
             try:
-                await self.stream_client.handle_message()
-            except asyncio.CancelledError:
-                logger.info("⏸️ Stream cancelled by user")
-                break
+                self._init_clients()
+
+                logger.info("📡 Logging into Schwab Stream...")
+                await self.stream_client.login()
+                logger.info("✅ Stream authenticated")
+                reconnect_attempts = 0  # Reset on successful connection
+
+                # CRITICAL: Register handler BEFORE subscribing
+                self.stream_client.add_level_one_equity_handler(self._handle_quote_message)
+
+                logger.info(f"📊 Subscribing to Level 1 quotes for {len(self.watchlist)} symbols...")
+                await self.stream_client.level_one_equity_subs(self.watchlist)
+                logger.info("✅ Subscriptions active")
+
+                logger.info("=" * 80)
+                logger.info("🟢 BLOCK TRADE DETECTOR ACTIVE (Level 1 Mode - Tiered OR Detection)")
+                logger.info(f"   Monitoring: {len(self.watchlist)} symbols across 3 liquidity tiers")
+                logger.info("   Detection Logic: Surge + (Min Shares OR Min Notional) per tier")
+                logger.info("")
+                for tier_name, tier_config in BLOCK_TRADE_CONFIG["tier_params"].items():
+                    symbols = ", ".join(tier_config["symbols"][:3]) + ("..." if len(tier_config["symbols"]) > 3 else "")
+                    logger.info(f"   📊 {tier_name.upper():12s}: Min {tier_config['min_shares']:>5,} sh | ${tier_config['min_notional']:>7,} | {tier_config['surge_threshold']}x surge | ({symbols})")
+                logger.info("=" * 80)
+
+                # Stream event loop - with WebSocket keep-alive
+                message_count = 0
+                last_heartbeat = datetime.now()
+
+                while True:
+                    # Check if market is still open
+                    now = datetime.now(self.eastern)
+                    if now.weekday() >= 5:  # Weekend
+                        logger.info("📅 Market closed (weekend). Stopping stream.")
+                        return
+
+                    if now.hour >= 16 and now.minute >= 5:  # After 4:05 PM
+                        logger.info("🌙 Market closed (4:05 PM EST). Stopping stream.")
+                        return
+
+                    try:
+                        # Handle message with timeout to detect dead connections
+                        await asyncio.wait_for(self.stream_client.handle_message(), timeout=30.0)
+                        message_count += 1
+
+                        # Heartbeat every 30 seconds to keep connection alive
+                        if (datetime.now() - last_heartbeat).total_seconds() > 30:
+                            logger.debug(f"💓 [Heartbeat] Received {message_count} messages in last 30s")
+                            message_count = 0
+                            last_heartbeat = datetime.now()
+
+                    except asyncio.TimeoutError:
+                        # Connection likely dead - no message in 30 seconds
+                        logger.warning("⚠️  Stream timeout (30s no message) - reconnecting...")
+                        reconnect_attempts += 1
+                        break  # Break inner loop, try to reconnect
+
+                    except asyncio.CancelledError:
+                        logger.info("⏸️ Stream cancelled by user")
+                        return
+
+                    except Exception as e:
+                        error_str = str(e)
+                        # Classify error: recoverable vs fatal
+                        if "1000" in error_str or "close frame" in error_str.lower():
+                            # Normal WebSocket close - recoverable
+                            logger.debug(f"📊 WebSocket keep-alive event: {e}")
+                            reconnect_attempts += 1
+                            break  # Reconnect
+                        else:
+                            # Unexpected error
+                            logger.error(f"❌ Stream error: {e}")
+                            reconnect_attempts += 1
+                            break  # Try to reconnect
+
             except Exception as e:
-                logger.error(f"Stream error: {e}")
-                await asyncio.sleep(5)
+                logger.error(f"❌ Connection initialization failed: {e}")
+                reconnect_attempts += 1
+
+            # Exponential backoff before reconnect
+            if reconnect_attempts < max_reconnect_attempts:
+                wait_time = backoff_seconds * (2 ** (reconnect_attempts - 1))
+                logger.warning(f"⏳ Reconnecting in {wait_time}s (attempt {reconnect_attempts}/{max_reconnect_attempts})")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"❌ Max reconnection attempts ({max_reconnect_attempts}) exceeded. Stopping detector.")
+                break
 
 # ============================================================================
 # MAIN ENTRYPOINT

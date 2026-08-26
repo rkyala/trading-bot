@@ -50,7 +50,7 @@
     "highest_price": 28.81,
     "entry_time": "synced-from-rh",
     "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 0,
+    "cycles_held": 2,
     "retry_count": 0
   },
   "RBLX": {
@@ -59,7 +59,7 @@
     "highest_price": 37.91,
     "entry_time": "synced-from-rh",
     "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 0,
+    "cycles_held": 1,
     "retry_count": 0
   },
   "U": {
@@ -68,6 +68,24 @@
     "highest_price": 45.28,
     "entry_time": "synced-from-rh",
     "entry_timestamp": "2026-08-26T14:42:00",
+    "cycles_held": 0,
+    "retry_count": 0
+  },
+  "SHOP": {
+    "qty": 0.3315649867374005,
+    "entry_price": 150.8,
+    "highest_price": 150.8,
+    "entry_time": "2026-08-26 15:31:05",
+    "entry_timestamp": "2026-08-26T15:31:06.471537",
+    "cycles_held": 0,
+    "retry_count": 0
+  },
+  "ABNB": {
+    "qty": 0.2655055225148683,
+    "entry_price": 188.32,
+    "highest_price": 188.32,
+    "entry_time": "2026-08-26 15:31:05",
+    "entry_timestamp": "2026-08-26T15:31:07.070434",
     "cycles_held": 0,
     "retry_count": 0
   }
