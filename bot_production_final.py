@@ -221,25 +221,26 @@ class LocalMCPClient:
     def place_order(self, symbol: str, qty: float = None, price: float = None, side: str = "buy"):
         """
         Place order via Robinhood MCP bridge
-        Robinhood MCP: Only accepts 'quantity' parameter (NOT dollar_amount)
-        Strategy: Use whole shares, respecting capital limits
+        Robinhood MCP: Accepts fractional shares as float quantities
+        Strategy: Pass fractional shares directly (respects capital limits via pre-flight checks)
         """
         if qty is None:
             raise ValueError("qty parameter required for place_order")
 
-        # Round DOWN to whole shares (respects capital limits)
-        # Example: 0.435 → 0 shares (skip), 1.7 → 1 share
-        qty_whole = int(qty)  # Truncate (round DOWN)
+        # Round to 4 decimal places for fractional share compatibility
+        # Example: 0.435278... → 0.4353 shares (execute fractional)
+        qty_formatted = round(qty, 4)
 
-        if qty_whole < 1:
-            logger.warning(f"❌ Order {symbol}: {qty:.4f} shares rounds to {qty_whole} < 1 - SKIPPING")
-            return {"error": "Quantity rounds to less than 1 share"}
+        # Prevent submitting zero or negative quantities
+        if qty_formatted <= 0:
+            logger.warning(f"❌ Order {symbol}: {qty:.6f} rounds to {qty_formatted} - SKIPPING")
+            return {"error": "Quantity must be > 0"}
 
         return self._rpc("tools/call", {
             "name": "place_equity_order",
             "arguments": {
                 "symbol": symbol,
-                "quantity": qty_whole,
+                "quantity": qty_formatted,
                 "side": side
             }
         })
