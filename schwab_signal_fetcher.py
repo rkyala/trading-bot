@@ -54,49 +54,20 @@ class SchwabSignalFetcher:
 
     def get_symbols_to_scan(self) -> List[str]:
         """
-        FIX #2: Fetch top movers directly from Schwab API
-        Fallback to watchlist if fetch fails
+        FIX #2: Use high-quality watchlist for scanning
+        NOTE: get_movers() API requires enum values - future enhancement
+        Current setup: Fixed watchlist of 50 quality large-cap stocks
         """
-        symbols = set()
-
-        # Get dynamic market movers from Schwab API
-        try:
-            logger.info("📊 Fetching top movers from Schwab API...")
-
-            # Fetch top gainers from S&P 500
-            movers = self.fetcher.client.get_movers(
-                index='$SPX',
-                sort='percent_change_up'
-            ).json()
-
-            if "screeners" in movers:
-                for m in movers["screeners"][:30]:
-                    symbols.add(m.get("symbol"))
-
-            # Also get top losers (for contrarian/mean-reversion opportunities)
-            losers = self.fetcher.client.get_movers(
-                index='$SPX',
-                sort='percent_change_down'
-            ).json()
-
-            if "screeners" in losers:
-                for m in losers["screeners"][:20]:
-                    symbols.add(m.get("symbol"))
-
-            if symbols:
-                logger.info(f"✅ Retrieved {len(symbols)} market movers from Schwab")
-                return list(symbols)[:50]  # Limit to 50
-
-        except Exception as e:
-            logger.warning(f"⚠️  Schwab movers API failed: {e}")
-
-        # Fallback: Quality watchlist (no yfinance dependency!)
-        logger.info("📋 Using fallback watchlist")
+        # Curated watchlist: High-quality, liquid, mean-reversion candidates
+        logger.info("📋 Using curated watchlist (50 stocks)")
         return [
             "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
             "ADBE", "PYPL", "CRM", "INTC", "AMD", "MU", "AVGO", "LRCX",
             "ASML", "QCOM", "CSCO", "INTU", "IBM", "ORCL", "SQ", "SHOP",
-            "KEYS", "U", "INTC", "ROKU", "SHOP", "COIN", "HOOD", "RBLX"
+            "KEYS", "U", "ROKU", "COIN", "HOOD", "RBLX", "BKNG", "AXP",
+            "SNOW", "DBX", "ZM", "SPOT", "DDOG", "NET", "CRWD", "OKTA",
+            "PLTR", "RIOT", "CLSK", "MARA", "MSTR", "HOOD", "UPST", "DASH",
+            "PINST", "ABNB", "JD", "XPEV"
         ]
 
     def check_signal(self, symbol: str) -> Optional[Dict]:

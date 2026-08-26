@@ -3,13 +3,16 @@
 
 cd /Users/ramayalala/trading_bot
 
+# Use explicit Python path to ensure correct environment with pandas
+PYTHON=/usr/bin/python3
+
 # Start MCP server in background
-python3 robinhood_mcp_local.py > mcp_server.log 2>&1 &
+$PYTHON robinhood_mcp_local.py > mcp_server.log 2>&1 &
 MCP_PID=$!
 sleep 3
 
 # Run bot with 300-second timeout using sleep & kill approach
-python3 bot_production_final.py >> bot_production.log 2>&1 &
+$PYTHON bot_production_final.py >> bot_production.log 2>&1 &
 BOT_PID=$!
 
 # Wait for bot to complete or timeout after 300 seconds

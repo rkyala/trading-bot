@@ -50,6 +50,10 @@ class SchwabMarketDataFetcher:
     _cache = {}  # Cache for technicals (same as yfinance version)
     _cache_ttl_seconds = 300  # 5-minute cache
 
+    def __init__(self):
+        """Initialize fetcher instance with client access"""
+        self.client = self._get_client()
+
     @classmethod
     def _get_client(cls):
         """Get or create authenticated Schwab client (lazy initialization)"""

@@ -1,0 +1,14 @@
+0 9 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+30 9 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 10 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+30 10 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 11 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+30 11 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 12 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+30 12 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 13 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+30 13 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 14 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+30 14 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 15 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/bot_cycle.log 2>&1
+0 2 * * * /usr/sbin/logrotate /Users/ramayalala/trading_bot/logrotate_trading_bot.conf >> /Users/ramayalala/trading_bot/logrotate.log 2>&1
