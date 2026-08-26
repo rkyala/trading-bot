@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional, List
 import pandas as pd
 import numpy as np
-import yfinance as yf
+# import yfinance as yf  # Disabled - using Schwab cached signals instead
 
 # Import dynamic symbol fetcher
 from symbol_fetcher import DynamicSymbolFetcher
@@ -265,150 +265,54 @@ class LocalMCPClient:
 # ============================================================================
 
 class MarketDataFetcher:
-    """Fetch and calculate technicals with safe division handling and caching"""
-
-    # OPTIMIZATION: Cache recent fetches to reduce yfinance API load
-    _cache = {}
-    _cache_ttl_seconds = 300  # 5-minute cache for intraday data
+    """Reads cached Schwab signals (updated every 10 min by schwab_signal_fetcher.py)"""
 
     @staticmethod
     def get_technicals(symbol: str, backoff_ms: int = 50, use_cache: bool = True) -> Optional[Dict]:
         """
-        Safe calculation of Stochastic (30m) and ADX (daily) with gap protection
-        NOTE: ADX uses daily candles to avoid overnight gap artifacts
-        NOTE: Stochastic uses 30m candles for accurate intraday exit signals
-        NOTE: backoff_ms adds delay between API calls to avoid rate limiting
-        NOTE: use_cache reduces yfinance API load (default: enabled)
-        NOTE: IMPROVEMENT #3: Exponential backoff retry for yfinance rate limits
+        Get technicals from cached Schwab signals
+        Replaces yfinance - no API calls from bot (just reads JSON)
         """
         try:
-            from datetime import datetime, timedelta
-            import time
+            signals_file = Path("schwab_signals.json")
 
-            # OPTIMIZATION #19: Check cache before fetching
-            if use_cache and symbol in MarketDataFetcher._cache:
-                cached_time, cached_data = MarketDataFetcher._cache[symbol]
-                age_seconds = (datetime.now() - cached_time).total_seconds()
-                if age_seconds < MarketDataFetcher._cache_ttl_seconds:
-                    logger.debug(f"📦 [{symbol}] Using cached data (age: {age_seconds:.0f}s)")
-                    return cached_data
-
-            time.sleep(backoff_ms / 1000.0)  # Rate limit protection: small delay between yfinance calls
-
-            # IMPROVEMENT #3: Exponential backoff retry for yfinance (max 3 attempts)
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    # CRITICAL FIX #8: Use daily candles for ADX (avoids overnight gap distortion)
-                    # ADX measured on daily trend to avoid false signals at market open
-                    df_daily = yf.Ticker(symbol).history(period="60d", interval="1d").dropna()
-                    if len(df_daily) < 20:
-                        logger.warning(f"⏭️  [{symbol}] Insufficient daily candles: {len(df_daily)} < 20")
-                        return None
-                    break  # Success
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt  # Exponential: 1s, 2s, 4s
-                        logger.warning(f"⚠️  [{symbol}] Daily candle fetch failed (attempt {attempt + 1}/{max_retries}): {type(e).__name__}")
-                        logger.info(f"   Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                    else:
-                        logger.error(f"❌ [{symbol}] Daily candle fetch failed after {max_retries} retries")
-                        return None
-
-            # Calculate ADX from daily candles (stable trend indicator)
-            high_d = df_daily['High'].astype(float)
-            low_d = df_daily['Low'].astype(float)
-            close_d = df_daily['Close'].astype(float)
-
-            tr_d = pd.concat([
-                high_d - low_d,
-                (high_d - close_d.shift()).abs(),
-                (low_d - close_d.shift()).abs()
-            ], axis=1).max(axis=1)
-
-            atr_d = tr_d.rolling(14).mean()
-            up_d = high_d - high_d.shift()
-            down_d = low_d.shift() - low_d
-
-            plus_dm_d = pd.Series(np.where((up_d > down_d) & (up_d > 0), up_d, 0), index=df_daily.index)
-            minus_dm_d = pd.Series(np.where((down_d > up_d) & (down_d > 0), down_d, 0), index=df_daily.index)
-
-            plus_di_d = 100 * (plus_dm_d.rolling(14).mean() / atr_d)
-            minus_di_d = 100 * (minus_dm_d.rolling(14).mean() / atr_d)
-            di_diff_d = (plus_di_d - minus_di_d).abs()
-            adx_d = di_diff_d.rolling(14).mean()
-
-            # CRITICAL FIX #1: Use 30-minute candles ONLY for Stochastic (intraday exit signals)
-            # IMPROVEMENT #3: Exponential backoff retry for 30m candles
-            df_30m = None
-            for attempt in range(max_retries):
-                try:
-                    df_30m = yf.Ticker(symbol).history(period="5d", interval="30m").dropna()
-                    if len(df_30m) < 30:
-                        logger.warning(f"⏭️  [{symbol}] Insufficient 30m candles: {len(df_30m)} < 30")
-                        return None
-                    break  # Success
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt  # Exponential: 1s, 2s, 4s
-                        logger.warning(f"⚠️  [{symbol}] 30m candle fetch failed (attempt {attempt + 1}/{max_retries}): {type(e).__name__}")
-                        logger.info(f"   Retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                    else:
-                        logger.error(f"❌ [{symbol}] 30m candle fetch failed after {max_retries} retries")
-                        return None
-
-            if df_30m is None or df_30m.empty:
-                logger.warning(f"⏭️  [{symbol}] No 30m data after retries")
+            if not signals_file.exists():
+                logger.warning(f"⏭️  [{symbol}] schwab_signals.json not found - signal fetcher may not have run")
                 return None
 
-            high_30m = df_30m['High'].astype(float)
-            low_30m = df_30m['Low'].astype(float)
-            close_30m = df_30m['Close'].astype(float)
+            # Load cached signals
+            signals_data = json.loads(signals_file.read_text())
 
-            # Safe Stochastic calculation (30m for sensitivity)
-            lookback = 14
-            high_max = high_30m.rolling(lookback).max()
-            low_min = low_30m.rolling(lookback).min()
-            range_hl = high_max - low_min
+            # Check signal freshness
+            if "timestamp" in signals_data:
+                last_fetch = datetime.fromisoformat(signals_data["timestamp"])
+                age_minutes = (datetime.now() - last_fetch).total_seconds() / 60
 
-            range_hl_safe = range_hl.replace(0, np.nan)
-            stoch_k = 100 * ((close_30m - low_min) / range_hl_safe)
-            stoch_k = stoch_k.fillna(50.0)
-
-            stoch_d = stoch_k.rolling(3).mean()
-
-            # IMPROVEMENT #3: Validate NaN values before returning
-            result_data = {
-                "symbol": symbol,
-                "price": float(close_30m.iloc[-1]),  # Current 30m price for position tracking
-                "adx": float(adx_d.iloc[-1]),  # ADX from daily (gap-protected)
-                "stoch_k": float(stoch_k.iloc[-1]),  # Stoch from 30m (sensitive)
-                "stoch_d": float(stoch_d.iloc[-1]),
-                "high_14": float(high_max.iloc[-1]),
-                "low_14": float(low_min.iloc[-1]),
-                "range_14": float(range_hl.iloc[-1])
-            }
-
-            # Validate no NaN values in result
-            for key, value in result_data.items():
-                if pd.isna(value):
-                    logger.warning(f"⚠️  [{symbol}] NaN in {key} - skipping technical analysis")
-                    return None
-                if not isinstance(value, (int, float)) or value < 0 and key != "adx":
-                    logger.warning(f"⚠️  [{symbol}] Invalid {key} value: {value}")
+                if age_minutes > 30:
+                    logger.warning(f"⚠️  [{symbol}] Schwab signals are {age_minutes:.0f} min old (stale)")
                     return None
 
-            # OPTIMIZATION #19: Cache the result for 5 minutes (reduce API load)
-            if use_cache:
-                from datetime import datetime
-                MarketDataFetcher._cache[symbol] = (datetime.now(), result_data)
-                logger.debug(f"📦 [{symbol}] Cached for {MarketDataFetcher._cache_ttl_seconds}s")
+            # Find symbol in cached signals
+            for signal in signals_data.get("signals", []):
+                if signal["symbol"] == symbol:
+                    logger.info(f"✅ [{symbol}] Using cached Schwab signal (ADX: {signal.get('adx', 0):.1f} | Stoch: {signal.get('stoch_k', 0):.1f})")
+                    return {
+                        "symbol": symbol,
+                        "price": float(signal.get("price", 0)),
+                        "adx": float(signal.get("adx", 0)),
+                        "stoch_k": float(signal.get("stoch_k", 100)),
+                        "stoch_d": float(signal.get("stoch_d", 100)),
+                        "high_14": float(signal.get("high_14", 0)),
+                        "low_14": float(signal.get("low_14", 0)),
+                        "range_14": float(signal.get("high_14", 0) - signal.get("low_14", 0))
+                    }
 
-            return result_data
+            # Symbol not in latest signals
+            logger.debug(f"⏭️  [{symbol}] Not in Schwab signals - no entry signal")
+            return None
+
         except Exception as e:
-            logger.debug(f"Error analyzing {symbol}: {e}")
+            logger.warning(f"⚠️  Could not get technicals for {symbol}: {e}")
             return None
 
 
@@ -435,7 +339,8 @@ class EntrySignalGenerator:
         if adx < self.entry_cfg["min_adx"]:
             return None
 
-        if stoch_k > self.entry_cfg["stoch_oversold"] or stoch_k <= stoch_d:
+        # For mean-reversion: reject if NOT oversold OR if K hasn't crossed above D (bullish crossover)
+        if stoch_k > self.entry_cfg["stoch_oversold"] or stoch_k < stoch_d:
             return None
 
         high_14 = data.get("high_14", 0)
