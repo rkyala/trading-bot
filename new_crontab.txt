@@ -1,8 +1,8 @@
-# Signal Fetcher - Every 10 minutes (9 AM - 2 PM CST, weekdays)
-*/10 9-14 * * 1-5 /opt/homebrew/bin/python3.10 /Users/ramayalala/trading_bot/schwab_signal_fetcher.py >> /Users/ramayalala/trading_bot/schwab_signal_fetcher.log 2>&1
+# Signal Fetcher - Every 10 minutes (9 AM - 3 PM CDT, weekdays)
+*/10 9-15 * * 1-5 /opt/homebrew/bin/python3.10 /Users/ramayalala/trading_bot/schwab_signal_fetcher.py >> /Users/ramayalala/trading_bot/schwab_signal_fetcher.log 2>&1
 
-# Bot Cycle - Every 30 minutes (9 AM - 2 PM CST, weekdays)
-0,30 9-14 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/cron.log 2>&1
+# Bot Cycle - Every 30 minutes (9 AM - 3 PM CDT, weekdays)
+0,30 9-15 * * 1-5 /Users/ramayalala/trading_bot/run_bot_cycle.sh >> /Users/ramayalala/trading_bot/cron.log 2>&1
 
 # Daily Log Rotation at 2 AM
 0 2 * * * /usr/sbin/logrotate /Users/ramayalala/trading_bot/logrotate_trading_bot.conf >> /Users/ramayalala/trading_bot/logrotate.log 2>&1
