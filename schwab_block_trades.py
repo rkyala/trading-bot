@@ -183,6 +183,17 @@ class SchwabBlockTradeMonitor:
 
     async def run(self):
         """Main streaming loop"""
+        # Check if market is open before attempting to connect
+        now = datetime.now(self.eastern)
+        if now.weekday() >= 5:  # Weekend
+            logger.info("📅 Market closed (weekend). Exiting.")
+            return
+
+        if now.hour < 9 or (now.hour >= 16 and now.minute >= 5):
+            logger.info(f"🕐 Outside market hours (9 AM - 4 PM EST). Current: {now.strftime('%I:%M %p')}")
+            logger.info("ℹ️  StreamClient only works during market hours. Waiting...")
+            return
+
         self._init_clients()
 
         logger.info("📡 Logging into Schwab Stream...")
@@ -191,6 +202,7 @@ class SchwabBlockTradeMonitor:
             logger.info("✅ Stream authenticated")
         except Exception as e:
             logger.error(f"❌ Stream login failed: {e}")
+            logger.info("ℹ️  Note: Streaming may only be available during market hours (9 AM - 4 PM EST)")
             return
 
         # Register handler BEFORE subscribing
