@@ -901,35 +901,31 @@ class TradingBot:
             symbol = signal["symbol"]
             price = signal["price"]
 
-            # SAFETY FILTER: Skip if price exceeds $150/share (capital concentration limit)
-            max_price_per_share = 150.0
-            if price > max_price_per_share:
-                logger.info(f"⏭️  [{symbol}] Price ${price:.2f} exceeds ${max_price_per_share} cap - skipping entry")
-                continue
-
             # CRITICAL FIX #10: Position size bounds for edge cases
-            # Calculate theoretical position size
+            # Calculate theoretical position size (in dollars)
+            # Position size cap: max $150 per stock ($30K account * 0.5% hardcap)
             target_alloc = self.account_cfg["account_size_usd"] * self.account_cfg["position_size_pct"]
-            qty = max(1, int(target_alloc / price))
+            qty = target_alloc / price  # Allow fractional shares: e.g., TSLA $344.63 → 0.435 shares
 
-            # PRODUCTION HARDENING: Hard position sizing cap (0.5% absolute max)
+            # PRODUCTION HARDENING: Hard position sizing cap (0.5% absolute max = $150 for $30K account)
             # This is a HARD OVERRIDE that cannot be bypassed by signal scores
             position_value = qty * price
             max_position_value = self.account_cfg["account_size_usd"] * 0.005  # 0.5% hard cap
             if position_value > max_position_value:
-                qty = max(1, int(max_position_value / price))
-                logger.info(f"🔐 [{symbol}] Position size HARD CAPPED to 0.5% max: {int(position_value)} → ${qty * price:.2f}")
+                qty = max_position_value / price  # Allow fractional shares
+                logger.info(f"🔐 [{symbol}] Position size CAPPED to 0.5% max: ${position_value:.2f} → ${qty * price:.2f} ({qty:.4f} shares)")
 
             # Safety check: prevent oversizing on penny stocks or micro-caps
-            # Ensure qty doesn't exceed account size even if price is very low
-            max_qty = int(self.account_cfg["account_size_usd"] / max(price, 0.01))
-            if qty > max_qty:
-                logger.warning(f"⚠️  [{symbol}] Position size capped: {qty} → {max_qty} (price ${price:.4f})")
-                qty = max_qty
+            # Ensure position value doesn't exceed 100% of account (sanity check)
+            max_position_value_sanity = self.account_cfg["account_size_usd"]
+            if (qty * price) > max_position_value_sanity:
+                logger.warning(f"⚠️  [{symbol}] Position size exceeds account size - capping")
+                qty = max_position_value_sanity / price
 
-            # Skip entry if position would be 0 (price too high for allocation)
-            if qty < 1:
-                logger.info(f"⏭️  [{symbol}] Price ${price:.2f} exceeds allocation - skipping")
+            # Skip entry if fractional share would be less than $1 (too small to trade)
+            position_value = qty * price
+            if position_value < 1.0:
+                logger.info(f"⏭️  [{symbol}] Position size ${position_value:.2f} < $1 minimum - skipping")
                 continue
 
             # EARNINGS FILTER: Skip entry if earnings coming soon (today/tomorrow)
@@ -940,7 +936,7 @@ class TradingBot:
                 logger.info(f"⏭️  [{symbol}] ⚠️  EARNINGS {hours}h away ({earnings_date}) - SKIPPING entry (earnings volatility risk)")
                 continue
 
-            logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty} @ ${price:.2f}")
+            logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty:.4f} shares @ ${price:.2f} (${qty * price:.2f} total)")
 
             # CRITICAL FIX #12: Final dedup check RIGHT BEFORE order placement (MANDATORY)
             # Re-fetch Robinhood positions to catch any trades entered THIS CYCLE
