@@ -218,22 +218,36 @@ class LocalMCPClient:
             logger.error(f"RPC error: {e}")
             return {"error": str(e)}
 
-    def place_order(self, symbol: str, qty: float, side: str = "buy"):
+    def place_order(self, symbol: str, qty: float, price: float = None, side: str = "buy"):
         """
         Place order via MCP (buy or sell)
-        Note: MCP server only supports market orders (price parameter rejected)
-        Note: Robinhood MCP does NOT support fractional shares - must use whole shares
+        Supports both fractional shares and dollar-based ordering
+
+        Strategy: Use dollar_amount for precise $150 position sizing
+        Robinhood supports: market orders with fractional shares via dollar_amount parameter
         """
-        # CRITICAL: Round UP to nearest whole share (Robinhood requirement)
-        qty_whole = math.ceil(qty)  # Round up: 0.5352 → 1 share
-        return self._rpc("tools/call", {
-            "name": "place_equity_order",
-            "arguments": {
-                "symbol": symbol,
-                "quantity": qty_whole,
-                "side": side
-            }
-        })
+        # Calculate exact dollar amount (qty * price)
+        if price and price > 0:
+            dollar_amount = round(qty * price, 2)  # E.g., 0.5352 * $93.42 = $50.00
+            return self._rpc("tools/call", {
+                "name": "place_equity_order",
+                "arguments": {
+                    "symbol": symbol,
+                    "dollar_amount": dollar_amount,  # Exact $150 or $50
+                    "side": side
+                }
+            })
+        else:
+            # Fallback: use quantity (rounded to whole shares)
+            qty_whole = math.ceil(qty)
+            return self._rpc("tools/call", {
+                "name": "place_equity_order",
+                "arguments": {
+                    "symbol": symbol,
+                    "quantity": qty_whole,
+                    "side": side
+                }
+            })
 
     def get_positions(self):
         """Get positions via MCP with required account_number parameter"""
@@ -699,7 +713,7 @@ class TradingBot:
 
                 # CRITICAL BUG FIX #5: Check order success BEFORE removing position from tracking
                 # If place_order fails, position tracking remains intact
-                response = self.mcp.place_order(symbol, qty, side="sell")
+                response = self.mcp.place_order(symbol, qty, price=exit_price, side="sell")
 
                 if "error" in response:
                     # OPERATIONAL RISK #3: Exit order failed - will retry next cycle
@@ -825,9 +839,9 @@ class TradingBot:
                         del failed_orders[symbol]
                         continue
 
-                    # Try to place the order again
-                    logger.info(f"🔄 RETRY #{retry_count + 1}: {symbol} BUY 1 @ ${failed_order['price']:.2f}")
-                    response = self.mcp.place_order(symbol, failed_order['qty'], side="buy")
+                    # Try to place the order again (with price for dollar-based ordering)
+                    logger.info(f"🔄 RETRY #{retry_count + 1}: {symbol} BUY {failed_order['qty']:.4f} @ ${failed_order['price']:.2f}")
+                    response = self.mcp.place_order(symbol, failed_order['qty'], price=failed_order['price'], side="buy")
 
                     if "error" in response:
                         # Still failed - increment retry count
@@ -940,9 +954,9 @@ class TradingBot:
                 logger.info(f"⏭️  [{symbol}] ⚠️  EARNINGS {hours}h away ({earnings_date}) - SKIPPING entry (earnings volatility risk)")
                 continue
 
-            qty_whole = math.ceil(qty)
-            actual_value = qty_whole * price
-            logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty_whole} shares @ ${price:.2f} (calc: {qty:.4f}→{qty_whole} whole | ${actual_value:.2f} actual)")
+            # Calculate exact dollar amount for precise $150 position sizing
+            dollar_amount = round(qty * price, 2)
+            logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty:.4f} shares @ ${price:.2f} (${dollar_amount:.2f} total - dollar-based order)")
 
             # CRITICAL FIX #12: Final dedup check RIGHT BEFORE order placement (MANDATORY)
             # Re-fetch Robinhood positions to catch any trades entered THIS CYCLE
@@ -971,8 +985,8 @@ class TradingBot:
             # Revert to market orders for now (MCP schema limitation)
             # TODO: Implement limit orders once MCP server schema supports it
 
-            # Place order and only track if successful
-            response = self.mcp.place_order(symbol, qty, side="buy")
+            # Place order with exact dollar amount (fractional shares via dollar_amount)
+            response = self.mcp.place_order(symbol, qty, price=price, side="buy")
 
             if "error" in response:
                 # Order failed - Save to failed_orders.json for retry next cycle
