@@ -218,34 +218,30 @@ class LocalMCPClient:
             logger.error(f"RPC error: {e}")
             return {"error": str(e)}
 
-    def place_order(self, symbol: str, qty: float = None, dollar_amount: float = None, price: float = None, side: str = "buy"):
+    def place_order(self, symbol: str, qty: float = None, price: float = None, side: str = "buy"):
         """
         Place order via Robinhood MCP bridge
-        Supports: fractional quantities, dollar-based market orders (for $150 caps)
-
-        Strategy:
-        - Prefer dollar_amount for precise position sizing (stays within capital limits)
-        - Fall back to fractional quantity if dollar_amount not provided
-        - Do NOT round up (respects capital caps)
+        Robinhood MCP: Only accepts 'quantity' parameter (NOT dollar_amount)
+        Strategy: Use whole shares, respecting capital limits
         """
-        arguments = {
-            "symbol": symbol,
-            "side": side
-        }
+        if qty is None:
+            raise ValueError("qty parameter required for place_order")
 
-        if dollar_amount is not None:
-            # PREFERRED: Dollar-based order for exact $150 position sizing
-            # This ensures we NEVER exceed capital limits
-            arguments["dollar_amount"] = round(dollar_amount, 2)
-            logger.debug(f"Order {symbol}: using dollar_amount=${arguments['dollar_amount']}")
-        elif qty is not None:
-            # FALLBACK: Fractional shares (pass as-is, no rounding up)
-            arguments["quantity"] = round(qty, 4) if qty % 1 != 0 else int(qty)
-            logger.debug(f"Order {symbol}: using quantity={arguments['quantity']}")
+        # Round DOWN to whole shares (respects capital limits)
+        # Example: 0.435 → 0 shares (skip), 1.7 → 1 share
+        qty_whole = int(qty)  # Truncate (round DOWN)
+
+        if qty_whole < 1:
+            logger.warning(f"❌ Order {symbol}: {qty:.4f} shares rounds to {qty_whole} < 1 - SKIPPING")
+            return {"error": "Quantity rounds to less than 1 share"}
 
         return self._rpc("tools/call", {
             "name": "place_equity_order",
-            "arguments": arguments
+            "arguments": {
+                "symbol": symbol,
+                "quantity": qty_whole,
+                "side": side
+            }
         })
 
     def get_positions(self):
@@ -710,9 +706,8 @@ class TradingBot:
                 # Revert to market orders for now (MCP schema limitation)
                 # TODO: Implement limit orders once MCP server schema supports it
 
-                # Place exit order (sell full position)
-                exit_dollar_amount = round(qty * exit_price, 2)
-                response = self.mcp.place_order(symbol, dollar_amount=exit_dollar_amount, side="sell")
+                # Place exit order (sell full position at current exit price)
+                response = self.mcp.place_order(symbol, qty=qty, price=exit_price, side="sell")
 
                 if "error" in response:
                     # OPERATIONAL RISK #3: Exit order failed - will retry next cycle
@@ -838,10 +833,9 @@ class TradingBot:
                         del failed_orders[symbol]
                         continue
 
-                    # Try to place the order again (dollar-based for exact sizing)
-                    retry_dollar = round(failed_order['qty'] * failed_order['price'], 2)
-                    logger.info(f"🔄 RETRY #{retry_count + 1}: {symbol} ${retry_dollar:.2f} @ ${failed_order['price']:.2f}")
-                    response = self.mcp.place_order(symbol, dollar_amount=retry_dollar, side="buy")
+                    # Try to place the order again
+                    logger.info(f"🔄 RETRY #{retry_count + 1}: {symbol} {failed_order['qty']:.4f} @ ${failed_order['price']:.2f}")
+                    response = self.mcp.place_order(symbol, qty=failed_order['qty'], price=failed_order['price'], side="buy")
 
                     if "error" in response:
                         # Still failed - increment retry count
@@ -985,17 +979,16 @@ class TradingBot:
             # Revert to market orders for now (MCP schema limitation)
             # TODO: Implement limit orders once MCP server schema supports it
 
-            # Calculate exact dollar amount for precise position sizing
-            dollar_amount = round(qty * price, 2)
+            # Verify order won't exceed capital limit
             max_position_value = self.account_cfg["account_size_usd"] * self.account_cfg["position_size_pct"]
+            order_value = qty * price
 
-            # Verify order respects capital limit (BEFORE placing)
-            if dollar_amount > max_position_value:
-                logger.warning(f"⚠️  [{symbol}] Order (${dollar_amount:.2f}) exceeds cap (${max_position_value:.2f}) - SKIPPING")
+            if order_value > max_position_value:
+                logger.warning(f"⚠️  [{symbol}] Order (${order_value:.2f}) exceeds cap (${max_position_value:.2f}) - SKIPPING")
                 continue
 
-            # Place dollar-based order for exact position sizing (fractional shares allowed)
-            response = self.mcp.place_order(symbol, dollar_amount=dollar_amount, side="buy")
+            # Place order (quantity is rounded DOWN to respect capital limits)
+            response = self.mcp.place_order(symbol, qty=qty, price=price, side="buy")
 
             if "error" in response:
                 # Order failed - Save to failed_orders.json for retry next cycle
