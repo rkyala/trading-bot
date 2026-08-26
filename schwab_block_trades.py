@@ -42,15 +42,33 @@ CREDENTIALS_FILE = Path("schwab_credentials.json")
 TOKEN_CACHE = Path("schwab_token.json")
 
 BLOCK_TRADE_CONFIG = {
-    "min_shares": 10000,
-    "min_notional_value": 200000,
-    "size_surge_threshold": 5.0,
     "watchlist": [
         "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "NFLX",
         "AMD", "INTC", "MU", "AVGO", "LRCX", "ASML", "CRM", "ADBE",
         "SHOP", "PYPL", "SQ", "CRWD", "NET", "OKTA", "DDOG", "ZM",
         "PLTR", "U", "COIN", "HOOD", "UPST", "RBLX", "DASH", "ABNB"
-    ]
+    ],
+    # Tiered detection parameters: OR logic (match EITHER shares OR notional)
+    "tier_params": {
+        "mega_cap": {  # AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL, META, NFLX
+            "symbols": ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "NFLX"],
+            "min_shares": 2500,          # Lower for high-priced stocks
+            "min_notional": 250000,
+            "surge_threshold": 2.5
+        },
+        "high_beta": {  # PLTR, HOOD, COIN, UPST, RBLX, CRWD, NET, OKTA
+            "symbols": ["PLTR", "HOOD", "COIN", "UPST", "RBLX", "CRWD", "NET", "OKTA"],
+            "min_shares": 5000,
+            "min_notional": 100000,
+            "surge_threshold": 3.0
+        },
+        "mid_cap": {  # INTC, AMD, MU, AVGO, LRCX, ASML, CRM, ADBE, SHOP, PYPL, SQ, DDOG, ZM, U, DASH, ABNB
+            "symbols": ["INTC", "AMD", "MU", "AVGO", "LRCX", "ASML", "CRM", "ADBE", "SHOP", "PYPL", "SQ", "DDOG", "ZM", "U", "DASH", "ABNB"],
+            "min_shares": 7500,
+            "min_notional": 75000,
+            "surge_threshold": 3.5
+        }
+    }
 }
 
 # ============================================================================
@@ -62,17 +80,25 @@ class SchwabBlockTradeMonitor:
 
     def __init__(self):
         self.config = self._load_config()
-        self.min_shares = BLOCK_TRADE_CONFIG["min_shares"]
-        self.min_value = BLOCK_TRADE_CONFIG["min_notional_value"]
-        self.size_surge_threshold = BLOCK_TRADE_CONFIG["size_surge_threshold"]
         self.watchlist = BLOCK_TRADE_CONFIG["watchlist"]
         self.rest_client = None
         self.stream_client = None
         self.eastern = pytz.timezone("US/Eastern")
         self.total_blocks_detected = 0
 
+        # Build symbol-to-tier mapping for quick lookups
+        self.symbol_tier = {}
+        for tier_name, tier_config in BLOCK_TRADE_CONFIG["tier_params"].items():
+            for symbol in tier_config["symbols"]:
+                self.symbol_tier[symbol] = tier_name
+
         # Track previous bid/ask sizes to detect changes
         self.quote_history = defaultdict(lambda: {"bid_size": 0, "ask_size": 0, "last_price": 0.0})
+
+    def _get_tier_params(self, symbol: str):
+        """Get detection parameters for a specific symbol (tier-based)"""
+        tier_name = self.symbol_tier.get(symbol, "mid_cap")  # Default to mid_cap
+        return BLOCK_TRADE_CONFIG["tier_params"][tier_name]
 
     def _load_config(self) -> dict:
         """Load Schwab credentials"""
@@ -118,7 +144,7 @@ class SchwabBlockTradeMonitor:
 
     def _handle_quote_message(self, message: dict):
         """
-        Process Level 1 quote data with CORRECT field mapping
+        Process Level 1 quote data with TIERED OR-BASED detection
 
         Schwab Level 1 Quote Fields:
         "1": Bid Price (float)
@@ -127,6 +153,10 @@ class SchwabBlockTradeMonitor:
         "4": Ask Price (float)
         "5": Ask Size (int, in 100s)
         "7": Last Price (float, fallback)
+
+        Detection Logic: OR-based (match EITHER shares OR notional)
+        - Bid Accumulation: size surge + (min_shares OR min_notional)
+        - Ask Distribution: size surge + (min_shares OR min_notional)
         """
         try:
             content = message.get("content", [])
@@ -151,6 +181,12 @@ class SchwabBlockTradeMonitor:
                 if last_price <= 0:
                     continue
 
+                # Get tier-specific parameters
+                tier_params = self._get_tier_params(symbol)
+                min_shares = tier_params["min_shares"]
+                min_notional = tier_params["min_notional"]
+                surge_threshold = tier_params["surge_threshold"]
+
                 # Get previous sizes (safe from KeyError due to defaultdict)
                 prev_data = self.quote_history[symbol]
                 prev_bid_size = prev_data["bid_size"]
@@ -167,47 +203,56 @@ class SchwabBlockTradeMonitor:
                 block_type = ""
                 detected_size = 0
 
-                # Bid surge evaluation (safe from ZeroDivisionError)
-                if prev_bid_size > 0 and bid_size >= self.min_shares:
+                # Bid surge evaluation: surge + (shares OR notional) ✅ OR LOGIC
+                if prev_bid_size > 0:
                     bid_surge = bid_size / prev_bid_size
-                    if bid_surge >= self.size_surge_threshold:
+                    bid_notional = bid_size * last_price
+                    is_surge = bid_surge >= surge_threshold
+                    is_large_shares = bid_size >= min_shares
+                    is_large_notional = bid_notional >= min_notional
+
+                    if is_surge and (is_large_shares or is_large_notional):
                         detected_block = True
                         block_type = "Bid Accumulation"
                         detected_size = bid_size
 
-                # Ask surge evaluation (safe from ZeroDivisionError)
-                if prev_ask_size > 0 and ask_size >= self.min_shares:
+                # Ask surge evaluation: surge + (shares OR notional) ✅ OR LOGIC
+                if prev_ask_size > 0 and not detected_block:  # Avoid double-reporting same tick
                     ask_surge = ask_size / prev_ask_size
-                    if ask_surge >= self.size_surge_threshold:
+                    ask_notional = ask_size * last_price
+                    is_surge = ask_surge >= surge_threshold
+                    is_large_shares = ask_size >= min_shares
+                    is_large_notional = ask_notional >= min_notional
+
+                    if is_surge and (is_large_shares or is_large_notional):
                         detected_block = True
                         block_type = "Ask Distribution"
                         detected_size = ask_size
 
-                # If we detected a block, log it
+                # If we detected a block, log it with tier information
                 if detected_block:
                     notional_value = last_price * detected_size
+                    self.total_blocks_detected += 1
+                    trade_dt = datetime.now(self.eastern).strftime("%Y-%m-%d %H:%M:%S")
+                    tier_name = self.symbol_tier.get(symbol, "unknown")
 
-                    # Only log if meets minimum notional value
-                    if notional_value >= self.min_value:
-                        self.total_blocks_detected += 1
-                        trade_dt = datetime.now(self.eastern).strftime("%Y-%m-%d %H:%M:%S")
+                    logger.info(
+                        f"🚨 BLOCK DETECTED #{self.total_blocks_detected:,} | "
+                        f"{trade_dt} | {symbol:<6} [{tier_name}] | "
+                        f"{detected_size:>9,} shares @ ${last_price:>8.2f} | "
+                        f"${notional_value:>12,.0f} | {block_type}"
+                    )
 
-                        logger.info(
-                            f"🚨 BLOCK DETECTED #{self.total_blocks_detected:,} | "
-                            f"{trade_dt} | {symbol:<6} | "
-                            f"{detected_size:>9,} shares @ ${last_price:>8.2f} | "
-                            f"${notional_value:>12,.0f} | {block_type}"
-                        )
-
-                        record = {
-                            "timestamp": trade_dt,
-                            "symbol": symbol,
-                            "price": last_price,
-                            "size": detected_size,
-                            "notional_value": round(notional_value, 2),
-                            "type": block_type
-                        }
-                        self._write_to_csv(record)
+                    record = {
+                        "timestamp": trade_dt,
+                        "symbol": symbol,
+                        "price": last_price,
+                        "size": detected_size,
+                        "notional_value": round(notional_value, 2),
+                        "type": block_type,
+                        "tier": tier_name
+                    }
+                    self._write_to_csv(record)
 
         except Exception as e:
             logger.debug(f"Error processing quote tick: {e}")
@@ -246,12 +291,13 @@ class SchwabBlockTradeMonitor:
             return
 
         logger.info("=" * 80)
-        logger.info("🟢 BLOCK TRADE DETECTOR ACTIVE (Level 1 Mode - Fixed)")
-        logger.info(f"   Monitoring: {len(self.watchlist)} symbols")
-        logger.info(f"   Min Size: {self.min_shares:,} shares")
-        logger.info(f"   Min Value: ${self.min_value:,}")
-        logger.info(f"   Size Surge Threshold: {self.size_surge_threshold}x")
-        logger.info(f"   Method: Bid/Ask Size Change Detection (Correct Field Mapping)")
+        logger.info("🟢 BLOCK TRADE DETECTOR ACTIVE (Level 1 Mode - Tiered OR Detection)")
+        logger.info(f"   Monitoring: {len(self.watchlist)} symbols across 3 liquidity tiers")
+        logger.info("   Detection Logic: Surge + (Min Shares OR Min Notional) per tier")
+        logger.info("")
+        for tier_name, tier_config in BLOCK_TRADE_CONFIG["tier_params"].items():
+            symbols = ", ".join(tier_config["symbols"][:3]) + ("..." if len(tier_config["symbols"]) > 3 else "")
+            logger.info(f"   📊 {tier_name.upper():12s}: Min {tier_config['min_shares']:>5,} sh | ${tier_config['min_notional']:>7,} | {tier_config['surge_threshold']}x surge | ({symbols})")
         logger.info("=" * 80)
 
         # Stream event loop
