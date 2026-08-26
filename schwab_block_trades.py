@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Schwab Real-Time Block Trade Detector
-Listens to Time & Sales WebSocket stream and logs institutional block trades
-Runs continuously during market hours (9 AM - 3 PM CDT)
+Schwab Block Trade Detector - Level 1 Quote Based (Fixed Field Mapping)
+Uses bid/ask size changes to infer institutional block liquidity.
+Critical fixes: Correct Schwab Level 1 field mapping, ZeroDivisionError protection
 """
 
 import asyncio
@@ -11,6 +11,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from collections import defaultdict
 
 import pandas as pd
 import pytz
@@ -19,7 +20,7 @@ try:
     import schwab
     from schwab.streaming import StreamClient
 except ImportError:
-    print("ERROR: schwab-py not installed. Run: /opt/homebrew/bin/pip3.10 install schwab-py")
+    print("ERROR: schwab-py not installed. Run: pip install schwab-py")
     sys.exit(1)
 
 # ============================================================================
@@ -36,15 +37,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = Path("config.json")
 BLOCK_TRADES_CSV = Path("block_trades.csv")
 CREDENTIALS_FILE = Path("schwab_credentials.json")
 TOKEN_CACHE = Path("schwab_token.json")
 
-# Default block trade thresholds
 BLOCK_TRADE_CONFIG = {
-    "min_shares": 10000,           # Minimum shares for block detection
-    "min_notional_value": 200000,  # Minimum dollar value ($200K+)
+    "min_shares": 10000,
+    "min_notional_value": 200000,
+    "size_surge_threshold": 5.0,
     "watchlist": [
         "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "NFLX",
         "AMD", "INTC", "MU", "AVGO", "LRCX", "ASML", "CRM", "ADBE",
@@ -54,21 +54,25 @@ BLOCK_TRADE_CONFIG = {
 }
 
 # ============================================================================
-# BLOCK TRADE MONITOR
+# BLOCK TRADE MONITOR (FIXED FIELD MAPPING)
 # ============================================================================
 
 class SchwabBlockTradeMonitor:
-    """Real-time block trade detector via Schwab WebSocket stream"""
+    """Block trade detector using Level 1 quote bid/ask size changes"""
 
     def __init__(self):
         self.config = self._load_config()
         self.min_shares = BLOCK_TRADE_CONFIG["min_shares"]
         self.min_value = BLOCK_TRADE_CONFIG["min_notional_value"]
+        self.size_surge_threshold = BLOCK_TRADE_CONFIG["size_surge_threshold"]
         self.watchlist = BLOCK_TRADE_CONFIG["watchlist"]
         self.rest_client = None
         self.stream_client = None
         self.eastern = pytz.timezone("US/Eastern")
         self.total_blocks_detected = 0
+
+        # Track previous bid/ask sizes to detect changes
+        self.quote_history = defaultdict(lambda: {"bid_size": 0, "ask_size": 0, "last_price": 0.0})
 
     def _load_config(self) -> dict:
         """Load Schwab credentials"""
@@ -91,10 +95,9 @@ class SchwabBlockTradeMonitor:
 
             logger.info("✅ REST client authenticated")
 
-            # Account ID from config (numeric)
             account_id = creds.get("account_number")
             if not account_id:
-                logger.error("❌ account_number not in schwab_credentials.json")
+                logger.error("❌ account_number missing from schwab_credentials.json")
                 sys.exit(1)
 
             self.stream_client = StreamClient(self.rest_client, account_id=account_id)
@@ -109,17 +112,22 @@ class SchwabBlockTradeMonitor:
         try:
             df = pd.DataFrame([trade_data])
             header_needed = not BLOCK_TRADES_CSV.exists()
-            df.to_csv(
-                BLOCK_TRADES_CSV,
-                mode="a",
-                index=False,
-                header=header_needed
-            )
+            df.to_csv(BLOCK_TRADES_CSV, mode="a", index=False, header=header_needed)
         except Exception as e:
             logger.error(f"❌ Failed to write to CSV: {e}")
 
-    def _handle_timesale_message(self, message: dict):
-        """Process Time & Sales tick data from Schwab stream"""
+    def _handle_quote_message(self, message: dict):
+        """
+        Process Level 1 quote data with CORRECT field mapping
+
+        Schwab Level 1 Quote Fields:
+        "1": Bid Price (float)
+        "2": Bid Size (int, in 100s)
+        "3": Last Price (float)
+        "4": Ask Price (float)
+        "5": Ask Size (int, in 100s)
+        "7": Last Price (float, fallback)
+        """
         try:
             content = message.get("content", [])
             if not content:
@@ -130,60 +138,83 @@ class SchwabBlockTradeMonitor:
                 if not symbol or symbol not in self.watchlist:
                     continue
 
-                # Schwab Time & Sales field mapping:
-                # "1": timestamp (ms), "2": price, "3": size, "4": sequence
+                # Extract fields with correct mapping
                 try:
-                    price = float(tick.get("2", 0))
-                    size = int(tick.get("3", 0))
-                    timestamp_ms = tick.get("1")
+                    # Bid/Ask sizes are in 100s, convert to shares
+                    bid_size = int(tick.get("2", 0)) * 100
+                    ask_size = int(tick.get("5", 0)) * 100
+                    # Last price from field "3" or fallback to "7"
+                    last_price = float(tick.get("3", tick.get("7", 0)))
                 except (ValueError, TypeError):
                     continue
 
-                if price <= 0 or size <= 0:
+                if last_price <= 0:
                     continue
 
-                notional_value = price * size
+                # Get previous sizes (safe from KeyError due to defaultdict)
+                prev_data = self.quote_history[symbol]
+                prev_bid_size = prev_data["bid_size"]
+                prev_ask_size = prev_data["ask_size"]
 
-                # Check block trade criteria
-                is_large_size = size >= self.min_shares
-                is_large_value = notional_value >= self.min_value
+                # Update current state
+                if bid_size > 0:
+                    self.quote_history[symbol]["bid_size"] = bid_size
+                if ask_size > 0:
+                    self.quote_history[symbol]["ask_size"] = ask_size
+                self.quote_history[symbol]["last_price"] = last_price
 
-                if is_large_size or is_large_value:
-                    self.total_blocks_detected += 1
+                detected_block = False
+                block_type = ""
+                detected_size = 0
 
-                    # Format timestamp
-                    if timestamp_ms:
-                        trade_dt = (
-                            datetime.fromtimestamp(timestamp_ms / 1000.0, tz=pytz.UTC)
-                            .astimezone(self.eastern)
-                            .strftime("%Y-%m-%d %H:%M:%S")
-                        )
-                    else:
+                # Bid surge evaluation (safe from ZeroDivisionError)
+                if prev_bid_size > 0 and bid_size >= self.min_shares:
+                    bid_surge = bid_size / prev_bid_size
+                    if bid_surge >= self.size_surge_threshold:
+                        detected_block = True
+                        block_type = "Bid Accumulation"
+                        detected_size = bid_size
+
+                # Ask surge evaluation (safe from ZeroDivisionError)
+                if prev_ask_size > 0 and ask_size >= self.min_shares:
+                    ask_surge = ask_size / prev_ask_size
+                    if ask_surge >= self.size_surge_threshold:
+                        detected_block = True
+                        block_type = "Ask Distribution"
+                        detected_size = ask_size
+
+                # If we detected a block, log it
+                if detected_block:
+                    notional_value = last_price * detected_size
+
+                    # Only log if meets minimum notional value
+                    if notional_value >= self.min_value:
+                        self.total_blocks_detected += 1
                         trade_dt = datetime.now(self.eastern).strftime("%Y-%m-%d %H:%M:%S")
 
-                    # Log and save
-                    logger.info(
-                        f"🚨 BLOCK TRADE #{self.total_blocks_detected:,} | "
-                        f"{trade_dt} | {symbol:<6} | "
-                        f"{size:>9,} shares @ ${price:>8.2f} | "
-                        f"${notional_value:>12,.0f}"
-                    )
+                        logger.info(
+                            f"🚨 BLOCK DETECTED #{self.total_blocks_detected:,} | "
+                            f"{trade_dt} | {symbol:<6} | "
+                            f"{detected_size:>9,} shares @ ${last_price:>8.2f} | "
+                            f"${notional_value:>12,.0f} | {block_type}"
+                        )
 
-                    record = {
-                        "timestamp": trade_dt,
-                        "symbol": symbol,
-                        "price": price,
-                        "size": size,
-                        "notional_value": round(notional_value, 2)
-                    }
-                    self._write_to_csv(record)
+                        record = {
+                            "timestamp": trade_dt,
+                            "symbol": symbol,
+                            "price": last_price,
+                            "size": detected_size,
+                            "notional_value": round(notional_value, 2),
+                            "type": block_type
+                        }
+                        self._write_to_csv(record)
 
         except Exception as e:
-            logger.debug(f"Error processing tick: {e}")
+            logger.debug(f"Error processing quote tick: {e}")
 
     async def run(self):
-        """Main streaming loop"""
-        # Check if market is open before attempting to connect
+        """Main streaming loop (ASYNC)"""
+        # Check if market is open
         now = datetime.now(self.eastern)
         if now.weekday() >= 5:  # Weekend
             logger.info("📅 Market closed (weekend). Exiting.")
@@ -191,7 +222,6 @@ class SchwabBlockTradeMonitor:
 
         if now.hour < 9 or (now.hour >= 16 and now.minute >= 5):
             logger.info(f"🕐 Outside market hours (9 AM - 4 PM EST). Current: {now.strftime('%I:%M %p')}")
-            logger.info("ℹ️  StreamClient only works during market hours. Waiting...")
             return
 
         self._init_clients()
@@ -202,30 +232,31 @@ class SchwabBlockTradeMonitor:
             logger.info("✅ Stream authenticated")
         except Exception as e:
             logger.error(f"❌ Stream login failed: {e}")
-            logger.info("ℹ️  Note: Streaming may only be available during market hours (9 AM - 4 PM EST)")
             return
 
-        # Register handler BEFORE subscribing
-        self.stream_client.add_timesale_equity_handler(self._handle_timesale_message)
+        # CRITICAL: Register handler BEFORE subscribing
+        self.stream_client.add_level_one_equity_handler(self._handle_quote_message)
 
-        logger.info(f"📊 Subscribing to {len(self.watchlist)} symbols: {', '.join(self.watchlist[:5])}...")
+        logger.info(f"📊 Subscribing to Level 1 quotes for {len(self.watchlist)} symbols...")
         try:
-            await self.stream_client.timesale_equity_subs(self.watchlist)
+            await self.stream_client.level_one_equity_subs(self.watchlist)
             logger.info("✅ Subscriptions active")
         except Exception as e:
             logger.error(f"❌ Subscription failed: {e}")
             return
 
         logger.info("=" * 80)
-        logger.info("🟢 BLOCK TRADE STREAM ACTIVE")
+        logger.info("🟢 BLOCK TRADE DETECTOR ACTIVE (Level 1 Mode - Fixed)")
         logger.info(f"   Monitoring: {len(self.watchlist)} symbols")
         logger.info(f"   Min Size: {self.min_shares:,} shares")
         logger.info(f"   Min Value: ${self.min_value:,}")
+        logger.info(f"   Size Surge Threshold: {self.size_surge_threshold}x")
+        logger.info(f"   Method: Bid/Ask Size Change Detection (Correct Field Mapping)")
         logger.info("=" * 80)
 
         # Stream event loop
         while True:
-            # Check if market is still open (before 4:05 PM EST/EDT)
+            # Check if market is still open
             now = datetime.now(self.eastern)
             if now.weekday() >= 5:  # Weekend
                 logger.info("📅 Market closed (weekend). Stopping stream.")
@@ -242,7 +273,7 @@ class SchwabBlockTradeMonitor:
                 break
             except Exception as e:
                 logger.error(f"Stream error: {e}")
-                await asyncio.sleep(5)  # Retry after 5 seconds
+                await asyncio.sleep(5)
 
 # ============================================================================
 # MAIN ENTRYPOINT
@@ -250,7 +281,7 @@ class SchwabBlockTradeMonitor:
 
 def main():
     logger.info("\n" + "=" * 80)
-    logger.info("SCHWAB REAL-TIME BLOCK TRADE DETECTOR")
+    logger.info("SCHWAB BLOCK TRADE DETECTOR - LEVEL 1 QUOTE MODE (FIXED)")
     logger.info("=" * 80)
 
     monitor = SchwabBlockTradeMonitor()
@@ -262,7 +293,7 @@ def main():
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
 
-    logger.info(f"📊 Total block trades detected: {monitor.total_blocks_detected:,}")
+    logger.info(f"📊 Total blocks detected: {monitor.total_blocks_detected:,}")
     logger.info(f"📁 Saved to: {BLOCK_TRADES_CSV.absolute()}")
 
 if __name__ == "__main__":

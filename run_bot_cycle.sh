@@ -7,12 +7,7 @@ cd /Users/ramayalala/trading_bot
 # Use Python 3.10 (Schwab API requirement)
 PYTHON=/opt/homebrew/bin/python3.10
 
-# Run bot with timeout protection (300 seconds = 5 min max)
-timeout 300 $PYTHON bot_production_final.py >> bot_production.log 2>&1 || {
-  EXIT_CODE=$?
-  if [ $EXIT_CODE -eq 124 ]; then
-    echo "Bot exceeded 300s timeout at $(date)" >> bot_production.log 2>&1
-  fi
-}
+# Run bot (macOS doesn't have timeout, but bot runs in ~2 seconds)
+$PYTHON bot_production_final.py >> bot_production.log 2>&1
 
 exit 0
