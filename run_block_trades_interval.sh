@@ -18,16 +18,19 @@ cd "$SCRIPT_DIR" || exit 1
 # Log start time
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting block trade detector (13-min session)" >> "$LOG_FILE"
 
-# Run detector with timeout
-timeout "$TIMEOUT_SECS" "$PYTHON" "$DETECTOR" 2>&1 | tee -a "$LOG_FILE" || {
-    exit_code=$?
-    if [ $exit_code -eq 124 ]; then
-        # Timeout (exit code 124) is expected - graceful stop
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Block trade detector cycle complete (timeout after 13 min)" >> "$LOG_FILE"
-    else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Block trade detector exited with code $exit_code" >> "$LOG_FILE"
-    fi
-}
+# macOS-compatible timeout using sleep + kill
+(
+    sleep "$TIMEOUT_SECS"
+    pkill -f schwab_block_trades.py 2>/dev/null || true
+) &
+TIMEOUT_PID=$!
+
+# Run detector and capture output
+"$PYTHON" "$DETECTOR" 2>&1 | tee -a "$LOG_FILE"
+DETECTOR_PID=$!
+
+# Wait for detector to finish or timeout to kill it
+wait $TIMEOUT_PID 2>/dev/null || true
 
 # Ensure process is killed
 pkill -f schwab_block_trades.py 2>/dev/null || true
