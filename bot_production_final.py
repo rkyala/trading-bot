@@ -217,16 +217,19 @@ class LocalMCPClient:
             logger.error(f"RPC error: {e}")
             return {"error": str(e)}
 
-    def place_order(self, symbol: str, qty: int, side: str = "buy"):
+    def place_order(self, symbol: str, qty: float, side: str = "buy"):
         """
         Place order via MCP (buy or sell)
         Note: MCP server only supports market orders (price parameter rejected)
+        Note: Robinhood API requires <= 8 decimal places for fractional shares
         """
+        # Round to 8 decimal places (Robinhood requirement)
+        qty_rounded = round(qty, 8)
         return self._rpc("tools/call", {
             "name": "place_equity_order",
             "arguments": {
                 "symbol": symbol,
-                "quantity": qty,
+                "quantity": qty_rounded,
                 "side": side
             }
         })
