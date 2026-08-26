@@ -8,6 +8,7 @@ import json
 import logging
 import subprocess
 import sys
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -221,15 +222,15 @@ class LocalMCPClient:
         """
         Place order via MCP (buy or sell)
         Note: MCP server only supports market orders (price parameter rejected)
-        Note: Robinhood API requires <= 8 decimal places for fractional shares
+        Note: Robinhood MCP does NOT support fractional shares - must use whole shares
         """
-        # Round to 8 decimal places (Robinhood requirement)
-        qty_rounded = round(qty, 8)
+        # CRITICAL: Round UP to nearest whole share (Robinhood requirement)
+        qty_whole = math.ceil(qty)  # Round up: 0.5352 → 1 share
         return self._rpc("tools/call", {
             "name": "place_equity_order",
             "arguments": {
                 "symbol": symbol,
-                "quantity": qty_rounded,
+                "quantity": qty_whole,
                 "side": side
             }
         })
@@ -939,7 +940,9 @@ class TradingBot:
                 logger.info(f"⏭️  [{symbol}] ⚠️  EARNINGS {hours}h away ({earnings_date}) - SKIPPING entry (earnings volatility risk)")
                 continue
 
-            logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty:.4f} shares @ ${price:.2f} (${qty * price:.2f} total)")
+            qty_whole = math.ceil(qty)
+            actual_value = qty_whole * price
+            logger.info(f"🎯 ENTRY SIGNAL: {symbol} BUY {qty_whole} shares @ ${price:.2f} (calc: {qty:.4f}→{qty_whole} whole | ${actual_value:.2f} actual)")
 
             # CRITICAL FIX #12: Final dedup check RIGHT BEFORE order placement (MANDATORY)
             # Re-fetch Robinhood positions to catch any trades entered THIS CYCLE
