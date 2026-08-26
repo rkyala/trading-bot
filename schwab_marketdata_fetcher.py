@@ -89,37 +89,40 @@ class SchwabMarketDataFetcher:
             raise
 
     @staticmethod
-    def get_price_history_df(symbol: str, period_type, period, frequency_type, frequency) -> pd.DataFrame:
+    def get_price_history_df(symbol: str, frequency: str = 'daily') -> pd.DataFrame:
         """
         Fetch price history from Schwab and convert to pandas DataFrame
-        Handles both daily and minute-based frequencies
+
+        Args:
+            symbol: Stock symbol (e.g., 'AAPL')
+            frequency: 'daily' or 'thirty_minutes'
         """
         try:
+            from datetime import datetime, timedelta
+
             client = SchwabMarketDataFetcher._get_client()
 
-            # Call appropriate API method based on frequency type
-            if frequency_type == Client.PriceHistory.FrequencyType.DAILY:
+            # Calculate date range
+            end_date = datetime.now()
+            if frequency == 'daily':
+                start_date = end_date - timedelta(days=60)  # 60 days for ADX
                 resp = client.get_price_history_every_day(
                     symbol,
-                    period_type=period_type,
-                    period=period,
-                    frequency_type=frequency_type,
-                    frequency=frequency
+                    start_datetime=start_date,
+                    end_datetime=end_date
                 )
-            else:
-                # Minute-based (1m, 5m, 30m, 60m)
-                resp = client.get_price_history_every_minute(
+            else:  # thirty_minutes
+                start_date = end_date - timedelta(days=5)  # 5 days for Stochastic
+                resp = client.get_price_history_every_thirty_minutes(
                     symbol,
-                    period_type=period_type,
-                    period=period,
-                    frequency_type=frequency_type,
-                    frequency=frequency
+                    start_datetime=start_date,
+                    end_datetime=end_date
                 )
 
             data = resp.json()
 
             if "candles" not in data or not data["candles"]:
-                logger.warning(f"⏭️  [{symbol}] No candle data returned from Schwab")
+                logger.warning(f"⏭️  [{symbol}] No candle data returned from Schwab ({frequency})")
                 return pd.DataFrame()
 
             # Convert to DataFrame
@@ -143,7 +146,7 @@ class SchwabMarketDataFetcher:
             return df.dropna()
 
         except Exception as e:
-            logger.error(f"❌ Price history fetch failed for {symbol}: {e}")
+            logger.error(f"❌ Price history fetch failed for {symbol} ({frequency}): {e}")
             return pd.DataFrame()
 
     @staticmethod
@@ -176,13 +179,7 @@ class SchwabMarketDataFetcher:
             logger.info(f"📊 Fetching Schwab technicals for {symbol}...")
 
             # 1. Fetch Daily Candles for ADX (60 days lookback)
-            df_daily = SchwabMarketDataFetcher.get_price_history_df(
-                symbol,
-                period_type=Client.PriceHistory.PeriodType.MONTH,
-                period=2,  # ~60 days
-                frequency_type=Client.PriceHistory.FrequencyType.DAILY,
-                frequency=Client.PriceHistory.Frequency.DAILY
-            )
+            df_daily = SchwabMarketDataFetcher.get_price_history_df(symbol, frequency='daily')
 
             if len(df_daily) < 20:
                 logger.warning(f"⏭️  [{symbol}] Insufficient daily candles: {len(df_daily)} < 20")
@@ -218,13 +215,7 @@ class SchwabMarketDataFetcher:
             adx_d = di_diff_d.rolling(14).mean()
 
             # 2. Fetch 30-Minute Candles for Intraday Stochastic
-            df_30m = SchwabMarketDataFetcher.get_price_history_df(
-                symbol,
-                period_type=Client.PriceHistory.PeriodType.DAY,
-                period=5,  # Last 5 days
-                frequency_type=Client.PriceHistory.FrequencyType.MINUTE,
-                frequency=Client.PriceHistory.Frequency.EVERY_THIRTY_MINUTES
-            )
+            df_30m = SchwabMarketDataFetcher.get_price_history_df(symbol, frequency='thirty_minutes')
 
             if len(df_30m) < 30:
                 logger.warning(f"⏭️  [{symbol}] Insufficient 30m candles: {len(df_30m)} < 30")
