@@ -212,7 +212,6 @@ class LocalMCPClient:
                     return json.loads(line_str)
                 except json.JSONDecodeError:
                     # Skip non-JSON lines (debug output, log statements)
-                else:
                     continue
 
         except Exception as e:

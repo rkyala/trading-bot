@@ -1,18 +1,9 @@
 {
-  "timestamp": "2026-08-26T14:30:36.812518",
-  "fetched_at": "2026-08-26 14:30:36",
+  "timestamp": "2026-08-26T14:40:37.229912",
+  "fetched_at": "2026-08-26 14:40:37",
   "total_scanned": 52,
-  "signals_found": 2,
+  "signals_found": 1,
   "signals": [
-    {
-      "symbol": "RBLX",
-      "price": 37.61,
-      "adx": 24.93919950322729,
-      "stoch_k": 8.055009823182639,
-      "stoch_d": 7.662082514734784,
-      "high_14": 39.95,
-      "low_14": 37.405
-    },
     {
       "symbol": "JD",
       "price": 28.805,

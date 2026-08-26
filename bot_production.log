@@ -15485,3 +15485,162 @@ run_bot_cycle.sh: line 11: timeout: command not found
 2026-08-26 14:36:20,190 | ✅ MCP initialized
 2026-08-26 14:36:35,979 | [+] MCP subprocess started (unbuffered)
 2026-08-26 14:36:36,120 | ✅ MCP initialized
+2026-08-26 14:40:19,406 | [+] MCP subprocess started (unbuffered)
+2026-08-26 14:40:19,545 | ✅ MCP initialized
+2026-08-26 14:40:19,546 | ================================================================================
+2026-08-26 14:40:19,546 | FETCHING SYMBOLS
+2026-08-26 14:40:19,546 | ================================================================================
+2026-08-26 14:40:19,546 | ================================================================================
+2026-08-26 14:40:19,546 | FETCHING TOP TRENDING SYMBOLS FROM YFINANCE
+2026-08-26 14:40:19,546 | ================================================================================
+2026-08-26 14:40:19,546 | [*] Fetching top 100 trending symbols from yfinance...
+2026-08-26 14:40:19,546 |     Analyzing 100 popular stocks...
+2026-08-26 14:40:20,416 |     Progress: 10/100
+2026-08-26 14:40:20,629 |     Progress: 20/100
+2026-08-26 14:40:20,800 |     Progress: 30/100
+2026-08-26 14:40:20,960 |     Progress: 40/100
+2026-08-26 14:40:21,223 |     Progress: 50/100
+2026-08-26 14:40:21,448 |     Progress: 60/100
+2026-08-26 14:40:21,813 |     Progress: 70/100
+2026-08-26 14:40:21,884 | HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: GRUBHUB"}}}
+2026-08-26 14:40:22,031 |     Progress: 80/100
+2026-08-26 14:40:22,169 | $SQ: No data found, symbol may be delisted
+2026-08-26 14:40:22,237 |     Progress: 90/100
+2026-08-26 14:40:22,498 | $GRUBHUB: No data found, symbol may be delisted
+2026-08-26 14:40:22,973 | $ARKS: No data found, symbol may be delisted
+2026-08-26 14:40:23,015 | $RSX: No data found, symbol may be delisted
+2026-08-26 14:40:23,016 |     Progress: 100/100
+2026-08-26 14:40:23,028 | ✅ Found 96 trending symbols from yfinance
+2026-08-26 14:40:23,028 | 
+📊 TOP 20 TRENDING:
+2026-08-26 14:40:23,028 |     1. NVDA   | Score:    2971.71 | Momentum:   -3.42% | Vol: 1317.5M | Volatility:   0.7% | Price: $  210.06
+2026-08-26 14:40:23,028 |     2. SNAP   | Score:    2373.78 | Momentum:   +6.74% | Vol:  220.4M | Volatility:   1.6% | Price: $    5.47
+2026-08-26 14:40:23,028 |     3. INTC   | Score:    1428.05 | Momentum:   -3.47% | Vol:  376.6M | Volatility:   1.1% | Price: $   87.66
+2026-08-26 14:40:23,028 |     4. LCID   | Score:    1176.32 | Momentum:  -15.62% | Vol:   50.5M | Volatility:   1.5% | Price: $    4.89
+2026-08-26 14:40:23,028 |     5. COIN   | Score:     805.85 | Momentum:   +7.50% | Vol:   60.6M | Volatility:   1.8% | Price: $  181.85
+2026-08-26 14:40:23,028 |     6. BABA   | Score:     598.57 | Momentum:   -3.94% | Vol:  104.1M | Volatility:   1.5% | Price: $  120.30
+2026-08-26 14:40:23,029 |     7. NIO    | Score:     388.24 | Momentum:   -3.30% | Vol:  134.4M | Volatility:   0.9% | Price: $    4.39
+2026-08-26 14:40:23,029 |     8. CMG    | Score:     384.37 | Momentum:   +9.50% | Vol:   63.6M | Volatility:   0.6% | Price: $   37.52
+2026-08-26 14:40:23,029 |     9. TSLA   | Score:     383.84 | Momentum:   +1.53% | Vol:  249.5M | Volatility:   1.0% | Price: $  345.50
+2026-08-26 14:40:23,029 |    10. RIVN   | Score:     365.25 | Momentum:   +3.56% | Vol:   95.3M | Volatility:   1.1% | Price: $   16.14
+2026-08-26 14:40:23,029 |    11. EWZ    | Score:     359.22 | Momentum:   +4.74% | Vol:  131.9M | Volatility:   0.6% | Price: $   35.78
+2026-08-26 14:40:23,029 |    12. MU     | Score:     291.97 | Momentum:   -1.62% | Vol:  119.8M | Volatility:   1.5% | Price: $  938.66
+2026-08-26 14:40:23,029 |    13. ZM     | Score:     262.09 | Momentum:  -11.88% | Vol:   18.9M | Volatility:   1.2% | Price: $   94.17
+2026-08-26 14:40:23,030 |    14. PLTR   | Score:     254.91 | Momentum:   +1.91% | Vol:  124.4M | Volatility:   1.1% | Price: $  178.08
+2026-08-26 14:40:23,030 |    15. ARKG   | Score:     226.17 | Momentum:   +4.12% | Vol:   45.8M | Volatility:   1.2% | Price: $   49.52
+2026-08-26 14:40:23,030 |    16. AMD    | Score:     215.40 | Momentum:   +3.22% | Vol:   67.2M | Volatility:   1.0% | Price: $  481.34
+2026-08-26 14:40:23,030 |    17. META   | Score:     183.08 | Momentum:   +5.86% | Vol:   69.8M | Volatility:   0.4% | Price: $  576.35
+2026-08-26 14:40:23,030 |    18. XLE    | Score:     182.91 | Momentum:   -3.17% | Vol:  145.8M | Volatility:   0.4% | Price: $   62.46
+2026-08-26 14:40:23,030 |    19. T      | Score:     154.51 | Momentum:   +3.26% | Vol:  123.6M | Volatility:   0.4% | Price: $   26.00
+2026-08-26 14:40:23,030 |    20. U      | Score:     135.91 | Momentum:   -4.98% | Vol:   37.8M | Volatility:   0.7% | Price: $   44.24
+2026-08-26 14:40:23,030 |    ... and 76 more
+2026-08-26 14:40:23,031 | ================================================================================
+2026-08-26 14:40:23,031 | FILTERING BY MARKET CAP (min: $10.0B, vol: 1.0M)
+2026-08-26 14:40:23,031 | ================================================================================
+2026-08-26 14:40:23,542 | ✅ [  1/96] NVDA   | Cap: $5088.47B | Vol:  139.8M | Price: $    0.00
+2026-08-26 14:40:24,396 | ✅ [  3/96] INTC   | Cap: $460.30B | Vol:  118.8M | Price: $    0.00
+2026-08-26 14:40:25,202 | ✅ [  5/96] COIN   | Cap: $ 47.99B | Vol:    8.6M | Price: $    0.00
+2026-08-26 14:40:25,574 | ✅ [  6/96] BABA   | Cap: $288.34B | Vol:   12.6M | Price: $    0.00
+2026-08-26 14:40:25,964 | ✅ [  7/96] NIO    | Cap: $ 11.01B | Vol:   29.2M | Price: $    0.00
+2026-08-26 14:40:26,335 | ✅ [  8/96] CMG    | Cap: $ 47.57B | Vol:   20.0M | Price: $    0.00
+2026-08-26 14:40:26,686 | ✅ [  9/96] TSLA   | Cap: $1364.85B | Vol:   41.8M | Price: $    0.00
+2026-08-26 14:40:27,040 | ✅ [ 10/96] RIVN   | Cap: $ 23.37B | Vol:   32.2M | Price: $    0.00
+2026-08-26 14:40:28,376 | ✅ [ 12/96] MU     | Cap: $1060.05B | Vol:   47.6M | Price: $    0.00
+2026-08-26 14:40:28,714 | ✅ [ 13/96] ZM     | Cap: $ 27.61B | Vol:    3.6M | Price: $    0.00
+2026-08-26 14:40:29,096 | ✅ [ 14/96] PLTR   | Cap: $427.96B | Vol:   43.0M | Price: $    0.00
+2026-08-26 14:40:30,867 | ✅ [ 16/96] AMD    | Cap: $785.92B | Vol:   28.4M | Price: $    0.00
+2026-08-26 14:40:31,272 | ✅ [ 17/96] META   | Cap: $1468.15B | Vol:   18.4M | Price: $    0.00
+2026-08-26 14:40:32,706 | ✅ [ 19/96] T      | Cap: $178.09B | Vol:   62.4M | Price: $    0.00
+2026-08-26 14:40:33,140 | ✅ [ 20/96] U      | Cap: $ 19.47B | Vol:    9.6M | Price: $    0.00
+2026-08-26 14:40:33,562 | ✅ [ 21/96] NFLX   | Cap: $340.67B | Vol:   42.4M | Price: $    0.00
+2026-08-26 14:40:33,946 | ✅ [ 22/96] XPEV   | Cap: $ 11.21B | Vol:    7.6M | Price: $    0.00
+2026-08-26 14:40:34,453 | ✅ [ 23/96] XOM    | Cap: $650.87B | Vol:   15.8M | Price: $    0.00
+2026-08-26 14:40:34,810 | ✅ [ 24/96] CRWD   | Cap: $193.06B | Vol:   10.6M | Price: $    0.00
+2026-08-26 14:40:35,454 | ✅ [ 25/96] WMT    | Cap: $834.36B | Vol:   24.8M | Price: $    0.00
+2026-08-26 14:40:36,677 | ✅ [ 27/96] DASH   | Cap: $103.27B | Vol:    4.5M | Price: $    0.00
+2026-08-26 14:40:37,083 | ✅ [ 28/96] MSFT   | Cap: $3683.74B | Vol:   39.2M | Price: $    0.00
+2026-08-26 14:40:38,438 | ✅ [ 30/96] INTU   | Cap: $ 94.02B | Vol:    5.0M | Price: $    0.00
+2026-08-26 14:40:40,155 | ✅ [ 33/96] SHOP   | Cap: $194.59B | Vol:    9.3M | Price: $    0.00
+2026-08-26 14:40:40,525 | ✅ [ 34/96] CPNG   | Cap: $ 29.87B | Vol:   21.2M | Price: $    0.00
+2026-08-26 14:40:40,955 | ✅ [ 35/96] V      | Cap: $716.15B | Vol:    8.1M | Price: $    0.00
+2026-08-26 14:40:41,725 | ✅ [ 37/96] SBUX   | Cap: $123.19B | Vol:    7.5M | Price: $    0.00
+2026-08-26 14:40:42,076 | ✅ [ 38/96] OKTA   | Cap: $ 22.48B | Vol:    3.6M | Price: $    0.00
+2026-08-26 14:40:42,560 | ✅ [ 39/96] CVX    | Cap: $393.52B | Vol:    8.6M | Price: $    0.00
+2026-08-26 14:40:42,992 | ✅ [ 40/96] F      | Cap: $ 55.17B | Vol:   55.3M | Price: $    0.00
+2026-08-26 14:40:43,354 | ✅ [ 41/96] CSCO   | Cap: $444.89B | Vol:   23.6M | Price: $    0.00
+2026-08-26 14:40:43,770 | ✅ [ 42/96] LLY    | Cap: $1063.89B | Vol:    2.9M | Price: $    0.00
+2026-08-26 14:40:44,177 | ✅ [ 43/96] VZ     | Cap: $208.96B | Vol:   27.0M | Price: $    0.00
+2026-08-26 14:40:44,632 | ✅ [ 44/96] BA     | Cap: $167.62B | Vol:    6.0M | Price: $    0.00
+2026-08-26 14:40:45,803 | ✅ [ 46/96] AAPL   | Cap: $4602.20B | Vol:   55.8M | Price: $    0.00
+2026-08-26 14:40:47,617 | ✅ [ 50/96] DDOG   | Cap: $ 82.37B | Vol:    5.1M | Price: $    0.00
+2026-08-26 14:40:48,742 | ✅ [ 52/96] GM     | Cap: $ 78.00B | Vol:    7.4M | Price: $    0.00
+2026-08-26 14:40:49,119 | ✅ [ 53/96] PDD    | Cap: $123.58B | Vol:    8.6M | Price: $    0.00
+2026-08-26 14:40:50,231 | ✅ [ 55/96] AMZN   | Cap: $2806.72B | Vol:   49.3M | Price: $    0.00
+2026-08-26 14:40:50,594 | ✅ [ 56/96] SNOW   | Cap: $109.44B | Vol:    7.0M | Price: $    0.00
+2026-08-26 14:40:51,035 | ✅ [ 57/96] IBM    | Cap: $216.64B | Vol:   10.5M | Price: $    0.00
+2026-08-26 14:40:51,653 | ✅ [ 58/96] KO     | Cap: $388.86B | Vol:   17.6M | Price: $    0.00
+2026-08-26 14:40:52,157 | ✅ [ 59/96] PINS   | Cap: $ 13.23B | Vol:   15.0M | Price: $    0.00
+2026-08-26 14:40:52,500 | ✅ [ 60/96] ABNB   | Cap: $110.98B | Vol:    4.2M | Price: $    0.00
+2026-08-26 14:40:52,905 | ✅ [ 61/96] PG     | Cap: $337.33B | Vol:    9.2M | Price: $    0.00
+2026-08-26 14:40:53,266 | ✅ [ 62/96] CRM    | Cap: $167.56B | Vol:   14.8M | Price: $    0.00
+2026-08-26 14:40:53,673 | ✅ [ 63/96] NET    | Cap: $101.38B | Vol:    3.7M | Price: $    0.00
+2026-08-26 14:40:54,733 | ✅ [ 65/96] JD     | Cap: $ 38.91B | Vol:    8.5M | Price: $    0.00
+2026-08-26 14:40:55,128 | ✅ [ 66/96] BKNG   | Cap: $157.43B | Vol:    7.0M | Price: $    0.00
+2026-08-26 14:40:55,603 | ✅ [ 67/96] ADBE   | Cap: $108.62B | Vol:    6.3M | Price: $    0.00
+2026-08-26 14:40:55,965 | ✅ [ 68/96] RBLX   | Cap: $ 26.85B | Vol:   11.8M | Price: $    0.00
+2026-08-26 14:40:56,564 | ✅ [ 69/96] JPM    | Cap: $952.24B | Vol:    8.7M | Price: $    0.00
+2026-08-26 14:40:57,139 | ✅ [ 70/96] PYPL   | Cap: $ 52.96B | Vol:   15.8M | Price: $    0.00
+2026-08-26 14:40:58,257 | ✅ [ 72/96] AXP    | Cap: $227.79B | Vol:    3.0M | Price: $    0.00
+2026-08-26 14:40:58,646 | ✅ [ 73/96] BRK-B  | Cap: $1081.41B | Vol:    4.7M | Price: $    0.00
+2026-08-26 14:40:59,084 | ✅ [ 74/96] ABT    | Cap: $197.51B | Vol:   11.8M | Price: $    0.00
+2026-08-26 14:41:00,278 | ✅ [ 76/96] GOOGL  | Cap: $4183.49B | Vol:   31.9M | Price: $    0.00
+2026-08-26 14:41:03,046 | ✅ [ 80/96] JNJ    | Cap: $651.47B | Vol:    7.9M | Price: $    0.00
+2026-08-26 14:41:05,215 | ✅ [ 83/96] MCD    | Cap: $189.10B | Vol:    4.6M | Price: $    0.00
+2026-08-26 14:41:08,566 | ✅ [ 88/96] UBER   | Cap: $160.67B | Vol:   20.4M | Price: $    0.00
+2026-08-26 14:41:11,092 | ✅ [ 92/96] QCOM   | Cap: $174.31B | Vol:   16.4M | Price: $    0.00
+2026-08-26 14:41:13,925 | ================================================================================
+2026-08-26 14:41:13,926 | ✅ FILTERED: 96 → 61 symbols
+2026-08-26 14:41:13,926 |    Passed: 61 | Skipped: 35
+2026-08-26 14:41:13,926 | ================================================================================
+2026-08-26 14:41:13,926 | ✅ Ready to scan 50 liquid, established equities
+
+2026-08-26 14:41:13,926 | ================================================================================
+
+2026-08-26 14:41:13,926 | ================================================================================
+2026-08-26 14:41:13,926 | CYCLE | 2026-08-26 14:41:13 | PRODUCTION BOT (ENTRY + EXIT)
+2026-08-26 14:41:13,926 | Scanning 50 symbols for entry + managing 8 open positions
+2026-08-26 14:41:13,926 | ================================================================================
+2026-08-26 14:41:13,926 | 
+📋 PHASE 1: Exit Management
+2026-08-26 14:41:13,926 | --------------------------------------------------------------------------------
+2026-08-26 14:41:13,930 | ⚠️  [INTC] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,930 | ⚠️  [LRCX] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,930 | ⚠️  [KEYS] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,930 | ⚠️  [BKNG] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,930 | ⚠️  [NFLX] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,930 | ✅ [JD] Using cached Schwab signal (ADX: 25.3 | Stoch: 13.7)
+2026-08-26 14:41:13,931 | 📊 [JD] Holding | Entry: $28.81 | Current: $28.80 | PnL: -0.02% | Age: 4 cycles
+2026-08-26 14:41:13,931 | ⚠️  [RBLX] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,931 | ⚠️  [U] Could not fetch data for exit evaluation (possible delisting)
+2026-08-26 14:41:13,931 | 📊 Exits Executed: 0
+2026-08-26 14:41:13,931 | 
+📋 PHASE 2: Entry Screening
+2026-08-26 14:41:13,932 | --------------------------------------------------------------------------------
+2026-08-26 14:41:13,944 | ⚠️  Circuit breaker: Portfolio value unavailable ($0.00), proceeding with caution
+2026-08-26 14:41:14,271 | 🔍 Robinhood positions loaded: {'INTC', 'NFLX', 'LRCX', 'RBLX', 'KEYS', 'U', 'BKNG', 'JD'}
+2026-08-26 14:41:14,272 | 🔄 Checking for failed orders to retry...
+2026-08-26 14:41:14,273 | ⏭️  [ 2/50] INTC   | Already processed this cycle - skipping
+2026-08-26 14:41:14,275 | ⏭️  [15/50] U      | Already processed this cycle - skipping
+2026-08-26 14:41:14,275 | ⏭️  [16/50] NFLX   | Already processed this cycle - skipping
+2026-08-26 14:41:14,278 | ⏭️  [48/50] JD     | Already processed this cycle - skipping
+2026-08-26 14:41:14,278 | ⏭️  [49/50] BKNG   | Already processed this cycle - skipping
+2026-08-26 14:41:14,278 | ================================================================================
+2026-08-26 14:41:14,278 | 📊 Entry Analysis: 0 analyzed | 45 skipped | 0 signals
+2026-08-26 14:41:14,278 |    Analyzed: 
+2026-08-26 14:41:14,278 |    Skipped: NVDA, COIN, BABA, NIO, CMG, TSLA, RIVN, MU, ZM, PLTR, AMD, META, T, XPEV, XOM, CRWD, WMT, DASH, MSFT, INTU +25
+2026-08-26 14:41:14,278 | ================================================================================
+
+2026-08-26 14:41:14,278 | ✅ Cycle completed successfully
+2026-08-26 14:41:14,278 | [*] Cleaning up...
+2026-08-26 14:41:14,282 | [*] MCP subprocess terminated
+2026-08-26 14:41:14,282 | ✅ Cleanup completed
