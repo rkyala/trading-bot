@@ -1,0 +1,38 @@
+# Credentials (NEVER commit)
+schwab_credentials.json
+schwab_token.json
+rh_oauth.json
+config.json
+
+# State files
+positions_tracking.json
+failed_orders.json
+macro_triggers.json
+schwab_token_cache.json
+
+# Logs
+*.log
+bot_production.log
+13f_signals.log
+cron.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
