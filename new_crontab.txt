@@ -4,8 +4,8 @@
 # Bot Cycle - Every 30 minutes (9 AM - 3 PM CDT, weekdays)
 0,30 9-15 * * 1-5 cd /Users/ramayalala/trading_bot && bash run_bot_cycle.sh >> /Users/ramayalala/trading_bot/cron.log 2>&1
 
-# Block Trade Detector - Continuous stream (starts at 9 AM, runs until market close)
-0 9 * * 1-5 cd /Users/ramayalala/trading_bot && bash run_block_trades.sh >> /Users/ramayalala/trading_bot/cron.log 2>&1
+# Block Trade Detector - Every 15 minutes (13-min sessions to preserve Schwab quota)
+*/15 9-15 * * 1-5 cd /Users/ramayalala/trading_bot && bash run_block_trades_interval.sh >> /Users/ramayalala/trading_bot/block_trades.log 2>&1
 
 # Daily Log Rotation at 2 AM
 0 2 * * * /usr/sbin/logrotate /Users/ramayalala/trading_bot/logrotate_trading_bot.conf >> /Users/ramayalala/trading_bot/logrotate.log 2>&1
