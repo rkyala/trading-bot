@@ -15644,3 +15644,9 @@ run_bot_cycle.sh: line 11: timeout: command not found
 2026-08-26 14:41:14,278 | [*] Cleaning up...
 2026-08-26 14:41:14,282 | [*] MCP subprocess terminated
 2026-08-26 14:41:14,282 | ✅ Cleanup completed
+2026-08-26 14:42:18,779 | [+] MCP subprocess started (unbuffered)
+2026-08-26 14:42:18,926 | ✅ MCP initialized
+2026-08-26 14:42:19,277 | [*] MCP subprocess terminated
+2026-08-26 14:42:35,747 | [+] MCP subprocess started (unbuffered)
+2026-08-26 14:42:35,907 | ✅ MCP initialized
+2026-08-26 14:42:36,175 | [*] MCP subprocess terminated
