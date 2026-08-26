@@ -218,28 +218,36 @@ class LocalMCPClient:
             logger.error(f"RPC error: {e}")
             return {"error": str(e)}
 
-    def place_order(self, symbol: str, qty: float = None, price: float = None, side: str = "buy"):
+    def place_order(self, symbol: str, qty: float = None, price: float = None, side: str = "buy", dollar_amount: float = None):
         """
         Place order via Robinhood MCP bridge
-        CRITICAL: Robinhood MCP is inconsistent with fractional shares
-        - Some orders accept floats (JD 1.7355, NFLX 0.6127 succeeded)
-        - Some reject floats >8 decimals (SHOP 0.3300 failed)
-        - Some reject fractional entirely (ZM 0.5352 failed)
+        PYRAMID STRATEGY: Fixed $50 orders with $150 cap per symbol
 
-        FIX: Round to 2 decimals max (reduces API rejection)
+        STRATEGY: Prefer dollar_amount for fixed $50 pyramid entries
+        FALLBACK: Use quantity if dollar_amount not provided
         """
+        # Try dollar_amount first (most reliable for fixed position sizing)
+        if dollar_amount is not None and dollar_amount > 0:
+            logger.debug(f"💰 {symbol}: Placing ${dollar_amount:.2f} order via dollar_amount")
+            return self._rpc("tools/call", {
+                "name": "place_equity_order",
+                "arguments": {
+                    "symbol": symbol,
+                    "dollar_amount": round(dollar_amount, 2),
+                    "side": side
+                }
+            })
+
+        # Fallback: use quantity (for compatibility)
         if qty is None:
-            raise ValueError("qty parameter required for place_order")
+            raise ValueError("qty or dollar_amount parameter required")
 
-        # Round to 2 decimals ONLY (reduces precision, increases reliability)
         qty_formatted = round(qty, 2)
-
         if qty_formatted <= 0:
             logger.warning(f"❌ {symbol}: qty {qty:.4f} → {qty_formatted} - SKIPPING")
             return {"error": "Quantity must be > 0"}
 
-        logger.debug(f"📤 {symbol}: Sending qty={qty_formatted} (orig: {qty:.6f})")
-
+        logger.debug(f"📤 {symbol}: Placing {qty_formatted} shares (qty fallback)")
         return self._rpc("tools/call", {
             "name": "place_equity_order",
             "arguments": {
@@ -918,26 +926,29 @@ class TradingBot:
             symbol = signal["symbol"]
             price = signal["price"]
 
-            # CRITICAL FIX #10: Position size bounds for edge cases
-            # Calculate theoretical position size (in dollars)
-            # Position size cap: max $150 per stock ($30K account * 0.5% hardcap)
-            target_alloc = self.account_cfg["account_size_usd"] * self.account_cfg["position_size_pct"]
-            qty = target_alloc / price  # Allow fractional shares: e.g., TSLA $344.63 → 0.435 shares
+            # PYRAMID ENTRY STRATEGY: Fixed $50 per order, max $150 total per symbol
+            # Check if symbol already has a position
+            existing_position = self.position_tracker.get_position(symbol)
+            cumulative_value = 0.0
 
-            # PRODUCTION HARDENING: Hard position sizing cap (0.5% absolute max = $150 for $30K account)
-            # This is a HARD OVERRIDE that cannot be bypassed by signal scores
-            position_value = qty * price
-            max_position_value = self.account_cfg["account_size_usd"] * 0.005  # 0.5% hard cap
-            if position_value > max_position_value:
-                qty = max_position_value / price  # Allow fractional shares
-                logger.info(f"🔐 [{symbol}] Position size CAPPED to 0.5% max: ${position_value:.2f} → ${qty * price:.2f} ({qty:.4f} shares)")
+            if existing_position:
+                # Calculate current value of existing position
+                cumulative_value = existing_position.get("qty", 0) * existing_position.get("entry_price", price)
+                logger.info(f"📊 [{symbol}] Existing position: ${cumulative_value:.2f}")
 
-            # Safety check: prevent oversizing on penny stocks or micro-caps
-            # Ensure position value doesn't exceed 100% of account (sanity check)
-            max_position_value_sanity = self.account_cfg["account_size_usd"]
-            if (qty * price) > max_position_value_sanity:
-                logger.warning(f"⚠️  [{symbol}] Position size exceeds account size - capping")
-                qty = max_position_value_sanity / price
+            # Fixed order size: $50 per entry
+            order_size = 50.0  # Fixed $50 per order
+            total_if_entered = cumulative_value + order_size
+            max_per_symbol = 150.0  # Maximum $150 per symbol
+
+            # Check if new entry would exceed cap
+            if total_if_entered > max_per_symbol:
+                logger.info(f"⏭️  [{symbol}] Position cap check: ${cumulative_value:.2f} + ${order_size:.2f} = ${total_if_entered:.2f} > ${max_per_symbol:.2f} - SKIP")
+                continue
+
+            # Calculate quantity for $50 order using dollar_amount
+            qty = order_size / price
+            logger.info(f"📈 [{symbol}] Pyramid entry #{int(cumulative_value/order_size + 1)}: $50 = {qty:.4f} shares @ ${price:.2f}")
 
             # Skip entry if fractional share would be less than $1 (too small to trade)
             position_value = qty * price
@@ -984,16 +995,9 @@ class TradingBot:
             # Revert to market orders for now (MCP schema limitation)
             # TODO: Implement limit orders once MCP server schema supports it
 
-            # Verify order won't exceed capital limit
-            max_position_value = self.account_cfg["account_size_usd"] * self.account_cfg["position_size_pct"]
-            order_value = qty * price
-
-            if order_value > max_position_value:
-                logger.warning(f"⚠️  [{symbol}] Order (${order_value:.2f}) exceeds cap (${max_position_value:.2f}) - SKIPPING")
-                continue
-
-            # Place order (quantity is rounded DOWN to respect capital limits)
-            response = self.mcp.place_order(symbol, qty=qty, price=price, side="buy")
+            # Place $50 order using dollar_amount (fixed pyramid entry)
+            # This ensures exact position sizing regardless of stock price
+            response = self.mcp.place_order(symbol, qty=qty, price=price, side="buy", dollar_amount=50.0)
 
             if "error" in response:
                 # Order failed - Save to failed_orders.json for retry next cycle

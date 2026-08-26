@@ -1,29 +1,29 @@
 {
-    "RBLX": {
-        "qty": 1.321003963011889,
-        "entry_price": 37.85,
-        "highest_price": 37.98,
-        "entry_time": "2026-08-26 12:37:43",
-        "entry_timestamp": "2026-08-26T12:37:45.210897",
-        "cycles_held": 2,
-        "retry_count": 0
-    },
-    "JD": {
-        "qty": 1.7355085039916696,
-        "entry_price": 28.81,
-        "highest_price": 28.81,
-        "entry_time": "2026-08-26 12:40:39",
-        "entry_timestamp": "2026-08-26T12:40:41.468117",
-        "cycles_held": 1,
-        "retry_count": 0
-    },
-    "NFLX": {
-        "qty": 0.6127075546841493,
-        "entry_price": 81.605,
-        "highest_price": 81.605,
-        "entry_time": "2026-08-26 12:11:23",
-        "entry_timestamp": "2026-08-26T12:11:25.070503",
-        "cycles_held": 0,
-        "retry_count": 0
-    }
+  "RBLX": {
+    "qty": 1.321003963011889,
+    "entry_price": 37.85,
+    "highest_price": 37.98,
+    "entry_time": "2026-08-26 12:37:43",
+    "entry_timestamp": "2026-08-26T12:37:45.210897",
+    "cycles_held": 3,
+    "retry_count": 0
+  },
+  "JD": {
+    "qty": 1.7355085039916696,
+    "entry_price": 28.81,
+    "highest_price": 28.81,
+    "entry_time": "2026-08-26 12:40:39",
+    "entry_timestamp": "2026-08-26T12:40:41.468117",
+    "cycles_held": 2,
+    "retry_count": 0
+  },
+  "NFLX": {
+    "qty": 0.6127075546841493,
+    "entry_price": 81.605,
+    "highest_price": 81.605,
+    "entry_time": "2026-08-26 12:11:23",
+    "entry_timestamp": "2026-08-26T12:11:25.070503",
+    "cycles_held": 0,
+    "retry_count": 0
+  }
 }
