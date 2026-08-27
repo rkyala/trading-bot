@@ -223,22 +223,27 @@ class LocalMCPClient:
         Place order via Robinhood MCP bridge
         PYRAMID STRATEGY: Fixed $50 orders with $150 cap per symbol
 
-        STRATEGY: Prefer dollar_amount for fixed $50 pyramid entries
-        FALLBACK: Use quantity if dollar_amount not provided
+        CRITICAL: Robinhood MCP requires EITHER quantity OR dollar_amount (not both)
+        - If dollar_amount provided: use ONLY dollar_amount (ignore qty)
+        - If only qty provided: use ONLY quantity
         """
-        # Try dollar_amount first (most reliable for fixed position sizing)
+        # STRATEGY: Prefer dollar_amount for fixed position sizing (pyramid entries)
         if dollar_amount is not None and dollar_amount > 0:
-            logger.debug(f"💰 {symbol}: Placing ${dollar_amount:.2f} order via dollar_amount")
-            return self._rpc("tools/call", {
+            logger.info(f"💰 {symbol}: Placing ${dollar_amount:.2f} order (dollar_amount={round(dollar_amount, 2)})")
+
+            # CRITICAL: Only send dollar_amount, NOT quantity
+            mcp_call = {
                 "name": "place_equity_order",
                 "arguments": {
                     "symbol": symbol,
                     "dollar_amount": round(dollar_amount, 2),
                     "side": side
                 }
-            })
+            }
+            logger.debug(f"MCP Request: {mcp_call}")
+            return self._rpc("tools/call", mcp_call)
 
-        # Fallback: use quantity (for compatibility)
+        # FALLBACK: Use quantity (for standard orders)
         if qty is None:
             raise ValueError("qty or dollar_amount parameter required")
 
@@ -247,15 +252,19 @@ class LocalMCPClient:
             logger.warning(f"❌ {symbol}: qty {qty:.4f} → {qty_formatted} - SKIPPING")
             return {"error": "Quantity must be > 0"}
 
-        logger.debug(f"📤 {symbol}: Placing {qty_formatted} shares (qty fallback)")
-        return self._rpc("tools/call", {
+        logger.info(f"📤 {symbol}: Placing {qty_formatted} shares via quantity parameter")
+
+        # CRITICAL: Only send quantity, NOT dollar_amount
+        mcp_call = {
             "name": "place_equity_order",
             "arguments": {
                 "symbol": symbol,
                 "quantity": qty_formatted,
                 "side": side
             }
-        })
+        }
+        logger.debug(f"MCP Request: {mcp_call}")
+        return self._rpc("tools/call", mcp_call)
 
     def get_positions(self):
         """Get positions via MCP with required account_number parameter"""
@@ -966,8 +975,9 @@ class TradingBot:
             # TODO: Implement limit orders once MCP server schema supports it
 
             # Place $50 order using dollar_amount (fixed pyramid entry)
+            # CRITICAL: Only pass dollar_amount, NOT qty (Robinhood MCP requires exclusive use)
             # This ensures exact position sizing regardless of stock price
-            response = self.mcp.place_order(symbol, qty=qty, price=price, side="buy", dollar_amount=50.0)
+            response = self.mcp.place_order(symbol, side="buy", dollar_amount=50.0)
 
             if "error" in response:
                 # Order failed - Save to failed_orders.json for retry next cycle

@@ -41,16 +41,7 @@
     "highest_price": 81.63,
     "entry_time": "synced-from-rh",
     "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 0,
-    "retry_count": 0
-  },
-  "JD": {
-    "qty": 1.7355,
-    "entry_price": 28.81,
-    "highest_price": 28.81,
-    "entry_time": "synced-from-rh",
-    "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 2,
+    "cycles_held": 1,
     "retry_count": 0
   },
   "RBLX": {
@@ -59,7 +50,7 @@
     "highest_price": 37.91,
     "entry_time": "synced-from-rh",
     "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 1,
+    "cycles_held": 2,
     "retry_count": 0
   },
   "U": {
@@ -77,7 +68,7 @@
     "highest_price": 150.8,
     "entry_time": "2026-08-26 15:31:05",
     "entry_timestamp": "2026-08-26T15:31:06.471537",
-    "cycles_held": 0,
+    "cycles_held": 1,
     "retry_count": 0
   },
   "ABNB": {
@@ -86,7 +77,16 @@
     "highest_price": 188.32,
     "entry_time": "2026-08-26 15:31:05",
     "entry_timestamp": "2026-08-26T15:31:07.070434",
-    "cycles_held": 0,
+    "cycles_held": 1,
+    "retry_count": 0
+  },
+  "DASH": {
+    "qty": 0.21593142018095052,
+    "entry_price": 231.555,
+    "highest_price": 232.1125,
+    "entry_time": "2026-08-27 09:02:42",
+    "entry_timestamp": "2026-08-27T09:02:44.351012",
+    "cycles_held": 1,
     "retry_count": 0
   }
 }
