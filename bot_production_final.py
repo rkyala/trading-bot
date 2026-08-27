@@ -223,47 +223,56 @@ class LocalMCPClient:
         Place order via Robinhood MCP bridge
         PYRAMID STRATEGY: Fixed $50 orders with $150 cap per symbol
 
-        CRITICAL: Robinhood MCP requires EITHER quantity OR dollar_amount (not both)
-        - If dollar_amount provided: use ONLY dollar_amount (ignore qty)
-        - If only qty provided: use ONLY quantity
+        CRITICAL FIX: Robinhood MCP ONLY accepts 'quantity' parameter (as string)
+        - dollar_amount is NOT supported by Agentic API
+        - Must calculate: qty = dollar_amount / price
+        - Send as: quantity = str(qty)
         """
-        # STRATEGY: Prefer dollar_amount for fixed position sizing (pyramid entries)
-        if dollar_amount is not None and dollar_amount > 0:
-            logger.info(f"💰 {symbol}: Placing ${dollar_amount:.2f} order (dollar_amount={round(dollar_amount, 2)})")
+        # STRATEGY: Prefer dollar_amount for fixed $50 pyramid entries
+        if dollar_amount is not None and dollar_amount > 0 and price is not None and price > 0:
+            # Calculate quantity from dollar amount
+            qty_from_dollars = dollar_amount / price
+            qty_formatted = round(qty_from_dollars, 2)
 
-            # CRITICAL: Only send dollar_amount, NOT quantity
+            if qty_formatted <= 0:
+                logger.warning(f"❌ {symbol}: ${dollar_amount:.2f} / ${price:.2f} = {qty_formatted} shares - SKIPPING")
+                return {"error": "Calculated quantity must be > 0"}
+
+            logger.info(f"💰 {symbol}: Fixed ${dollar_amount:.2f} entry = {qty_formatted} shares @ ${price:.2f}")
+
+            # CRITICAL: Robinhood MCP requires 'quantity' as STRING, NOT dollar_amount
             mcp_call = {
                 "name": "place_equity_order",
                 "arguments": {
                     "symbol": symbol,
-                    "dollar_amount": round(dollar_amount, 2),
+                    "quantity": str(qty_formatted),  # Convert to string for MCP
                     "side": side
                 }
             }
-            logger.debug(f"MCP Request: {mcp_call}")
+            logger.debug(f"📤 MCP Request: {mcp_call}")
             return self._rpc("tools/call", mcp_call)
 
-        # FALLBACK: Use quantity (for standard orders)
+        # FALLBACK: Use quantity if dollar_amount not available
         if qty is None:
-            raise ValueError("qty or dollar_amount parameter required")
+            raise ValueError("qty or (dollar_amount + price) parameters required")
 
         qty_formatted = round(qty, 2)
         if qty_formatted <= 0:
             logger.warning(f"❌ {symbol}: qty {qty:.4f} → {qty_formatted} - SKIPPING")
             return {"error": "Quantity must be > 0"}
 
-        logger.info(f"📤 {symbol}: Placing {qty_formatted} shares via quantity parameter")
+        logger.info(f"📤 {symbol}: Placing {qty_formatted} shares")
 
-        # CRITICAL: Only send quantity, NOT dollar_amount
+        # Send quantity as STRING to MCP
         mcp_call = {
             "name": "place_equity_order",
             "arguments": {
                 "symbol": symbol,
-                "quantity": qty_formatted,
+                "quantity": str(qty_formatted),  # Convert to string for MCP
                 "side": side
             }
         }
-        logger.debug(f"MCP Request: {mcp_call}")
+        logger.debug(f"📤 MCP Request: {mcp_call}")
         return self._rpc("tools/call", mcp_call)
 
     def get_positions(self):

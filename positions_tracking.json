@@ -32,7 +32,7 @@
     "highest_price": 209.43,
     "entry_time": "synced-from-rh",
     "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 0,
+    "cycles_held": 1,
     "retry_count": 0
   },
   "RBLX": {
@@ -44,21 +44,30 @@
     "cycles_held": 2,
     "retry_count": 0
   },
+  "PYPL": {
+    "qty": 0.813607421401455,
+    "entry_price": 61.4547,
+    "highest_price": 61.4547,
+    "entry_time": "2026-08-27 13:35:51",
+    "entry_timestamp": "2026-08-27T13:35:53.122570",
+    "cycles_held": 1,
+    "retry_count": 0
+  },
   "U": {
-    "qty": 1.0,
-    "entry_price": 45.28,
-    "highest_price": 45.28,
-    "entry_time": "synced-from-rh",
-    "entry_timestamp": "2026-08-26T14:42:00",
+    "qty": 1.142334932602239,
+    "entry_price": 43.77,
+    "highest_price": 43.77,
+    "entry_time": "2026-08-27 14:02:29",
+    "entry_timestamp": "2026-08-27T14:02:31.419596",
     "cycles_held": 0,
     "retry_count": 0
   },
-  "JD": {
-    "qty": 1.7355,
-    "entry_price": 28.81,
-    "highest_price": 28.81,
-    "entry_time": "synced-from-rh",
-    "entry_timestamp": "2026-08-27T10:09:00",
+  "DASH": {
+    "qty": 0.21611126791184215,
+    "entry_price": 231.3623,
+    "highest_price": 231.3623,
+    "entry_time": "2026-08-27 14:02:29",
+    "entry_timestamp": "2026-08-27T14:02:32.426444",
     "cycles_held": 0,
     "retry_count": 0
   }
