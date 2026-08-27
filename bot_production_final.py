@@ -984,9 +984,9 @@ class TradingBot:
             # TODO: Implement limit orders once MCP server schema supports it
 
             # Place $50 order using dollar_amount (fixed pyramid entry)
-            # CRITICAL: Only pass dollar_amount, NOT qty (Robinhood MCP requires exclusive use)
-            # This ensures exact position sizing regardless of stock price
-            response = self.mcp.place_order(symbol, side="buy", dollar_amount=50.0)
+            # CRITICAL FIX: Pass BOTH dollar_amount AND price so place_order() can calculate qty
+            # place_order() now calculates: qty = dollar_amount / price, then sends as string quantity to MCP
+            response = self.mcp.place_order(symbol, price=price, side="buy", dollar_amount=50.0)
 
             if "error" in response:
                 # Order failed - Save to failed_orders.json for retry next cycle
