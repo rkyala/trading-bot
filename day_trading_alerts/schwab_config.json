@@ -1,0 +1,9 @@
+{
+  "client_id": "0cO8vLBhMVTm6IUUxxxP2JQuw8oaCdtMOYbZbQ59v064mlgp",
+  "client_secret": "J8DGdvItqDGmAvUGL4SbX0Y8yH8B4Oxh0dNLAnfn5FjXYLMLHYRvDZOkKOem5TQw",
+  "auth_code": "C0.b2F1dGgyLmNkYy5zY2h3YWIuY29t.68tKFxZZzCXHL7fEJ2d0fWvmfk3-EY_S8cwFU4HPpO4@",
+  "redirect_uri": "https://developer.schwab.com/oauth2-redirect.html",
+  "token_url": "https://api.schwabapi.com/v1/oauth/token",
+  "quotes_url": "https://api.schwabapi.com/v1/marketdata/quotes",
+  "historicals_url": "https://api.schwabapi.com/v1/marketdata/history"
+}
