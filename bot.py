@@ -23,6 +23,7 @@ import sys
 import json
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 import pytz
 import time
 import requests
@@ -60,14 +61,44 @@ except Exception as e:
     log.error(f"Traceback: {traceback.format_exc()}")
     log.info("ℹ️ FinRL not available (using rules-based strategy)")
 
+# Import HYBRID strategy (FinRL + Bollinger Bands)
+try:
+    from hybrid_strategy import HybridStrategy, create_hybrid_stage2_prompt
+    hybrid_enabled = True
+except Exception as e:
+    hybrid_enabled = False
+    import traceback
+    log = logging.getLogger(__name__)
+    log.warning(f"⚠️  HYBRID IMPORT WARNING: {type(e).__name__}: {e}")
+    log.info("ℹ️ HYBRID strategy not available (falling back to mean-reversion)")
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
+# Load config from config.json (HYBRID strategy settings)
+CONFIG = {}
+try:
+    config_path = Path("config.json")
+    if config_path.exists():
+        CONFIG = json.loads(config_path.read_text())
+        log = logging.getLogger(__name__)
+        log.info(f"✅ Loaded config.json: strategy={CONFIG.get('strategy', {}).get('name', 'UNKNOWN')}")
+    else:
+        log = logging.getLogger(__name__)
+        log.warning("⚠️  config.json not found, using defaults")
+except Exception as e:
+    log = logging.getLogger(__name__)
+    log.error(f"Failed to load config.json: {e}")
+
+# Strategy selection from config
+STRATEGY_MODE = CONFIG.get("strategy", {}).get("mode", "mean_reversion")
+HYBRID_ENABLED = STRATEGY_MODE == "finrl_bb_confirmation" and hybrid_enabled
+
 TOTAL_BUDGET = 10000
 MAX_POSITION = 600  # Optimized: increased from 500 (backtest +8.66% ROI)
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 55  # Mean-reversion setup confidence (60% → 55% for more frequent trades)
+CONFIDENCE_THRESHOLD = CONFIG.get("trading", {}).get("confidence_threshold", 55)
 
 # Mean-reversion dip-buy parameters (backtested +8.66% ROI over 3 months)
 SPIKE_MIN_PCT = 5.0  # Detect spikes 5-8%
@@ -909,13 +940,13 @@ def refresh_candidate_prices(state, candidates):
 
 
 def stage2_sonnet_analysis(client, state, candidates, cache=None):
-    """Stage 2: Sonnet 4.6 - BUY momentum strategy (cash account compatible)."""
+    """Stage 2: Sonnet 4.6 - BUY strategy (mean-reversion or HYBRID depending on config)."""
     if not candidates or len(candidates) == 0:
         return [], 1800
-    
+
     if cache is None:
         cache = load_cache()
-    
+
     # Format candidates with technical data if available
     if technical_analysis_enabled:
         candidates_text = format_technical_for_claude(candidates[:5])
@@ -926,41 +957,20 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             for c in candidates[:5]
         ])
         candidates_text_note = ""
-    
+
     learning_context = ""
     calibration = state.get("performance_analytics", {}).get("confidence_calibration")
     if calibration:
         learning_context = f"\n\nLast week's calibration: {calibration.get('recommendations', '')}"
-    
-    
-    # Check cache before calling Sonnet
-    # Get regime for cache key
-    cached_regime = cache_get(cache, "regime", REGIME_CACHE_TTL)
-    regime = cached_regime.get("regime", "unknown") if cached_regime else "unknown"
-    
-    # Check Sonnet cache with candidates + regime
-    cached_response = get_cached_sonnet_response(candidates, regime)
-    if cached_response:
-        # Return cached decisions and interval
-        return cached_response.get("decisions", []), cached_response.get("interval", 1800)
 
-    # Track cache miss
-    try:
-        state["cache_stats"]["misses"] = state["cache_stats"].get("misses", 0) + 1
-        total = state["cache_stats"]["hits"] + state["cache_stats"].get("misses", 0)
-        hit_rate = 100.0 * state["cache_stats"]["hits"] / total if total > 0 else 0
-        log.info("📊 Cache MISS: Calling Sonnet (hit rate: %.1f%% across %d calls)",
-                 hit_rate, total)
-    except Exception as e:
-        log.debug("Failed to update cache miss: %s", e)
-
-    try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            system=[{
-                "type": "text",
-                "text": """MEAN-REVERSION analyzer: Score overbought movers (spiked +5-8% today) for pullback reversal probability.
+    # ===== HYBRID STRATEGY =====
+    if HYBRID_ENABLED:
+        log.info("🎯 STAGE 2: Using HYBRID strategy (FinRL + BB confirmation)")
+        # Use HYBRID prompts instead of mean-reversion
+        system_prompt, user_prompt = create_hybrid_stage2_prompt(candidates_text, candidates_text_note, learning_context)
+    else:
+        log.info("📊 STAGE 2: Using MEAN-REVERSION strategy")
+        system_prompt = """MEAN-REVERSION analyzer: Score overbought movers (spiked +5-8% today) for pullback reversal probability.
 
 SETUP: Buy spike-day pullbacks, exit at +0.75% (50%) and +2% (50%). Stop at -1.5%. Hold 1-3 days.
 
@@ -972,12 +982,8 @@ SCORING:
 
 SKIP: <+2% moves, low volume, earnings risk, continued strength.
 
-OUTPUT: Top 3 candidates, score ≥60 minimum. Include regime (bull/bear/choppy/rotation). Return JSON only.""",
-                "cache_control": {"type": "ephemeral"}
-            }],
-            messages=[{
-                "role": "user",
-                "content": f"""Analyze these daily movers for MEAN-REVERSION dip-buying opportunities:
+OUTPUT: Top 3 candidates, score ≥60 minimum. Include regime (bull/bear/choppy/rotation). Return JSON only."""
+        user_prompt = f"""Analyze these daily movers for MEAN-REVERSION dip-buying opportunities:
 
 {candidates_text}{candidates_text_note}{learning_context}
 
@@ -1003,9 +1009,43 @@ This JSON is required for trade execution. Always include at least an empty deci
 
 Return JSON (REQUIRED):
 {{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% (overbought today), high reversal probability within 1-3 days to +2%", "action": "BUY", "hold_days": "1-3", "target_pct": 2}}], "next_interval_seconds": 1800}}"""
+
+    # Check cache before calling Sonnet
+    # Get regime for cache key
+    cached_regime = cache_get(cache, "regime", REGIME_CACHE_TTL)
+    regime = cached_regime.get("regime", "unknown") if cached_regime else "unknown"
+
+    # Check Sonnet cache with candidates + regime
+    cached_response = get_cached_sonnet_response(candidates, regime)
+    if cached_response:
+        # Return cached decisions and interval
+        return cached_response.get("decisions", []), cached_response.get("interval", 1800)
+
+    # Track cache miss
+    try:
+        state["cache_stats"]["misses"] = state["cache_stats"].get("misses", 0) + 1
+        total = state["cache_stats"]["hits"] + state["cache_stats"].get("misses", 0)
+        hit_rate = 100.0 * state["cache_stats"]["hits"] / total if total > 0 else 0
+        log.info("📊 Cache MISS: Calling Sonnet (hit rate: %.1f%% across %d calls)",
+                 hit_rate, total)
+    except Exception as e:
+        log.debug("Failed to update cache miss: %s", e)
+
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }],
+            messages=[{
+                "role": "user",
+                "content": user_prompt
             }],
         )
-        
+
         record_token_usage(state, resp.usage.input_tokens, resp.usage.output_tokens)
         log.info("Stage 2 tokens: %d input, %d output | Running total: %d input, %d output",
                 resp.usage.input_tokens, resp.usage.output_tokens,

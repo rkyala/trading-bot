@@ -1,0 +1,37 @@
+{
+  "strategy": {
+    "name": "HYBRID",
+    "mode": "finrl_bb_confirmation",
+    "enabled": true,
+    "finrl_weight": 0.60,
+    "bb_weight": 0.40,
+    "description": "FinRL (60%) + Bollinger Bands (40%) confirmation layer"
+  },
+  "trading": {
+    "entry_order_size": 50,
+    "max_position_per_symbol": 150,
+    "confidence_threshold": 60,
+    "profit_target_pct": 1.5,
+    "stop_loss_pct": 1.5
+  },
+  "technical_indicators": {
+    "bollinger_bands": {
+      "period": 20,
+      "std_dev": 2.0
+    },
+    "adx_min": 20,
+    "rsi_overbought": 70
+  },
+  "robinhood": {
+    "agentic_endpoint": "https://agent.robinhood.com/mcp/trading",
+    "oauth_enabled": true
+  },
+  "account": {
+    "agentic_account_number": "432591949"
+  },
+  "risk_management": {
+    "daily_loss_limit_pct": 5.0,
+    "max_position_dollars": 600,
+    "circuit_breaker_halt_pct": -40.0
+  }
+}
