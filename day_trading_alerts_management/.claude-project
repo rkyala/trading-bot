@@ -1,0 +1,7 @@
+{
+  "name": "Day Trading Alerts Management",
+  "description": "Live dashboard for managing day trading alerts",
+  "version": "1.0.0",
+  "status": "planning",
+  "type": "web-dashboard"
+}

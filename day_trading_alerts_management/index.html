@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Day Trading Alerts Dashboard</title>
+    <link rel="stylesheet" href="public/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Day Trading Alerts Dashboard</h1>
+            <p>Real-time alert monitoring</p>
+        </header>
+
+        <main>
+            <section class="alerts-section">
+                <h2>Live Alerts</h2>
+                <div id="alerts-container" class="alerts-list">
+                    <p>No alerts yet...</p>
+                </div>
+            </section>
+
+            <section class="stats-section">
+                <h2>Statistics</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Total Alerts</h3>
+                        <p id="total-alerts">0</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Today's Alerts</h3>
+                        <p id="today-alerts">0</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Avg Confidence</h3>
+                        <p id="avg-confidence">--</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Hit Rate</h3>
+                        <p id="hit-rate">--</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="src/app.js"></script>
+</body>
+</html>
