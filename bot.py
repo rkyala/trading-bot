@@ -59,6 +59,8 @@ except Exception as e:
     log.error(f"❌ FINRL IMPORT ERROR: {type(e).__name__}: {e}")
     log.error(f"Traceback: {traceback.format_exc()}")
     log.info("ℹ️ FinRL not available (using rules-based strategy)")
+# MONDAY HOTFIX: Disable broken FinRL until proper Gymnasium model is ready
+finrl_enabled = False  # Force disable to unblock BB+Fibonacci strategy
 
 # ============================================================================
 # CONFIGURATION
