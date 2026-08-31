@@ -108,105 +108,119 @@ def scan_symbol(symbol: str, engine: EnhancedAlertEngine) -> dict:
         return None
 
 def send_consolidated_alert(high_conv: list, caution: list, skip: list):
-    """Send ONE consolidated Discord message with HIGH CONVICTION entry/exit details (field truncation safe)"""
+    """Send HIGH CONVICTION alerts as MULTIPLE messages (2-3) to avoid truncation"""
     try:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S CDT')
         total_scanned = len(high_conv) + len(caution) + len(skip)
+        from enhanced_alert_engine import EnhancedAlertEngine
 
-        embed_fields = []
+        messages_sent = 0
 
-        # HIGH CONVICTION - FULL ENTRY/EXIT DETAILS (truncated for Discord field limit)
+        # MESSAGE 1: HIGH CONVICTION - FIRST BATCH (TOP 2-3)
         if high_conv:
-            high_text = ""
-            for alert in high_conv[:5]:  # Show top 5 with full details
+            high_detail = ""
+            batch_size = 3 if len(high_conv) >= 3 else len(high_conv)
+
+            for alert in high_conv[:batch_size]:
                 entry = f"**{alert['symbol']}** | {alert.get('verdict', 'EXECUTE')}\n"
                 entry += f"Entry: ${alert['entry']:.2f} | Stop: ${alert['stop_loss']:.2f} | Target: ${alert['take_profit']:.2f}\n"
                 entry += f"R/R: {alert['risk_reward']:.2f}:1 | RSI: {alert['rsi']:.1f} | RVOL: {alert['rvol']:.2f}x | Conf: {alert['confidence']}%\n"
 
-                # Options flow metrics + interpretation (alerts only)
+                # Options flow + strategy
                 if "options" in alert:
-                    from enhanced_alert_engine import EnhancedAlertEngine
                     opt = alert["options"]
                     opt_text = EnhancedAlertEngine.interpret_options_flow(opt)
                     if opt_text:
                         entry += f"📊 P/C {opt['pc_ratio']} | Vol/OI {opt['vol_oi_ratio']}x | IV {opt['avg_iv']}%\n"
                         entry += f"   → {opt_text}\n"
 
-                    # Options strategy recommendation (for alerts only - user reference)
                     if "opt_strategy" in alert:
                         strat = alert["opt_strategy"]
-                        entry += f"🎯 Opt Play: `{strat['strategy']}` ({strat['strikes']})\n"
-                        entry += f"   💡 {strat['rationale']}\n"
+                        entry += f"🎯 Opt: `{strat['strategy']}` ({strat['strikes']})\n"
 
                 entry += "\n"
-                high_text += entry
+                high_detail += entry
 
-            if len(high_conv) > 5:
-                high_text += f"... +{len(high_conv) - 5} more HIGH CONVICTION trades"
+            embed1 = {
+                "title": f"📈 Alert Scan - HIGH CONVICTION • {timestamp}",
+                "color": 3066993,  # Green
+                "description": high_detail[:2000],  # Discord description limit
+                "footer": {"text": f"Alpha Engine v2.4 | Showing {batch_size}/{len(high_conv)} HIGH CONVICTION"}
+            }
 
-            # TRUNCATE for Discord 1024-char field limit
-            high_text = high_text[:1020] + ("..." if len(high_text) > 1020 else "")
+            payload1 = {
+                "username": "Alert Scanner",
+                "avatar_url": "https://cdn-icons-png.flaticon.com/512/3050/3050159.png",
+                "embeds": [embed1]
+            }
 
-            embed_fields.append({
-                "name": f"✅ HIGH CONVICTION ({len(high_conv)})",
-                "value": high_text,
-                "inline": False
-            })
+            resp = DISCORD_SESSION.post(DISCORD_WEBHOOK, json=payload1, timeout=10)
+            if resp.status_code in [200, 204]:
+                messages_sent += 1
 
-        # CAUTION - BRIEF (truncated)
+        # MESSAGE 2: HIGH CONVICTION - REMAINING (if > batch_size)
+        if len(high_conv) > batch_size:
+            remaining_text = ""
+            for alert in high_conv[batch_size:]:
+                remaining_text += f"**{alert['symbol']}**: ${alert['entry']:.2f} | R/R {alert['risk_reward']:.2f}:1 | Conf {alert['confidence']}%\n"
+                if "options" in alert:
+                    opt = alert["options"]
+                    remaining_text += f"  📊 P/C {opt['pc_ratio']} | IV {opt['avg_iv']}%\n"
+                remaining_text += "\n"
+
+            embed2 = {
+                "title": f"✅ HIGH CONVICTION - Additional ({len(high_conv) - batch_size})",
+                "color": 3066993,
+                "description": remaining_text[:2000]
+            }
+
+            payload2 = {
+                "username": "Alert Scanner",
+                "avatar_url": "https://cdn-icons-png.flaticon.com/512/3050/3050159.png",
+                "embeds": [embed2]
+            }
+
+            resp = DISCORD_SESSION.post(DISCORD_WEBHOOK, json=payload2, timeout=10)
+            if resp.status_code in [200, 204]:
+                messages_sent += 1
+
+        # MESSAGE 3: CAUTION + SUMMARY
+        summary_text = ""
         if caution:
-            caution_text = ""
-            for alert in caution[:3]:  # Show top 3 briefly
-                caution_text += f"• **{alert['symbol']}**: ${alert['entry']:.2f} | Conf {alert['confidence']}% | {alert.get('verdict', 'Caution')}\n"
+            summary_text += "⚠️ **CAUTION**\n"
+            for alert in caution[:5]:
+                summary_text += f"• **{alert['symbol']}**: ${alert['entry']:.2f} | Conf {alert['confidence']}%\n"
+            if len(caution) > 5:
+                summary_text += f"... +{len(caution) - 5} more\n"
+            summary_text += "\n"
 
-            if len(caution) > 3:
-                caution_text += f"... +{len(caution) - 3} more"
+        summary_text += f"📊 **Summary**: Scanned 22/22 | 🟢 HIGH: {len(high_conv)} | ⚠️ CAUTION: {len(caution)} | ❌ SKIP: {len(skip)}"
 
-            # TRUNCATE for Discord 1024-char field limit
-            caution_text = caution_text[:1000] + ("..." if len(caution_text) > 1000 else "")
-
-            embed_fields.append({
-                "name": f"⚠️ CAUTION ({len(caution)})",
-                "value": caution_text,
-                "inline": False
-            })
-
-        # Summary
-        embed_fields.append({
-            "name": "📊 Scan Summary",
-            "value": f"Scanned **{total_scanned}/22** | 🟢 HIGH: {len(high_conv)} | ⚠️ CAUTION: {len(caution)} | ❌ SKIP: {len(skip)}",
-            "inline": False
-        })
-
-        # Determine color based on results
-        embed_color = 3066993 if high_conv else (15158332 if caution else 3447003)  # Green/Red/Blue
-
-        # Discord embed with field-based structure (safer than description)
-        embed = {
-            "title": f"📈 Alert Scan - HIGH CONVICTION • {timestamp}",
-            "color": embed_color,
-            "fields": embed_fields,
-            "footer": {"text": "Alpha Engine v2.4 | 15-Min Consolidated Scan"}
+        embed3 = {
+            "title": "📊 Scan Summary",
+            "color": 3447003,  # Blue
+            "description": summary_text
         }
 
-        payload = {
+        payload3 = {
             "username": "Alert Scanner",
             "avatar_url": "https://cdn-icons-png.flaticon.com/512/3050/3050159.png",
-            "embeds": [embed]
+            "embeds": [embed3]
         }
 
-        # Use shared session for connection pooling
-        response = DISCORD_SESSION.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+        resp = DISCORD_SESSION.post(DISCORD_WEBHOOK, json=payload3, timeout=10)
+        if resp.status_code in [200, 204]:
+            messages_sent += 1
 
-        if response.status_code in [200, 204]:
-            log.info(f"✅ Consolidated alert sent: {len(high_conv)} HIGH, {len(caution)} CAUTION, {len(skip)} SKIP")
+        if messages_sent > 0:
+            log.info(f"✅ Sent {messages_sent} messages: {len(high_conv)} HIGH, {len(caution)} CAUTION, {len(skip)} SKIP")
             return True
         else:
-            log.error(f"❌ Discord error {response.status_code}: {response.text[:200]}")
+            log.error(f"❌ Discord error: no messages sent")
             return False
 
     except Exception as e:
-        log.error(f"❌ Failed to send alert: {e}")
+        log.error(f"❌ Failed to send alerts: {e}")
         return False
 
 def run_consolidated_scan():
