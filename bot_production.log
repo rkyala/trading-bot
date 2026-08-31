@@ -19756,3 +19756,35 @@ run_bot_cycle.sh: line 11: timeout: command not found
 2026-08-27 14:02:32,437 | ✅ Cleanup completed
 2026-08-27 14:08:45,861 | [+] MCP subprocess started (unbuffered)
 2026-08-27 14:08:46,003 | ✅ MCP initialized
+2026-08-30 20:34:05,477 | Account: 432591949
+2026-08-30 20:34:05,477 | 
+Initializing MCP connection...
+2026-08-30 20:34:05,481 | [+] MCP subprocess started (unbuffered)
+2026-08-30 20:34:05,573 | ✅ MCP initialized
+2026-08-30 20:34:05,573 | ✅ MCP connected
+2026-08-30 20:34:05,573 | 
+Fetching positions from Robinhood...
+2026-08-30 20:34:06,400 | ✅ Position fetch successful
+2026-08-30 20:34:06,404 | [*] MCP subprocess terminated
+2026-08-30 20:34:06,404 | 
+✅ MCP connection closed
+2026-08-30 20:34:23,367 | [+] MCP subprocess started (unbuffered)
+2026-08-30 20:34:23,449 | ✅ MCP initialized
+2026-08-30 20:34:23,449 | 
+Fetching raw positions response...
+2026-08-30 20:34:23,940 | [*] MCP subprocess terminated
+2026-08-30 20:34:43,090 | Account: 432591949
+2026-08-30 20:34:43,090 | 
+Initializing MCP connection...
+2026-08-30 20:34:43,093 | [+] MCP subprocess started (unbuffered)
+2026-08-30 20:34:43,184 | ✅ MCP initialized
+2026-08-30 20:34:43,184 | ✅ MCP connected
+2026-08-30 20:34:43,184 | 
+Fetching positions from Robinhood...
+2026-08-30 20:34:43,797 | ✅ Position fetch successful
+2026-08-30 20:34:43,802 | [*] MCP subprocess terminated
+2026-08-30 20:34:43,802 | 
+✅ MCP connection closed
+2026-08-30 22:28:40,062 | [+] MCP subprocess started (unbuffered)
+2026-08-30 22:28:40,349 | ✅ MCP initialized
+2026-08-30 22:28:41,072 | [*] MCP subprocess terminated
