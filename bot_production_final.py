@@ -28,7 +28,7 @@ from hybrid_strategy import HybridStrategy
 # ============================================================================
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO,  # Back to INFO (DEBUG too verbose)
     format='%(asctime)s | %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -560,7 +560,21 @@ class TradingBot:
         logger.info("=" * 80)
         logger.info("FETCHING SYMBOLS")
         logger.info("=" * 80)
-        raw_symbols = DynamicSymbolFetcher.get_trending_symbols(config)
+
+        # FIX: Use hardcoded Schwab watchlist (same as schwab_signal_fetcher.py)
+        # Eliminates yfinance dependency, 100% Schwab-based
+        SCHWAB_WATCHLIST = [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
+            "ADBE", "PYPL", "CRM", "INTC", "AMD", "MU", "AVGO", "LRCX",
+            "ASML", "QCOM", "CSCO", "INTU", "IBM", "ORCL", "SQ", "SHOP",
+            "KEYS", "U", "ROKU", "COIN", "HOOD", "RBLX", "BKNG", "AXP",
+            "SNOW", "DBX", "ZM", "SPOT", "DDOG", "NET", "CRWD", "OKTA",
+            "PLTR", "RIOT", "CLSK", "MARA", "MSTR", "HOOD", "UPST", "DASH",
+            "PINS", "ABNB", "JD", "XPEV"
+        ]
+
+        logger.info("✅ Using Schwab watchlist (50 stocks, no yfinance)")
+        raw_symbols = SCHWAB_WATCHLIST
 
         # CRITICAL FIX #1: Deduplicate symbols at initialization (prevents re-entering same symbol in one cycle)
         self.symbols = list(dict.fromkeys(raw_symbols))
