@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""
+Hybrid Strategy: FinRL (60%) + Bollinger Bands (40%)
+Pure technical ML - NO Claude API
+"""
+
+import numpy as np
+import pandas as pd
+import logging
+from pathlib import Path
+from typing import Optional, Dict
+import json
+
+log = logging.getLogger(__name__)
+
+# ============================================================================
+# FINRL INTEGRATION (Pure ML)
+# ============================================================================
+
+class FinRLPredictor:
+    """Wrapper around trained FinRL agent for bot predictions"""
+
+    def __init__(self, model_path=None):
+        """Load trained FinRL model"""
+        try:
+            from stable_baselines3 import PPO
+            self.PPO = PPO
+        except ImportError:
+            log.warning("stable_baselines3 not installed - FinRL disabled")
+            self.PPO = None
+            self.enabled = False
+            self.model = None
+            return
+
+        if model_path is None:
+            # Look for finrl_agent.zip in current directory
+            script_dir = Path(__file__).parent
+            model_path = str(script_dir / "finrl_agent")
+
+        full_zip_path = model_path + ".zip"
+        try:
+            self.model = self.PPO.load(model_path)
+            self.enabled = True
+            log.info(f"✅ FinRL model loaded: {full_zip_path}")
+        except Exception as e:
+            self.enabled = False
+            self.model = None
+            log.warning(f"⚠️ FinRL model not available: {e}")
+
+    def predict_trend(self, price_momentum: float) -> Optional[int]:
+        """
+        Predict trend: 1=BUY, -1=SELL, 0=HOLD
+        Args:
+            price_momentum: % change from entry/baseline
+        Returns:
+            1 (buy), -1 (sell), or None if FinRL disabled
+        """
+        if not self.enabled or self.model is None:
+            return None
+
+        try:
+            obs = np.array([price_momentum], dtype=np.float32)
+            action, _ = self.model.predict(obs, deterministic=True)
+            return int(action)
+        except Exception as e:
+            log.debug(f"FinRL prediction error: {e}")
+            return None
+
+
+# ============================================================================
+# BOLLINGER BANDS (Technical Indicator)
+# ============================================================================
+
+class BollingerBands:
+    """Calculate Bollinger Bands from price data"""
+
+    @staticmethod
+    def calculate(prices: np.ndarray, period: int = 20, std_dev: float = 2.0) -> Dict:
+        """
+        Calculate Bollinger Bands
+        Args:
+            prices: Array of close prices
+            period: SMA period (default 20)
+            std_dev: Number of standard deviations (default 2)
+        Returns:
+            Dict with upper, middle, lower bands
+        """
+        if len(prices) < period:
+            return None
+
+        try:
+            series = pd.Series(prices)
+            sma = series.rolling(window=period).mean().iloc[-1]
+            std = series.rolling(window=period).std().iloc[-1]
+
+            if std is None or pd.isna(std):
+                return None
+
+            upper = sma + (std * std_dev)
+            lower = sma - (std * std_dev)
+
+            return {
+                "upper": float(upper),
+                "middle": float(sma),
+                "lower": float(lower),
+                "width": float(upper - lower)
+            }
+        except Exception as e:
+            log.debug(f"BB calculation error: {e}")
+            return None
+
+    @staticmethod
+    def is_oversold(current_price: float, bands: Dict) -> bool:
+        """Check if price is near lower band (oversold)"""
+        if not bands:
+            return False
+        lower = bands["lower"]
+        middle = bands["middle"]
+        distance = (current_price - lower) / (middle - lower) if middle != lower else 0
+        return distance < 0.2  # Within 20% of lower band
+
+
+# ============================================================================
+# FIBONACCI EXTENSIONS (Profit Targets)
+# ============================================================================
+
+class FibonacciExtensions:
+    """Calculate Fibonacci extension profit targets"""
+
+    @staticmethod
+    def calculate_targets(entry_price: float, high_14: float, low_14: float) -> Dict:
+        """
+        Calculate Fibonacci extension levels for profit taking
+        Args:
+            entry_price: Entry/pullback price
+            high_14: 14-period high
+            low_14: 14-period low
+        Returns:
+            Dict with 1.618x and 2.618x extension targets
+        """
+        try:
+            range_14 = high_14 - low_14
+            if range_14 == 0:
+                return None
+
+            # Fibonacci extensions from entry
+            target_1618 = entry_price + (range_14 * 1.618)  # First target
+            target_2618 = entry_price + (range_14 * 2.618)  # Ultimate target
+
+            return {
+                "entry": float(entry_price),
+                "target_1618": float(target_1618),
+                "target_2618": float(target_2618),
+                "fib_range": float(range_14)
+            }
+        except Exception as e:
+            log.debug(f"Fibonacci calculation error: {e}")
+            return None
+
+
+# ============================================================================
+# HYBRID STRATEGY (FinRL 60% + BB 40%)
+# ============================================================================
+
+class HybridStrategy:
+    """
+    Hybrid entry signal generator combining:
+    - FinRL: 60% weight (ML-based trend prediction)
+    - Bollinger Bands: 40% weight (mean-reversion confirmation)
+    """
+
+    def __init__(self):
+        """Initialize hybrid strategy"""
+        self.finrl = FinRLPredictor()
+        self.finrl_weight = 0.60
+        self.bb_weight = 0.40
+
+    def generate_entry_signal(self, symbol: str, current_price: float, prices: np.ndarray,
+                            high_14: float, low_14: float) -> Optional[Dict]:
+        """
+        Generate hybrid entry signal
+        Returns:
+            Dict with signal and confidence, or None if no signal
+        """
+        try:
+            # Step 1: FinRL signal (trend prediction)
+            price_momentum = ((current_price - prices[-1]) / prices[-1] * 100) if len(prices) > 0 else 0
+            finrl_signal = self.finrl.predict_trend(price_momentum)
+            finrl_score = 100 if finrl_signal == 1 else 0 if finrl_signal is None else 0
+
+            # Step 2: Bollinger Bands (mean-reversion confirmation)
+            bb = BollingerBands.calculate(prices)
+            bb_oversold = BollingerBands.is_oversold(current_price, bb) if bb else False
+            bb_score = 100 if bb_oversold else 0
+
+            # Step 3: Combine scores (FinRL 60% + BB 40%)
+            combined_score = (finrl_score * self.finrl_weight) + (bb_score * self.bb_weight)
+
+            # Minimum confidence threshold: 50
+            if combined_score < 50:
+                return None
+
+            # Step 4: Calculate Fibonacci targets
+            fib_targets = FibonacciExtensions.calculate_targets(current_price, high_14, low_14)
+
+            return {
+                "symbol": symbol,
+                "signal_type": "BUY",
+                "price": float(current_price),
+                "confidence": int(combined_score),
+                "finrl_score": int(finrl_score),
+                "bb_score": int(bb_score),
+                "bb_status": "OVERSOLD" if bb_oversold else "NORMAL",
+                "fibonacci_targets": fib_targets,
+                "bb_bands": bb
+            }
+
+        except Exception as e:
+            log.error(f"Hybrid signal error for {symbol}: {e}")
+            return None
+
+    def generate_exit_signal(self, symbol: str, entry_price: float, current_price: float,
+                            fibonacci_targets: Optional[Dict]) -> Optional[Dict]:
+        """
+        Generate exit signal based on Fibonacci targets
+        Returns:
+            Dict with exit signal (TAKE-PROFIT or STOP-LOSS), or None
+        """
+        if not fibonacci_targets:
+            return None
+
+        pnl_pct = ((current_price - entry_price) / entry_price) * 100
+
+        # Profit target 1: 1.618x extension
+        if current_price >= fibonacci_targets["target_1618"]:
+            return {
+                "symbol": symbol,
+                "signal_type": "SELL",
+                "reason": "TAKE-PROFIT (1.618x target)",
+                "price": float(current_price),
+                "pnl_pct": pnl_pct,
+                "target_hit": "target_1618"
+            }
+
+        # Profit target 2: 2.618x extension (ultimate)
+        if current_price >= fibonacci_targets["target_2618"]:
+            return {
+                "symbol": symbol,
+                "signal_type": "SELL",
+                "reason": "TAKE-PROFIT (2.618x ultimate target)",
+                "price": float(current_price),
+                "pnl_pct": pnl_pct,
+                "target_hit": "target_2618"
+            }
+
+        # Stop loss: -1.5% from entry
+        if pnl_pct <= -1.5:
+            return {
+                "symbol": symbol,
+                "signal_type": "SELL",
+                "reason": "STOP-LOSS (-1.5%)",
+                "price": float(current_price),
+                "pnl_pct": pnl_pct
+            }
+
+        return None

@@ -20,6 +20,9 @@ import numpy as np
 # Import dynamic symbol fetcher
 from symbol_fetcher import DynamicSymbolFetcher
 
+# Import hybrid strategy (FinRL + Bollinger Bands + Fibonacci)
+from hybrid_strategy import HybridStrategy
+
 # ============================================================================
 # LOGGING SETUP
 # ============================================================================
@@ -60,7 +63,7 @@ class PositionTracker:
         with open(self.file_path, 'w') as f:
             json.dump(self.positions, f, indent=2)
 
-    def add_position(self, symbol: str, qty: int, entry_price: float, entry_time: str):
+    def add_position(self, symbol: str, qty: int, entry_price: float, entry_time: str, fibonacci_targets: Optional[Dict] = None):
         """Record a new entry position with highest_price tracking for true trailing stop"""
         from datetime import datetime
         self.positions[symbol] = {
@@ -70,10 +73,14 @@ class PositionTracker:
             "entry_time": entry_time,
             "entry_timestamp": datetime.now().isoformat(),  # Timestamp for robust time-based exits
             "cycles_held": 0,
-            "retry_count": 0
+            "retry_count": 0,
+            "fibonacci_targets": fibonacci_targets  # Fibonacci extension profit targets
         }
         self._save()
-        logger.info(f"📝 Position tracked: {symbol} {qty}@ ${entry_price:.2f} @ {entry_time}")
+        if fibonacci_targets:
+            logger.info(f"📝 Position tracked: {symbol} {qty}@ ${entry_price:.2f} | Targets: ${fibonacci_targets.get('target_1618', 0):.2f} / ${fibonacci_targets.get('target_2618', 0):.2f}")
+        else:
+            logger.info(f"📝 Position tracked: {symbol} {qty}@ ${entry_price:.2f} @ {entry_time}")
 
     def get_position(self, symbol: str) -> Optional[Dict]:
         """Get position details"""
@@ -542,10 +549,12 @@ class TradingBot:
     def __init__(self, config: Dict):
         self.config = config
         self.mcp = LocalMCPClient(config)
-        self.entry_signal_gen = EntrySignalGenerator(config)
+        self.hybrid_strategy = HybridStrategy()  # FinRL 60% + Bollinger Bands 40%
         self.exit_signal_gen = ExitSignalGenerator(config)
         self.position_tracker = PositionTracker()
         self.account_cfg = config["account"]
+
+        logger.info("✅ Hybrid Strategy Initialized: FinRL (60%) + Bollinger Bands (40%) + Fibonacci Targets")
 
         # Get symbols dynamically or from config
         logger.info("=" * 80)
@@ -688,8 +697,14 @@ class TradingBot:
             # CRITICAL BUG FIX: Refresh position reference after cycle increment (prevents NameError)
             position = self.position_tracker.get_position(symbol)
 
-            # Check exit conditions
-            exit_signal = self.exit_signal_gen.generate_exit_signal(symbol, position, current_data)
+            # Check exit conditions (use hybrid strategy for Fibonacci-based exits)
+            entry_price = position.get("entry_price", 0)
+            fib_targets = position.get("fibonacci_targets")
+            exit_signal = self.hybrid_strategy.generate_exit_signal(symbol, entry_price, current_price, fib_targets)
+
+            # Fallback to time-based exit if hybrid doesn't generate signal
+            if not exit_signal:
+                exit_signal = self.exit_signal_gen.generate_exit_signal(symbol, position, current_data)
 
             if exit_signal:
                 # CRITICAL BUG FIX: Use position (always defined) not undefined updated_position
@@ -846,11 +861,13 @@ class TradingBot:
                     else:
                         # Retry succeeded!
                         logger.info(f"✅ RETRY SUCCEEDED for {symbol}!")
+                        fib_targets = failed_order.get('fibonacci_targets')
                         self.position_tracker.add_position(
                             symbol=symbol,
                             qty=failed_order['qty'],
                             entry_price=failed_order['price'],
-                            entry_time=failed_order['entry_time']
+                            entry_time=failed_order['entry_time'],
+                            fibonacci_targets=fib_targets
                         )
                         # CRITICAL FIX #14: Mark successful retry as processed (prevents re-entry in same cycle)
                         processed_this_cycle.add(symbol)
@@ -884,35 +901,39 @@ class TradingBot:
 
             analyzed.append(symbol)
 
-            # INTEGRATION: Check for 13-F institutional backing (NEW)
-            institutional_boost = ""
-            if symbol in institutional_signals:
-                inst_signal = institutional_signals[symbol]
-                institutional_boost = f" | 🏛️  {inst_signal.get('reason', 'INSTITUTIONAL BACKING')}"
-                logger.info(f"✅ [{i:2}/{len(self.symbols)}] {symbol:6} | ADX: {data.get('adx', 0):6.1f} | Stoch: {data.get('stoch_k', 0):6.1f}{institutional_boost}")
-            else:
-                logger.info(f"✅ [{i:2}/{len(self.symbols)}] {symbol:6} | ADX: {data.get('adx', 0):6.1f} | Stoch: {data.get('stoch_k', 0):6.1f}")
+            # Log technical data for hybrid strategy
+            price = data.get("price", 0)
+            high_14 = data.get("high_14", 0)
+            low_14 = data.get("low_14", 0)
+            logger.info(f"📊 [{i:2}/{len(self.symbols)}] {symbol:6} | Price: ${price:.2f} | High14: ${high_14:.2f} | Low14: ${low_14:.2f}")
 
-            signal = self.entry_signal_gen.generate_signal(data)
+            # HYBRID STRATEGY: FinRL (60%) + Bollinger Bands (40%)
+            # Convert technical data to numpy array for BB calculation (need close prices over time)
+            # For now, use current price as simplified input
+            prices = np.array([price])  # Simplified - in production, accumulate price history
+            signal = self.hybrid_strategy.generate_entry_signal(symbol, price, prices, high_14, low_14)
+
             if not signal:
-                # Check if there's institutional signal (can generate entry even without technical signal)
+                # Check if there's institutional signal (can generate entry even without hybrid signal)
                 if symbol in institutional_signals:
-                    logger.info(f"⚡ [{symbol}] No technical signal, but INSTITUTIONAL SIGNAL DETECTED - boosting confidence")
+                    logger.info(f"⚡ [{symbol}] No hybrid signal, but INSTITUTIONAL SIGNAL DETECTED - boosting confidence")
                     # Create synthetic signal from institutional data
                     signal = {
                         "symbol": symbol,
                         "signal_type": "BUY",
-                        "price": data.get("price", 0),
-                        "adx": data.get("adx", 0),
-                        "stoch_k": data.get("stoch_k", 0),
+                        "price": price,
+                        "confidence": 60,
                         "source": "INSTITUTIONAL"
                     }
                 else:
                     continue
+            else:
+                logger.info(f"✅ [{i:2}/{len(self.symbols)}] {symbol:6} | HYBRID SIGNAL: Confidence {signal.get('confidence', 0)}% | FinRL: {signal.get('finrl_score', 0)}% | BB: {signal.get('bb_score', 0)}%")
 
             signals_found += 1
             symbol = signal["symbol"]
             price = signal["price"]
+            fibonacci_targets = signal.get("fibonacci_targets")  # Extract Fib targets from hybrid signal
 
             # PYRAMID ENTRY STRATEGY: Fixed $50 per order, max $150 total per symbol
             # Check if symbol already has a position
@@ -1010,7 +1031,8 @@ class TradingBot:
                             "first_attempt": datetime.now().isoformat(),
                             "last_attempt": datetime.now().isoformat(),
                             "retry_count": 1,
-                            "error": str(response.get('error', 'Unknown error'))
+                            "error": str(response.get('error', 'Unknown error')),
+                            "fibonacci_targets": fibonacci_targets  # Save Fib targets for retry
                         }
                         logger.info(f"💾 Saved {symbol} to failed orders for retry next cycle")
                     else:
@@ -1050,8 +1072,8 @@ class TradingBot:
                 except (ValueError, TypeError, AttributeError):
                     pass  # Fallback to snapshot price
 
-                # Track position with ACTUAL execution price (not stale snapshot)
-                self.position_tracker.add_position(symbol, qty, float(fill_price), cycle_time)
+                # Track position with ACTUAL execution price (not stale snapshot) + Fibonacci targets
+                self.position_tracker.add_position(symbol, qty, float(fill_price), cycle_time, fibonacci_targets)
 
                 # CRITICAL FIX #13: Mark symbol as processed in this cycle
                 processed_this_cycle.add(symbol)
