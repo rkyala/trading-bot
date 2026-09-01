@@ -106,7 +106,7 @@ class FuturesAlerter:
         return df
 
     def generate_alert(self, symbol, name, price, rsi, macd, stoch, atr):
-        """Generate alert if conditions met"""
+        """Generate alert with entry/exit/verdict"""
         alerts = []
 
         # Overbought pullback (potential short)
@@ -114,6 +114,9 @@ class FuturesAlerter:
             alerts.append({
                 'type': '🔴 SHORT',
                 'reason': f'Overbought (RSI {rsi:.0f}) + negative MACD',
+                'entry': f'Below current price, target {price * 0.99:.2f}',
+                'exit': f'Cover at {price * 1.02:.2f} or RSI < 50',
+                'verdict': 'SELL SIGNAL - Reversal setup',
                 'target': 'Reversal to lower BB'
             })
 
@@ -122,6 +125,9 @@ class FuturesAlerter:
             alerts.append({
                 'type': '🟢 LONG',
                 'reason': f'Oversold (RSI {rsi:.0f}) + positive MACD',
+                'entry': f'Buy on strength, target {price * 1.01:.2f}',
+                'exit': f'Take profit at {price * 1.03:.2f} or RSI > 70',
+                'verdict': 'BUY SIGNAL - Bounce play',
                 'target': 'Bounce to mid-BB'
             })
 
@@ -130,6 +136,9 @@ class FuturesAlerter:
             alerts.append({
                 'type': '🟢 MOMENTUM',
                 'reason': 'Strong uptrend forming',
+                'entry': f'Buy pullbacks near {price * 0.995:.2f}',
+                'exit': f'Trail stop at 2%, target {price * 1.05:.2f}',
+                'verdict': 'BUY MOMENTUM - Ride the trend',
                 'target': 'Continue to upper BB'
             })
 
@@ -138,6 +147,9 @@ class FuturesAlerter:
             alerts.append({
                 'type': '🔴 WEAKNESS',
                 'reason': 'Downtrend confirmed',
+                'entry': f'Short on any bounce near {price * 1.005:.2f}',
+                'exit': f'Cover at {price * 1.02:.2f} or support break',
+                'verdict': 'SHORT SIGNAL - Downtrend',
                 'target': 'Test lower support'
             })
 
@@ -146,35 +158,54 @@ class FuturesAlerter:
             alerts.append({
                 'type': '⚡ VOLATILE',
                 'reason': f'High volatility (ATR {atr:.2f})',
+                'entry': 'Breakout play - wait for direction',
+                'exit': f'Stop {atr * 2:.2f} away from entry',
+                'verdict': 'CAUTION - Wide ranges, tight stops',
                 'target': 'Watch for breakout'
             })
 
         return alerts
 
     def send_discord_alert(self, symbol, name, price, alerts, rsi, macd, stoch):
-        """Send alert to Discord"""
+        """Send alert to Discord with entry/exit/verdict"""
         if not self.discord_webhook or not alerts:
             return
 
         try:
-            embed = {
-                'title': f'{symbol} - {name}',
-                'color': 16711680 if any('SHORT' in a['type'] for a in alerts) else 65280,
-                'fields': [
-                    {'name': 'Price', 'value': f'${price:.2f}', 'inline': True},
-                    {'name': 'RSI', 'value': f'{rsi:.1f}', 'inline': True},
-                    {'name': 'MACD', 'value': f'{macd:.4f}', 'inline': True},
-                ],
-                'description': '\n'.join([f"{a['type']}: {a['reason']}" for a in alerts])
-            }
+            for alert in alerts:
+                # Determine color based on signal type
+                if 'SHORT' in alert['type'] or 'SELL' in alert.get('verdict', ''):
+                    color = 16711680  # Red
+                elif 'LONG' in alert['type'] or 'BUY' in alert.get('verdict', ''):
+                    color = 65280    # Green
+                elif 'CAUTION' in alert.get('verdict', ''):
+                    color = 16776960  # Yellow
+                else:
+                    color = 11447295  # Blue
 
-            payload = {
-                'embeds': [embed],
-                'username': 'Futures Alerts'
-            }
+                embed = {
+                    'title': f'{symbol} - {name}',
+                    'color': color,
+                    'fields': [
+                        {'name': '🎯 Signal', 'value': alert['type'], 'inline': False},
+                        {'name': '📊 Reason', 'value': alert['reason'], 'inline': False},
+                        {'name': '💰 Entry', 'value': alert.get('entry', 'N/A'), 'inline': False},
+                        {'name': '🚪 Exit', 'value': alert.get('exit', 'N/A'), 'inline': False},
+                        {'name': '📋 Verdict', 'value': alert.get('verdict', 'NEUTRAL'), 'inline': False},
+                        {'name': 'Price', 'value': f'${price:.2f}', 'inline': True},
+                        {'name': 'RSI', 'value': f'{rsi:.1f}', 'inline': True},
+                        {'name': 'MACD', 'value': f'{macd:.4f}', 'inline': True},
+                    ]
+                }
 
-            requests.post(self.discord_webhook, json=payload, timeout=5)
-            log.info(f"✅ Discord alert sent: {symbol}")
+                payload = {
+                    'embeds': [embed],
+                    'username': '📈 Futures Alerts'
+                }
+
+                requests.post(self.discord_webhook, json=payload, timeout=5)
+
+            log.info(f"✅ Discord alert sent: {symbol} ({len(alerts)} signal(s))")
         except Exception as e:
             log.warning(f"⚠️ Discord send failed: {e}")
 
