@@ -32,7 +32,8 @@ class FuturesAlerter:
             '/SIL': 'Silver',
             '/CL': 'Crude Oil'
         }
-        self.discord_webhook = os.getenv('DISCORD_WEBHOOK_FUTURES')
+        # Use existing Discord webhook for alerts
+        self.discord_webhook = "https://discord.com/api/webhooks/1543798306650722374/hXV_yVr3S7VdHzMOGCkFoNhYxeukGQzTY7kW70lVpDC6Ei0my9OJ6elV6n4A37fclnXa"
         self.alerts = []
 
     def is_afterhours(self):
