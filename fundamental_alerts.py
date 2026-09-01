@@ -191,9 +191,7 @@ class FundamentalAnalysisSystem:
         try:
             df = self.fetcher.get_price_history_df(
                 symbol,
-                period_type='year',
-                period=1,
-                frequency_type='daily'
+                frequency='daily'
             )
             if df is None or len(df) < 200:
                 return None
