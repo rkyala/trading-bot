@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================================
 
-CREDENTIALS_FILE = Path("schwab_credentials.json")
-TOKEN_CACHE_FILE = Path("schwab_token.json")
+# Use absolute paths so cron jobs can find files regardless of working directory
+SCRIPT_DIR = Path(__file__).parent.absolute()
+CREDENTIALS_FILE = SCRIPT_DIR / "schwab_credentials.json"
+TOKEN_CACHE_FILE = SCRIPT_DIR / "schwab_token.json"
 
 if not CREDENTIALS_FILE.exists():
     print("❌ ERROR: schwab_credentials.json not found")
