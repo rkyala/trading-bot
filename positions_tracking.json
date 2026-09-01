@@ -26,15 +26,6 @@
     "cycles_held": 3,
     "retry_count": 0
   },
-  "ABNB": {
-    "qty": 0.27,
-    "entry_price": 186.0,
-    "highest_price": 186.0,
-    "entry_time": "2026-08-27 15:36:37",
-    "entry_timestamp": "2026-08-27T15:36:39.865621",
-    "cycles_held": 0,
-    "retry_count": 0
-  },
   "TSLA": {
     "qty": 0.14,
     "entry_price": 347.43,
@@ -44,40 +35,13 @@
     "cycles_held": 3,
     "retry_count": 0
   },
-  "ZM": {
-    "qty": 0.51,
-    "entry_price": 98.75,
-    "highest_price": 98.75,
-    "entry_time": "2026-08-28 11:32:26",
-    "entry_timestamp": "2026-08-28T11:32:30.077209",
-    "cycles_held": 0,
-    "retry_count": 0
-  },
-  "SHOP": {
-    "qty": 0.32,
-    "entry_price": 153.84,
-    "highest_price": 154.01,
-    "entry_time": "2026-08-28 12:02:24",
-    "entry_timestamp": "2026-08-28T12:02:26.895243",
-    "cycles_held": 1,
-    "retry_count": 0
-  },
-  "JD": {
-    "qty": 1.7355,
-    "entry_price": 28.81,
-    "highest_price": 28.81,
-    "entry_time": "synced-from-rh",
-    "entry_timestamp": "2026-08-26T14:42:00",
-    "cycles_held": 0,
-    "retry_count": 0
-  },
   "COIN": {
     "qty": 0.28,
     "entry_price": 179.11,
-    "highest_price": 179.11,
+    "highest_price": 181.03,
     "entry_time": "2026-08-28 14:36:30",
     "entry_timestamp": "2026-08-28T14:36:31.814431",
-    "cycles_held": 0,
+    "cycles_held": 2,
     "retry_count": 0
   }
 }
