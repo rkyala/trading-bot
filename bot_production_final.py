@@ -29,10 +29,9 @@ try:
     from stable_baselines3 import PPO
     from gymnasium_trading_env import TradingEnv
     GYMNASIUM_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception) as e:
     GYMNASIUM_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("⚠️ Gymnasium PPO model not available - using HybridStrategy only")
+    print(f"⚠️  Gymnasium PPO model not available ({type(e).__name__}) - using HybridStrategy only")
 
 # ============================================================================
 # LOGGING SETUP
@@ -952,19 +951,42 @@ class TradingBot:
             # GYMNASIUM PPO MODEL: Week 2 RL Agent (if available)
             if self.gymnasium_model and signal:
                 try:
-                    # Create simplified 16D feature vector for model prediction
-                    # (RSI, MACD x3, BB x3, ATR, ADX, CCI, Stoch x2, Portfolio state x3)
+                    # Create 16D feature vector from REAL technical data (Schwab cached signals)
+                    # Available fields: price, adx, stoch_k, stoch_d, high_14, low_14
+                    stoch_k = np.clip(data.get("stoch_k", 50) / 100.0, 0, 1)
+                    stoch_d = np.clip(data.get("stoch_d", 50) / 100.0, 0, 1)
+                    adx = np.clip(data.get("adx", 20) / 100.0, 0, 1)
+
+                    # Derive price position within 14-period range
+                    high_14 = data.get("high_14", price)
+                    low_14 = data.get("low_14", price)
+                    range_14 = high_14 - low_14
+                    bb_percent = (price - low_14) / (range_14 + 1e-9) if range_14 > 0 else 0.5
+                    bb_percent = np.clip(bb_percent, 0, 1)
+
+                    # Stoch momentum (K - D)
+                    stoch_momentum = stoch_k - stoch_d
+
+                    # RSI approximation from Stochastic (rough proxy)
+                    rsi_proxy = np.clip((stoch_momentum + 1.0) / 2.0, 0, 1)
+
                     features = np.array([
-                        0.5,  # RSI (neutral)
-                        0.5, 0.5, 0.5,  # MACD
-                        0.5, 0.5, 0.5,  # Bollinger
-                        0.5,  # ATR
-                        0.5,  # ADX
-                        0.5,  # CCI
-                        0.5, 0.5,  # Stoch
-                        0.5,  # Cash ratio
-                        0.0,  # Position
-                        1.0,  # Portfolio value ratio
+                        rsi_proxy,        # 0: RSI proxy (from Stoch)
+                        stoch_k,          # 1: Stochastic K
+                        stoch_d,          # 2: Stochastic D
+                        stoch_momentum,   # 3: K-D momentum
+                        bb_percent,       # 4: Price position in 14-period range
+                        adx,              # 5: ADX (trend strength)
+                        np.clip(adx * 0.8, 0, 1),  # 6: Trend confidence
+                        np.clip((1.0 - bb_percent), 0, 1),  # 7: Distance from upper band
+                        bb_percent,       # 8: Distance from lower band
+                        0.5,              # 9: Volume ratio (unknown, neutral)
+                        np.clip((high_14 - price) / (high_14 + 1e-9), 0, 1),  # 10: Pullback from high
+                        np.clip((price - low_14) / (high_14 - low_14 + 1e-9), 0, 1),  # 11: Bounce from low
+                        0.5,              # 12: Cash ratio (assume 50%)
+                        0.0,              # 13: Current position (0 = none)
+                        1.0,              # 14: Portfolio value ratio (baseline)
+                        np.clip(np.abs(stoch_momentum), 0, 1),  # 15: Momentum magnitude
                     ], dtype=np.float32)
 
                     action, _ = self.gymnasium_model.predict(features, deterministic=True)
