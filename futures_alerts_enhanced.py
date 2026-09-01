@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import numpy as np
@@ -38,12 +39,10 @@ class InstitutionalFuturesAlerter:
         self.alerts = []
 
     def is_afterhours(self):
-        """Check if current time is within 5 PM - 12 AM CDT"""
-        now = datetime.now()
+        """Check if current CDT time is within 5 PM - 12 AM CDT"""
+        now = datetime.now(ZoneInfo("America/Chicago"))
         hour = now.hour
-        if hour >= 17 or hour < 1:
-            return True
-        return False
+        return hour >= 17 or hour < 1
 
     def fetch_futures_data(self, symbol):
         """Fetch recent 30-min data for futures"""
@@ -108,7 +107,8 @@ class InstitutionalFuturesAlerter:
         # Price momentum (institutional buying/selling pressure)
         df['Momentum'] = df['Close'].pct_change(5) * 100  # 5-period momentum
 
-        df = df.fillna(method='ffill').fillna(method='bfill')
+        # Forward fill then backward fill (replacing deprecated fillna(method=))
+        df = df.ffill().bfill()
         return df
 
     def detect_institutional_flow(self, df, symbol):
@@ -158,8 +158,8 @@ class InstitutionalFuturesAlerter:
             alerts.append({
                 'type': '🔴 INSTITUTIONAL SELL',
                 'reason': f"Volume spike + negative momentum ({inst_flow['momentum']:.2f}%) + falling OBV",
-                'entry': f'Short rallies near {price * 1.01:.2f}',
-                'exit': f'Cover at {price * 1.03:.2f}, Stop at {price * 1.05:.2f}',
+                'entry': f'Short rallies near {price * 1.005:.2f}',
+                'exit': f'Cover at {price * 0.97:.2f}, Stop at {price * 1.02:.2f}',
                 'verdict': '🔴 STRONG SELL - Institutional Distribution',
                 'confidence': 'HIGH'
             })
@@ -182,7 +182,7 @@ class InstitutionalFuturesAlerter:
                 'type': '🔴 DOWNTREND',
                 'reason': f'Downtrend confirmed (RSI {rsi:.0f}, MACD -, Stoch {stoch:.0f})',
                 'entry': f'Short on rallies near {price * 1.005:.2f}',
-                'exit': f'Cover at {price * 1.02:.2f}, Stop at {price * 1.04:.2f}',
+                'exit': f'Cover at {price * 0.98:.2f}, Stop at {price * 1.02:.2f}',
                 'verdict': '🔴 SELL PRESSURE - Downtrend',
                 'confidence': 'MEDIUM'
             })
@@ -193,7 +193,7 @@ class InstitutionalFuturesAlerter:
                 'type': '🔴 OVERBOUGHT REVERSAL',
                 'reason': f'Overbought (RSI {rsi:.0f}) with bearish MACD divergence',
                 'entry': f'Short below {price:.2f}',
-                'exit': f'Target {price * 0.98:.2f}, Stop {price * 1.02:.2f}',
+                'exit': f'Target {price * 0.97:.2f}, Stop {price * 1.02:.2f}',
                 'verdict': '🔴 SHORT SETUP - Mean reversion',
                 'confidence': 'MEDIUM'
             })
