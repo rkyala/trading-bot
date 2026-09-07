@@ -139,7 +139,16 @@ class APIValidationTest:
                 logger.info(f"✅ Got {len(alerts)} $100k+ sweeps")
 
                 # Verify premium values if available
-                premiums = [a.get("premium") for a in alerts if "premium" in a]
+                premiums = []
+                for a in alerts:
+                    if "premium" in a:
+                        try:
+                            # Premium might be string or number
+                            prem_val = float(a.get("premium"))
+                            premiums.append(prem_val)
+                        except (ValueError, TypeError):
+                            pass
+
                 if premiums:
                     min_prem = min(premiums)
                     max_prem = max(premiums)
