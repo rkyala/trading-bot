@@ -143,14 +143,20 @@ class Phase1AlertFilterEnhanced:
         """
         self.stats["total_alerts"] += 1
 
-        ticker = alert.get("symbol")
-        direction = alert.get("direction")
-        premium = alert.get("premium", 0)
-        ask_vol_pct = alert.get("ask_volume_pct", 0)
+        # Handle both old (symbol/direction) and new API schema (underlying_symbol/option_type)
+        ticker = alert.get("symbol") or alert.get("underlying_symbol", "UNKNOWN")
+        direction = (alert.get("direction") or alert.get("option_type", "")).upper()
+        premium = float(alert.get("premium", 0))
+
+        # Calculate ask_volume_pct from ask_vol and total volume
+        ask_vol = int(alert.get("ask_vol", 0))
+        total_vol = int(alert.get("volume", 1))
+        ask_vol_pct = ask_vol / total_vol if total_vol > 0 else 0.0
+
         next_earnings_date = alert.get("next_earnings_date")
         er_time = alert.get("er_time")
 
-        logger.info(f"🔍 Filtering {ticker} {direction} (${premium/1e3:.0f}k premium)")
+        logger.info(f"🔍 Filtering {ticker} {direction} (${premium/1e3:.0f}k premium, ask {ask_vol_pct:.0%})")
 
         # ===== GATE 1: PREMIUM SIZE =====
         if premium < 100_000:
