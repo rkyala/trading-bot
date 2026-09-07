@@ -122,27 +122,42 @@ class UnusualWhalesAPI:
         return alerts[0] if alerts else None
 
     # CRITICAL FIX #2: Add async methods to match MockAPI interface
+    # TODO Week 2: Replace with real UW API endpoints for market data
+    # For Tuesday launch, these return placeholder data since Phase 1 filter
+    # uses only premium/ask_vol/tags which come from get_flow_alerts()
+
     async def get_market_tide(self, symbol: str = "SPY") -> Dict[str, Any]:
-        """Fetch real-time Market Tide metrics"""
+        """Fetch real-time Market Tide metrics (TODO: Connect to /api/market-tide endpoint)"""
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.get(
-                    f"{self.base_url}/alerts",
+                    f"{self.base_url}/market-tide",  # Endpoint may change - validate in Week 2
+                    params={"symbol": symbol},
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     timeout=5.0
                 )
                 if resp.status_code == 200:
-                    return {"net_direction": "BULLISH", "bullish_count": 250, "bearish_count": 45}
+                    data = resp.json().get("data", {})
+                    return {
+                        "net_direction": data.get("direction", "NEUTRAL"),
+                        "bullish_count": data.get("bullish_count", 0),
+                        "bearish_count": data.get("bearish_count", 0)
+                    }
             except Exception as e:
-                logger.error(f"Failed to fetch market tide: {e}")
+                logger.debug(f"Failed to fetch market tide (expected for Week 2): {e}")
+        # Placeholder for Tuesday - returns neutral
         return {"net_direction": "NEUTRAL", "bullish_count": 0, "bearish_count": 0}
 
     async def get_net_ticker_premium(self, ticker: str, minutes: int = 60) -> Dict[str, Any]:
-        """Fetch Net Ticker Premium"""
-        return {"net_direction": "BULLISH", "bullish_premium": 12_000_000, "bearish_premium": 2_500_000}
+        """Fetch Net Ticker Premium (TODO: Connect to real endpoint Week 2)"""
+        # TODO: Implement real endpoint call
+        # Placeholder for Tuesday - returns neutral
+        return {"net_direction": "NEUTRAL", "bullish_premium": 0, "bearish_premium": 0}
 
     async def get_dark_pool_volume(self, ticker: str) -> Dict[str, Any]:
-        """Fetch Dark Pool Volume"""
+        """Fetch Dark Pool Volume (TODO: Connect to real endpoint Week 2)"""
+        # TODO: Implement real endpoint call - may use /api/darkpool endpoint
+        # Placeholder for Tuesday - returns neutral
         return {
             "dark_pool_side": "NEUTRAL",
             "suspicious": False,
@@ -150,8 +165,10 @@ class UnusualWhalesAPI:
         }
 
     async def get_vol_oi_ratio(self, ticker: str, days: int = 30) -> Dict[str, Any]:
-        """Fetch Vol/OI ratio"""
-        return {"vol_oi_ratio": 1.2, "status": "opening"}
+        """Fetch Vol/OI ratio (TODO: Connect to real endpoint Week 2)"""
+        # TODO: Implement real endpoint call
+        # Placeholder for Tuesday - returns neutral
+        return {"vol_oi_ratio": 1.0, "status": "opening"}
 
     def log_stats(self):
         """Log API statistics"""

@@ -17,13 +17,15 @@ from datetime import time
 # ===========================================================================
 EXECUTION_MODE = {
     # Use mock Robinhood responses (no real trading, testing only)
-    "mock_mode": True,
+    # CHANGE TO FALSE FOR LIVE TRADING TUESDAY 9/8
+    "mock_mode": False,  # ✅ REAL TRADING ENABLED
 
     # Use Robinhood paper trading (real account, simulated capital)
     "paper_trading": False,
 
     # Log what would happen without actually executing
-    "log_orders_only": True,
+    # CHANGE TO FALSE FOR LIVE TRADING TUESDAY 9/8
+    "log_orders_only": False,  # ✅ ACTUALLY PLACE ORDERS
 
     # Used by uw_robinhood_mcp.py to determine behavior
 }
