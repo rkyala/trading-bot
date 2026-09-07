@@ -1,0 +1,62 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-7.4.3, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.9/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/unusual_whales_bot
+plugins: anyio-4.12.1, flask-1.3.0
+collecting ... collected 14 items
+
+test_phase2_integration.py::TestGap1OrderPlacement::test_mock_order_placement_success FAILED [  7%]
+test_phase2_integration.py::TestGap1OrderPlacement::test_order_statistics_tracking FAILED [ 14%]
+test_phase2_integration.py::TestGap2PriceFeed::test_index_quotes_fetching PASSED [ 21%]
+test_phase2_integration.py::TestGap2PriceFeed::test_underlying_stop_trigger PASSED [ 28%]
+test_phase2_integration.py::TestGap2PriceFeed::test_underlying_target_trigger PASSED [ 35%]
+test_phase2_integration.py::TestGap2PriceFeed::test_position_price_check_integration PASSED [ 42%]
+test_phase2_integration.py::TestGap3EODLiquidation::test_eod_force_close_time_check PASSED [ 50%]
+test_phase2_integration.py::TestGap3EODLiquidation::test_eod_closes_all_positions FAILED [ 57%]
+test_phase2_integration.py::TestPhase25Hotfixes::test_atr_based_stops_low_volatility PASSED [ 64%]
+test_phase2_integration.py::TestPhase25Hotfixes::test_atr_based_stops_high_volatility PASSED [ 71%]
+test_phase2_integration.py::TestPhase25Hotfixes::test_nbbo_spread_validation_tight PASSED [ 78%]
+test_phase2_integration.py::TestPhase25Hotfixes::test_nbbo_spread_validation_wide PASSED [ 85%]
+test_phase2_integration.py::TestPhase25Hotfixes::test_nbbo_midpoint_calculation PASSED [ 92%]
+test_phase2_integration.py::TestFullExecutionFlow::test_full_trade_lifecycle PASSED [100%]
+
+=================================== FAILURES ===================================
+___________ TestGap1OrderPlacement.test_mock_order_placement_success ___________
+test_phase2_integration.py:41: in test_mock_order_placement_success
+    response = asyncio.run(run())
+/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/asyncio/base_events.py:642: in run_until_complete
+    return future.result()
+test_phase2_integration.py:31: in run
+    response = await client.place_option_order(
+uw_robinhood_mcp.py:76: in place_option_order
+    return self._mock_place_option_order(
+uw_robinhood_mcp.py:106: in _mock_place_option_order
+    f"✅ [MOCK] Order placed: {direction} {quantity}x {symbol} "
+E   ValueError: Invalid format specifier
+____________ TestGap1OrderPlacement.test_order_statistics_tracking _____________
+test_phase2_integration.py:62: in test_order_statistics_tracking
+    asyncio.run(run())
+/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/asyncio/base_events.py:642: in run_until_complete
+    return future.result()
+test_phase2_integration.py:54: in run
+    await client.place_option_order(
+uw_robinhood_mcp.py:76: in place_option_order
+    return self._mock_place_option_order(
+uw_robinhood_mcp.py:106: in _mock_place_option_order
+    f"✅ [MOCK] Order placed: {direction} {quantity}x {symbol} "
+E   ValueError: Invalid format specifier
+_____________ TestGap3EODLiquidation.test_eod_closes_all_positions _____________
+test_phase2_integration.py:182: in test_eod_closes_all_positions
+    assert position_mgr.total_open_positions() == 3
+E   assert 1 == 3
+E    +  where 1 = <bound method PositionManager.total_open_positions of <uw_position_manager.PositionManager object at 0x7ff53839e3d0>>()
+E    +    where <bound method PositionManager.total_open_positions of <uw_position_manager.PositionManager object at 0x7ff53839e3d0>> = <uw_position_manager.PositionManager object at 0x7ff53839e3d0>.total_open_positions
+=========================== short test summary info ============================
+FAILED test_phase2_integration.py::TestGap1OrderPlacement::test_mock_order_placement_success
+FAILED test_phase2_integration.py::TestGap1OrderPlacement::test_order_statistics_tracking
+FAILED test_phase2_integration.py::TestGap3EODLiquidation::test_eod_closes_all_positions
+========================= 3 failed, 11 passed in 0.16s =========================
