@@ -126,7 +126,11 @@ class TestGap2PriceFeed:
 
     def test_position_price_check_integration(self):
         """Test position manager checking positions against price"""
-        position_mgr = PositionManager()
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write('{}')
+            temp_file = f.name
+        position_mgr = PositionManager(positions_file=temp_file)
 
         # Add a position
         pos_id = position_mgr.add_position(
@@ -144,6 +148,10 @@ class TestGap2PriceFeed:
         assert len(exits) == 1
         assert exits[0][0] == pos_id
         print(f"✅ Position manager detected exit trigger")
+
+        # Cleanup temp file
+        import os
+        os.unlink(temp_file)
 
 
 class TestGap3EODLiquidation:
