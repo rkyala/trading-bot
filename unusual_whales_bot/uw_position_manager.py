@@ -87,7 +87,10 @@ class PositionManager:
 
         Returns: Position ID for tracking
         """
-        pos_id = f"{symbol}_{direction}_{datetime.now().strftime('%H%M%S')}"
+        import time
+        # Use microsecond precision to ensure unique IDs in rapid-fire tests
+        timestamp = datetime.now().strftime('%H%M%S') + str(int(time.time() * 1000000) % 1000000).zfill(6)
+        pos_id = f"{symbol}_{direction}_{timestamp}"
 
         position = OptionsPosition(
             symbol=symbol,

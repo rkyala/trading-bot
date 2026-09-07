@@ -126,7 +126,11 @@ class TestGap2PriceFeed:
 
     def test_position_price_check_integration(self):
         """Test position manager checking positions against price"""
-        position_mgr = PositionManager()
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write('{}')
+            temp_file = f.name
+        position_mgr = PositionManager(positions_file=temp_file)
 
         # Add a position
         pos_id = position_mgr.add_position(
@@ -144,6 +148,10 @@ class TestGap2PriceFeed:
         assert len(exits) == 1
         assert exits[0][0] == pos_id
         print(f"✅ Position manager detected exit trigger")
+
+        # Cleanup temp file
+        import os
+        os.unlink(temp_file)
 
 
 class TestGap3EODLiquidation:
@@ -165,7 +173,13 @@ class TestGap3EODLiquidation:
 
     def test_eod_closes_all_positions(self):
         """Test that EOD close processes all positions"""
-        position_mgr = PositionManager()
+        import tempfile
+        # Use temporary file to avoid loading existing positions
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write('{}')
+            temp_file = f.name
+
+        position_mgr = PositionManager(positions_file=temp_file)
 
         # Add multiple positions
         for i in range(3):
@@ -191,6 +205,10 @@ class TestGap3EODLiquidation:
         assert len(closed) == 3
         assert position_mgr.total_open_positions() == 0
         print(f"✅ EOD closed {len(closed)} positions")
+
+        # Cleanup temp file
+        import os
+        os.unlink(temp_file)
 
 
 class TestPhase25Hotfixes:
@@ -268,7 +286,13 @@ class TestFullExecutionFlow:
 
     def test_full_trade_lifecycle(self):
         """Test complete trade lifecycle"""
-        position_mgr = PositionManager()
+        import tempfile
+        # Use temporary file to avoid loading existing positions
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write('{}')
+            temp_file = f.name
+
+        position_mgr = PositionManager(positions_file=temp_file)
         safeguards = ExecutionSafeguards()
         client = RobinhoodMCPClient(use_mock=True)
 
@@ -305,6 +329,10 @@ class TestFullExecutionFlow:
         assert position_mgr.total_open_positions() == 0
 
         print(f"✅ Full lifecycle complete: entry → monitor → exit")
+
+        # Cleanup temp file
+        import os
+        os.unlink(temp_file)
 
 
 if __name__ == "__main__":
