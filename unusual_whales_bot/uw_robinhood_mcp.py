@@ -102,9 +102,9 @@ class RobinhoodMCPClient:
             order_id = f"mock-order-{self.stats['orders_placed']:05d}"
             self.stats["orders_successful"] += 1
 
+            price_str = f"${limit_price:.2f}" if limit_price else "market"
             logger.info(
-                f"✅ [MOCK] Order placed: {direction} {quantity}x {symbol} "
-                f"@ ${limit_price:.2f if limit_price else 'market'}"
+                f"✅ [MOCK] Order placed: {direction} {quantity}x {symbol} @ {price_str}"
             )
             return OrderResponse(
                 success=True,
