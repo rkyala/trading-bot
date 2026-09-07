@@ -87,13 +87,22 @@ class UWHistoricalBacktester:
                 return False, f"Gate 1: Premium ${premium:,.0f} < $100k"
 
             # Gate 2: Ask-side aggression
-            ask_pct = float(alert.get("ask_volume_pct", 0))
+            # Calculate ask_volume_pct from ask_vol / total volume
+            ask_vol = int(alert.get("ask_vol", 0))
+            total_vol = int(alert.get("volume", 1))
+            ask_pct = ask_vol / total_vol if total_vol > 0 else 0.0
+
             if ask_pct < 0.70:
                 return False, f"Gate 2: Ask volume {ask_pct:.0%} < 70%"
 
-            # Gate 3: Directional bias
+            # Gate 3: Directional bias (skip extended hours bid-side)
             tags = alert.get("tags", [])
-            if "bid_side" in tags:
+            report_flags = alert.get("report_flags", [])
+
+            # Extended hours often shows bid-side, so filter those separately
+            if "bid_side" in tags and "extended_hours" in report_flags:
+                return False, "Gate 3: Bid-side extended hours (lower quality)"
+            elif "bid_side" in tags:
                 return False, "Gate 3: Bid-side (sellers, not buyers)"
 
             return True, "PASSED: All Phase 1 gates"
