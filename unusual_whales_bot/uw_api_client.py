@@ -18,6 +18,8 @@ import httpx
 from typing import List, Dict, Optional, Any
 import os
 
+from uw_api_usage_monitor import APIUsageMonitor
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +44,9 @@ class UnusualWhalesAPI:
             "alerts_fetched": 0,
             "errors": 0,
         }
+
+        # API Usage Monitor: Tracks daily quota, minute-level rate limiting
+        self.usage_monitor = APIUsageMonitor()
 
         if not self.api_key:
             logger.warning("⚠️ UW_API_KEY not set. API calls will fail.")
@@ -89,6 +94,9 @@ class UnusualWhalesAPI:
                 timeout=10,  # Strict timeout for fast market
             )
 
+            # Track API usage from response headers
+            self.usage_monitor.process_response_headers(response.headers)
+
             if response.status_code != 200:
                 logger.error(f"❌ API error: {response.status_code} {response.text}")
                 self.stats["errors"] += 1
@@ -96,6 +104,9 @@ class UnusualWhalesAPI:
 
             alerts = response.json().get("data", [])
             self.stats["alerts_fetched"] += len(alerts)
+
+            # Log usage after successful fetch
+            self.usage_monitor.log_usage()
 
             logger.info(f"✅ Fetched {len(alerts)} flow alerts")
             return alerts
@@ -150,6 +161,26 @@ class UnusualWhalesAPI:
         logger.info(f"API calls: {self.stats['api_calls']}")
         logger.info(f"Alerts fetched: {self.stats['alerts_fetched']}")
         logger.info(f"Errors: {self.stats['errors']}")
+        logger.info("=" * 80 + "\n")
+
+    def get_usage_status(self) -> str:
+        """Return human-readable API usage status"""
+        return self.usage_monitor.get_status_summary()
+
+    def get_daily_hits_remaining(self) -> Optional[int]:
+        """Return remaining daily API hits"""
+        return self.usage_monitor.get_daily_hits_remaining()
+
+    def should_halt_on_quota(self) -> bool:
+        """Return True if bot should stop making API calls (quota exhausted)"""
+        return self.usage_monitor.should_halt_on_quota()
+
+    def log_usage_summary(self):
+        """Log API usage summary (quota status)"""
+        logger.info("\n" + "=" * 80)
+        logger.info("API USAGE SUMMARY")
+        logger.info("=" * 80)
+        logger.info(self.get_usage_status())
         logger.info("=" * 80 + "\n")
 
 
