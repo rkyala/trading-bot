@@ -6,7 +6,22 @@
 
 set -e
 
+# ---------------------------------------------------------------------------
+# INTERPRETER — pinned by absolute path.
+# cron runs with PATH=/usr/bin:/bin, where `python3` resolves to
+# /Library/Developer/CommandLineTools/usr/bin/python3 — a DIFFERENT 3.9 build
+# with none of the bot's dependencies (yfinance, pandas, numpy, requests,
+# httpx all missing). The 8:30 cron would have crashed on import every morning
+# and failed silently. Resolving `python3` from PATH is not safe here.
+# ---------------------------------------------------------------------------
+PYTHON="/Library/Frameworks/Python.framework/Versions/3.9/bin/python3"
+
 cd "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot"
+
+if [ ! -x "$PYTHON" ]; then
+    echo "[$(date)] ERROR: interpreter not found at $PYTHON — refusing to start" >&2
+    exit 1
+fi
 
 mkdir -p logs
 LOG_FILE="logs/uw_bot_$(date +%Y%m%d_%H%M%S).log"
@@ -47,8 +62,13 @@ for v in UW_API_KEY RH_CLIENT_ID RH_REFRESH_TOKEN; do
     fi
 done
 
+if ! "$PYTHON" -c "import yfinance, pandas, numpy, requests, httpx" 2>/dev/null; then
+    echo "[$(date)] ERROR: $PYTHON is missing required packages — refusing to start" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
 echo "[$(date)] Starting UW Options Bot" | tee -a "$LOG_FILE"
-nohup python3 -u unusual_whales_bot/uw_bot.py >> "$LOG_FILE" 2>&1 &
+nohup "$PYTHON" -u unusual_whales_bot/uw_bot.py >> "$LOG_FILE" 2>&1 &
 BOT_PID=$!
 echo "$BOT_PID" > uw_bot.pid
 echo "[$(date)] UW Bot started with PID $BOT_PID (log: $LOG_FILE)" | tee -a "$LOG_FILE"
