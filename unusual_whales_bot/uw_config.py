@@ -113,6 +113,29 @@ TECHNICAL_GATES_CONFIG = {
 }
 
 # ===========================================================================
+# CAPACITY — how the position cap allocates slots
+# ===========================================================================
+# Sep 8: with the cap at 10/10 the bot held TQQQ at 70% confidence while
+# turning away SPCX at 94%. The cap was first-come-first-served, so capital was
+# allocated by ARRIVAL TIME rather than quality. That was invisible under the
+# old gate scoring (everything scored 90-100%, so slot order did not matter);
+# it only became visible once confidence actually discriminated.
+#
+# Rotation is deliberately conservative. Every swap pays spread twice, so a
+# too-eager threshold bleeds. The guards below exist to stop it churning:
+#   - a wide confidence margin, so only clear upgrades fire
+#   - a minimum hold, so fresh positions are not thrashed
+#   - winners are protected, since dumping a working position to chase a
+#     marginally better signal is exactly the behaviour that loses money
+CAPACITY_CONFIG = {
+    "quality_rotation_enabled": True,
+    "rotation_margin": 0.15,        # candidate must beat the weakest by 15 pts
+    "min_hold_minutes": 30,         # a position is not rotatable before this
+    "protect_winners_pct": 1.0,     # never rotate out a position up > +1%
+    "max_rotations_per_day": 6,
+}
+
+# ===========================================================================
 # INSTRUMENT — what the bot actually BUYS
 # ===========================================================================
 # Sep 8 decision: the bot ANALYSES stocks (gates 9-11 read MA20/RSI/VWAP on the

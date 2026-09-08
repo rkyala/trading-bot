@@ -47,6 +47,11 @@ class OptionsPosition:
     # Links this position back to its features.jsonl row (ML training join key)
     candidate_id: str = ""
 
+    # Gate confidence at entry. Needed so the position cap can compare a new
+    # candidate against what is already held instead of allocating slots by
+    # arrival order.
+    entry_confidence: float = 0.0
+
     # "equity" (shares, multiplier 1) or "option" (contracts, multiplier 100).
     # Applying the option multiplier to a share position overstates P&L 100x.
     instrument: str = "equity"
@@ -131,6 +136,7 @@ class PositionManager:
         simulated: bool = True,
         instrument: str = "equity",
         candidate_id: str = "",
+        entry_confidence: float = 0.0,
     ) -> str:
         """
         Add a new open position.
@@ -158,6 +164,7 @@ class PositionManager:
             simulated=simulated,
             instrument=instrument,
             candidate_id=candidate_id,
+            entry_confidence=entry_confidence,
         )
 
         self.positions[pos_id] = position

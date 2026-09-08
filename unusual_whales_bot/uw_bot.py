@@ -33,6 +33,7 @@ from uw_config import (
     TECHNICAL_GATES_CONFIG,
     EXECUTION_SAFEGUARDS_CONFIG,
     INSTRUMENT_CONFIG,
+    CAPACITY_CONFIG,
     MAX_OPEN_POSITIONS,
     MAX_DAILY_LOSS_PCT,
 )
@@ -85,6 +86,9 @@ class UnusualWhalesBot:
         existing = ExposureGuard.audit_book(list(self.position_manager.open_symbols()))
         for problem in existing:
             logger.warning(f"🛡️  PRE-EXISTING EXPOSURE CONFLICT: {problem}")
+
+        # Rotations performed today (bounded to prevent churn)
+        self._rotations_today = 0
 
         # Why the most recent entry was declined (captured for training data)
         self._last_reject_reason: Optional[str] = None
@@ -243,9 +247,18 @@ class UnusualWhalesBot:
         # ---------------------------------------------------------------
         open_count = self.position_manager.total_open_positions()
         if open_count >= MAX_OPEN_POSITIONS:
-            self._last_reject_reason = "position_cap"
-            logger.warning(f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); skipping {symbol}")
-            return False
+            # QUALITY-AWARE CAPACITY: the cap used to be first-come-first-served,
+            # so the book held a 70%-confidence position while rejecting a 94%
+            # candidate. Try to make room by rotating out a clearly weaker
+            # holding; if nothing qualifies, decline as before.
+            rotated = await self._try_rotate_for(symbol, confidence)
+            if not rotated:
+                self._last_reject_reason = "position_cap"
+                logger.warning(
+                    f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); "
+                    f"skipping {symbol} (conf {confidence:.0%})"
+                )
+                return False
 
         # ---------------------------------------------------------------
         # BLOCKER FIX #10: do not re-enter a symbol we already hold.
@@ -371,6 +384,7 @@ class UnusualWhalesBot:
                 simulated=order_response.simulated,
                 instrument="equity",
                 candidate_id=classification.get("candidate_id", ""),
+                entry_confidence=confidence,
             )
 
             # Remember the sector for concentration checks on later entries.
@@ -383,6 +397,88 @@ class UnusualWhalesBot:
         except Exception as e:
             logger.error(f"❌ Order placement error: {e}")
             return False
+
+    async def _try_rotate_for(self, symbol: str, confidence: float) -> bool:
+        """
+        Free a slot by closing a clearly weaker holding.
+
+        Returns True only if a rotation actually happened. Deliberately
+        conservative — every swap pays the spread twice, so this fires only on
+        unambiguous upgrades:
+
+          - candidate must beat the weakest holding by `rotation_margin`
+          - the holding must have been open at least `min_hold_minutes`
+            (no thrashing fresh entries)
+          - positions currently up more than `protect_winners_pct` are never
+            rotated out; dumping a working trade to chase a marginally better
+            signal is precisely the behaviour that loses money
+          - capped at `max_rotations_per_day`
+        """
+        cfg = CAPACITY_CONFIG
+        if not cfg.get("quality_rotation_enabled", True):
+            return False
+
+        if self._rotations_today >= cfg.get("max_rotations_per_day", 6):
+            logger.info(f"🔁 {symbol}: daily rotation limit reached; not rotating")
+            return False
+
+        margin = cfg.get("rotation_margin", 0.15)
+        min_hold = cfg.get("min_hold_minutes", 30)
+        protect = cfg.get("protect_winners_pct", 1.0)
+
+        candidates = []
+        for pos_id, pos in self.position_manager.get_all_positions().items():
+            # Age gate
+            try:
+                age_min = (datetime.now() - datetime.fromisoformat(pos.entry_time)).total_seconds() / 60.0
+            except Exception:
+                age_min = 9999
+            if age_min < min_hold:
+                continue
+
+            # Never rotate out a position that is currently working
+            mark, spot = await self.position_manager.mark_position(pos, self.robinhood_mcp)
+            ret_pct = ((mark - pos.entry_price) / pos.entry_price * 100) if pos.entry_price else 0.0
+            if ret_pct > protect:
+                continue
+
+            candidates.append((pos_id, pos, mark, spot, ret_pct))
+
+        if not candidates:
+            return False
+
+        pos_id, pos, mark, spot, ret_pct = min(candidates, key=lambda x: x[1].entry_confidence)
+
+        if confidence < pos.entry_confidence + margin:
+            logger.info(
+                f"🔁 {symbol} ({confidence:.0%}) does not beat weakest holding "
+                f"{pos.symbol} ({pos.entry_confidence:.0%}) by {margin:.0%}; no rotation"
+            )
+            return False
+
+        # Execute the rotation
+        try:
+            await self.robinhood_mcp.place_equity_order(
+                symbol=pos.symbol, quantity=pos.quantity, side="sell",
+                order_type="limit", limit_price=mark,
+            )
+        except Exception as e:
+            logger.error(f"❌ rotation exit failed for {pos.symbol}: {e}; keeping it")
+            return False
+
+        closed = self.position_manager.close_position(
+            pos_id, exit_price=mark, exit_reason="rotated_for_better_signal",
+            exit_underlying=spot,
+        )
+        self._record_pnl(closed)
+        self._position_sectors.pop(pos.symbol, None)
+        self._rotations_today += 1
+
+        logger.info(
+            f"🔁 ROTATION: closed {pos.symbol} ({pos.entry_confidence:.0%}, "
+            f"{ret_pct:+.2f}%) to make room for {symbol} ({confidence:.0%})"
+        )
+        return True
 
     async def _exit_symbol(self, symbol: str, reason: str) -> bool:
         """
