@@ -228,6 +228,17 @@ class UnusualWhalesBot:
             return False
 
         # ---------------------------------------------------------------
+        # ENTRY WINDOW. On Sep 8 the bot opened ORCL and TSLA at 15:46 ET —
+        # inside its own EOD liquidation pass — and closed them 20 seconds
+        # later. The EOD check force-closed positions but never gated entries.
+        # ---------------------------------------------------------------
+        window_open, window_reason = self.execution_safeguards.entry_window_open()
+        if not window_open:
+            self._last_reject_reason = "entry_window_closed"
+            logger.info(f"⏰ {symbol}: no new entries — {window_reason}")
+            return False
+
+        # ---------------------------------------------------------------
         # EQUITY MODE: long-only.
         # Bearish option flow on a name we HOLD is an exit signal. Bearish
         # flow on a name we do not hold is skipped rather than shorted —

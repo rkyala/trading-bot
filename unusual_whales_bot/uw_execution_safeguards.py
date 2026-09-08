@@ -36,6 +36,17 @@ except Exception:  # pragma: no cover
 EOD_FORCE_CLOSE_TIME = time(15, 45)  # 3:45 PM *Eastern* (15 min before close)
 MARKET_CLOSE_TIME = time(16, 0)      # 4:00 PM Eastern
 
+# Latest time a NEW position may be opened.
+#
+# Sep 8: two positions (ORCL, TSLA) were opened at 15:46 ET — INSIDE the EOD
+# liquidation window — and closed twenty seconds later by the same force-close
+# pass. The EOD check closed positions but never gated entries.
+#
+# Set 30 minutes before the force-close rather than at it: a position needs
+# room to reach a 2.5-ATR target, and one opened minutes before liquidation
+# can only pay the spread.
+NO_NEW_ENTRIES_AFTER = time(15, 15)  # 3:15 PM Eastern
+
 
 def now_eastern() -> datetime:
     """Current time in US/Eastern, regardless of host timezone."""
@@ -246,6 +257,30 @@ class ExecutionSafeguards:
             return True
 
         return False
+
+    @staticmethod
+    def entry_window_open() -> Tuple[bool, str]:
+        """
+        Whether a NEW position may be opened right now.
+
+        Closes the gap that let the bot buy during its own EOD liquidation.
+        Returns (allowed, reason).
+        """
+        now_et = now_eastern()
+        t = now_et.time()
+
+        if now_et.weekday() >= 5:
+            return False, "weekend"
+        if t < time(9, 30):
+            return False, f"pre-market ({t.strftime('%H:%M')} ET)"
+        if t >= MARKET_CLOSE_TIME:
+            return False, f"after close ({t.strftime('%H:%M')} ET)"
+        if t >= NO_NEW_ENTRIES_AFTER:
+            return False, (
+                f"entry window closed ({t.strftime('%H:%M')} ET >= "
+                f"{NO_NEW_ENTRIES_AFTER.strftime('%H:%M')} ET) — too close to EOD liquidation"
+            )
+        return True, "open"
 
     @staticmethod
     def is_market_open() -> bool:
