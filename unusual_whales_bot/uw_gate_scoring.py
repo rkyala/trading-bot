@@ -74,7 +74,15 @@ def score_ma(price: float, ma20: float, atr: float, is_bullish: bool) -> Tuple[f
 
     score = _interp(z, [(-1.5, 0.05), (-0.5, 0.25), (0.0, 0.50),
                         (0.5, 0.80), (1.5, 1.00), (3.0, 0.75), (5.0, 0.55)])
-    return score, f"{z:+.2f} ATR vs MA20"
+
+    # Report the RAW position, not the direction-normalised one. `z` above is
+    # sign-flipped for bearish setups so the scoring curve can be shared, but
+    # logging that flipped value reads as its opposite: a put 1.35 ATR BELOW
+    # its MA20 was printing "+1.35 ATR vs MA20", which looks like an uptrend.
+    raw_z = (price - ma20) / atr
+    side = "above" if raw_z >= 0 else "below"
+    fav = "favourable" if z >= 0 else "against"
+    return score, f"{abs(raw_z):.2f} ATR {side} MA20 ({fav})"
 
 
 def score_rsi(rsi: float, is_bullish: bool) -> Tuple[float, str]:
@@ -115,7 +123,11 @@ def score_vwap(price: float, vwap: float, atr: float, is_bullish: bool) -> Tuple
 
     score = _interp(z, [(-1.0, 0.10), (-0.3, 0.35), (0.0, 0.55),
                         (0.3, 0.85), (1.0, 1.00), (2.5, 0.80)])
-    return score, f"{z:+.2f} ATR vs VWAP"
+
+    raw_z = (price - vwap) / atr
+    side = "above" if raw_z >= 0 else "below"
+    fav = "favourable" if z >= 0 else "against"
+    return score, f"{abs(raw_z):.2f} ATR {side} VWAP ({fav})"
 
 
 def combine(ma: float, rsi: float, vwap: float) -> float:
