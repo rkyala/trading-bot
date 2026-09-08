@@ -44,6 +44,9 @@ class OptionsPosition:
     # Provenance so simulated results are never mistaken for broker fills
     simulated: bool = True
 
+    # Links this position back to its features.jsonl row (ML training join key)
+    candidate_id: str = ""
+
     # "equity" (shares, multiplier 1) or "option" (contracts, multiplier 100).
     # Applying the option multiplier to a share position overstates P&L 100x.
     instrument: str = "equity"
@@ -127,6 +130,7 @@ class PositionManager:
         gamma: float = 0.0,
         simulated: bool = True,
         instrument: str = "equity",
+        candidate_id: str = "",
     ) -> str:
         """
         Add a new open position.
@@ -153,6 +157,7 @@ class PositionManager:
             gamma=gamma,
             simulated=simulated,
             instrument=instrument,
+            candidate_id=candidate_id,
         )
 
         self.positions[pos_id] = position

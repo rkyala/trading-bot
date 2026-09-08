@@ -195,6 +195,20 @@ class TechnicalGates:
 
         Confidence range: 0.0 (veto) to 1.0 (strongest)
         """
+        result = await self.evaluate_detailed(symbol, alert_direction, price)
+        return result["confidence"]
+
+    async def evaluate_detailed(
+        self, symbol: str, alert_direction: str, price: float
+    ) -> dict:
+        """
+        Same scoring as calculate_technical_confidence, but returns the raw
+        indicator values and per-gate scores as well.
+
+        Needed so the feature logger can capture decision-time technicals
+        without recomputing them (which would risk logging values from a
+        slightly later moment than the decision actually used).
+        """
         from uw_gate_scoring import score_all
 
         direction = self._normalize_direction(alert_direction)
@@ -216,9 +230,20 @@ class TechnicalGates:
 
             result = score_all(price, ma20, rsi14, vwap, atr, is_bullish)
 
+            # Decision-time indicator snapshot for the feature logger.
+            result["technicals"] = {
+                "ma20": ma20,
+                "rsi14": rsi14,
+                "vwap": vwap,
+                "atr": atr,
+                "ma20_dist_atr": ((price - ma20) / atr) if ma20 and atr else None,
+                "vwap_dist_atr": ((price - vwap) / atr) if vwap and atr else None,
+            }
+
         except Exception as e:
             logger.error(f"❌ Confidence aggregation error on {symbol}: {e}")
-            return 0.50  # neutral, not the old optimistic 0.75
+            return {"confidence": 0.50, "vetoed": False, "technicals": {},
+                    "ma": {}, "rsi": {}, "vwap": {}}
 
         if result["vetoed"]:
             logger.warning(
@@ -226,7 +251,7 @@ class TechnicalGates:
                 f"MA:{result['ma']['reason']} | RSI:{result['rsi']['reason']} | "
                 f"VWAP:{result['vwap']['reason']}"
             )
-            return 0.0
+            return result
 
         logger.info(
             f"📐 {symbol} {direction} conf={result['confidence']:.0%} "
@@ -234,7 +259,7 @@ class TechnicalGates:
             f"RSI {result['rsi']['score']:.2f} ({result['rsi']['reason']}) | "
             f"VWAP {result['vwap']['score']:.2f} ({result['vwap']['reason']})]"
         )
-        return result["confidence"]
+        return result
 
     # =========================================================================
     # TECHNICAL DATA CALCULATIONS

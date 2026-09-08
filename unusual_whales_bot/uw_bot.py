@@ -70,6 +70,11 @@ class UnusualWhalesBot:
         # Position tracking
         self.position_manager = PositionManager()
 
+        # Training-data capture. Features cannot be recovered retroactively,
+        # so this runs from day one even though no model consumes it yet.
+        from uw_feature_logger import FeatureLogger
+        self.feature_logger = FeatureLogger()
+
         # Exposure conflict guard (inverse ETFs + concentration)
         from uw_exposure_guard import ExposureGuard
         self.exposure_guard = ExposureGuard()
@@ -80,6 +85,9 @@ class UnusualWhalesBot:
         existing = ExposureGuard.audit_book(list(self.position_manager.open_symbols()))
         for problem in existing:
             logger.warning(f"🛡️  PRE-EXISTING EXPOSURE CONFLICT: {problem}")
+
+        # Why the most recent entry was declined (captured for training data)
+        self._last_reject_reason: Optional[str] = None
 
         # Circuit-breaker state (BLOCKER FIX #9)
         self.halted = False
@@ -202,6 +210,7 @@ class UnusualWhalesBot:
         # ---------------------------------------------------------------
         symbol = alert.get("underlying_symbol") or alert.get("symbol")
         if not symbol:
+            self._last_reject_reason = "no_symbol"
             logger.error("❌ Alert has no underlying symbol; skipping")
             return False
 
@@ -210,6 +219,7 @@ class UnusualWhalesBot:
         is_bearish = str(direction).upper().startswith("P")
 
         if self.halted:
+            self._last_reject_reason = "circuit_breaker"
             logger.warning("🛑 Trading halted by circuit breaker; skipping")
             return False
 
@@ -223,6 +233,7 @@ class UnusualWhalesBot:
             if self.position_manager.has_open_position(symbol):
                 logger.info(f"📉 {symbol}: bearish flow on a held name → exiting")
                 return await self._exit_symbol(symbol, "bearish_flow")
+            self._last_reject_reason = "bearish_no_short"
             logger.info(f"⏭️  {symbol}: bearish flow, not held, shorting disabled → skip")
             return False
 
@@ -232,6 +243,7 @@ class UnusualWhalesBot:
         # ---------------------------------------------------------------
         open_count = self.position_manager.total_open_positions()
         if open_count >= MAX_OPEN_POSITIONS:
+            self._last_reject_reason = "position_cap"
             logger.warning(f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); skipping {symbol}")
             return False
 
@@ -239,6 +251,7 @@ class UnusualWhalesBot:
         # BLOCKER FIX #10: do not re-enter a symbol we already hold.
         # ---------------------------------------------------------------
         if self.position_manager.has_open_position(symbol):
+            self._last_reject_reason = "already_held"
             logger.info(f"⏭️  {symbol}: position already open, skipping duplicate entry")
             return False
 
@@ -257,6 +270,7 @@ class UnusualWhalesBot:
             held_sectors=[self._position_sectors.get(s) for s in held],
         )
         if not allowed:
+            self._last_reject_reason = f"exposure:{reason.split(':')[0]}"
             logger.warning(f"🛡️  {symbol}: {reason}")
             return False
 
@@ -273,6 +287,7 @@ class UnusualWhalesBot:
             underlying_price = get_market_data().get_underlying_price(symbol) or 0.0
 
         if underlying_price <= 0:
+            self._last_reject_reason = "no_price"
             logger.warning(f"❌ {symbol}: no underlying price available; skipping (no placeholder)")
             return False
 
@@ -295,6 +310,7 @@ class UnusualWhalesBot:
             direction=direction,
         )
         if plan is None:
+            self._last_reject_reason = "no_execution_plan"
             logger.warning(f"❌ {symbol}: could not build a safe execution plan; skipping")
             return False
 
@@ -305,6 +321,7 @@ class UnusualWhalesBot:
         # ---------------------------------------------------------------
         conf_mult = self._size_multiplier(confidence)
         if conf_mult <= 0:
+            self._last_reject_reason = "low_confidence"
             logger.info(f"⏭️  {symbol}: confidence {confidence:.0%} below trade threshold")
             return False
 
@@ -353,6 +370,7 @@ class UnusualWhalesBot:
                 gamma=self._safe_float(alert.get("gamma"), 0.0),
                 simulated=order_response.simulated,
                 instrument="equity",
+                candidate_id=classification.get("candidate_id", ""),
             )
 
             # Remember the sector for concentration checks on later entries.
@@ -414,6 +432,24 @@ class UnusualWhalesBot:
         """
         if not closed_position or closed_position.exit_price is None:
             return
+
+        # Emit the triple-barrier label for the training set. Joined back to
+        # features.jsonl by candidate_id.
+        try:
+            self.feature_logger.log_outcome(
+                candidate_id=getattr(closed_position, "candidate_id", "") or "",
+                symbol=closed_position.symbol,
+                entry_price=closed_position.entry_price,
+                exit_price=closed_position.exit_price,
+                exit_reason=closed_position.exit_reason or "",
+                entry_underlying=closed_position.entry_underlying,
+                exit_underlying=closed_position.exit_underlying,
+                entry_time=closed_position.entry_time,
+                quantity=closed_position.quantity,
+                multiplier=closed_position.multiplier,
+            )
+        except Exception as e:
+            logger.debug(f"label logging skipped: {e}")
 
         mult = closed_position.multiplier
         entry_cost = closed_position.entry_price * closed_position.quantity * mult
@@ -660,19 +696,43 @@ class UnusualWhalesBot:
                     direction = cls["direction"]
                     confidence = 0.75  # Tier 2 baseline
 
+                    gate_detail = {}
                     if self.technical_gates:
                         try:
                             spot = self._safe_float(alert.get("underlying_price"), 0.0)
+                            if spot <= 0:
+                                spot = get_market_data().get_underlying_price(symbol) or 0.0
                             if spot > 0:
-                                confidence = await self.technical_gates.calculate_technical_confidence(
+                                gate_detail = await self.technical_gates.evaluate_detailed(
                                     symbol, direction, spot
                                 )
+                                confidence = gate_detail.get("confidence", confidence)
                         except Exception as e:
                             logger.warning(f"Technical gates failed for {symbol}: {e}; using baseline")
 
+                    # Capture the decision-time feature vector BEFORE executing.
+                    # Rejects are logged too — a classifier needs negatives, and
+                    # the informative ones are these near-misses.
+                    candidate_id = self.feature_logger.make_id(symbol)
+
                     result = await self.execute_trade(
-                        alert, {"direction": direction, "confidence": confidence}
+                        alert,
+                        {"direction": direction, "confidence": confidence,
+                         "candidate_id": candidate_id},
                     )
+
+                    try:
+                        self.feature_logger.log_candidate(
+                            alert=alert,
+                            technicals=gate_detail.get("technicals"),
+                            gate_detail=gate_detail,
+                            confidence=confidence,
+                            decision="EXECUTED" if result else "REJECTED",
+                            reject_reason=None if result else self._last_reject_reason,
+                            candidate_id=candidate_id,
+                        )
+                    except Exception as e:
+                        logger.debug(f"feature logging skipped for {symbol}: {e}")
 
                     if result:
                         executed += 1
