@@ -107,7 +107,41 @@ TECHNICAL_GATES_CONFIG = {
 }
 
 # ===========================================================================
-# CONTRACT TRADEABILITY FILTER (BLOCKER #11 — economic)
+# INSTRUMENT — what the bot actually BUYS
+# ===========================================================================
+# Sep 8 decision: the bot ANALYSES stocks (gates 9-11 read MA20/RSI/VWAP on the
+# underlying, ATR sizing is on the underlying, stop/target levels are underlying
+# prices) but was EXECUTING options contracts. That mismatch is why bid-ask
+# dominated the results: options cost 1-2% to round trip versus ~0.003% on
+# shares.
+#
+# Unusual Whales option flow remains the SIGNAL. Execution is now equities.
+INSTRUMENT_CONFIG = {
+    "instrument": "equity",          # "equity" | "option"
+
+    # Dollar notional per entry; share count derived from the live price.
+    "position_dollars": 500.0,
+    "max_dollars_per_symbol": 1500.0,
+
+    # Long-only. Bearish flow on a symbol we HOLD is an exit signal; bearish
+    # flow on a symbol we do not hold is skipped rather than shorted, since
+    # shorting needs margin and is restricted on retail Robinhood accounts.
+    "allow_short": False,
+}
+
+# ===========================================================================
+# OPTION-FLOW SIGNAL QUALITY FILTER
+# ===========================================================================
+# Added Sep 8 to stop the bot BUYING deep-ITM LEAPs whose spread cost ~20x the
+# edge. With execution moved to equities that cost argument no longer applies,
+# but the filter is KEPT for a different and stronger reason:
+#
+#     the contract an institution chooses reveals their TIME HORIZON.
+#
+# A Dec-2028 LEAP says nothing about the next four hours. A 30-day near-the-
+# money call is a short-term directional bet — the horizon this bot trades.
+# So DTE/delta now screen SIGNAL RELEVANCE rather than tradeability. The
+# spread/premium gates are retained as a liquidity proxy for the name.
 # ===========================================================================
 # Sep 8: the bot executed deep-ITM LEAPs (AAPL Dec-2028 $100C with the stock
 # at $316; GOOGL Dec-2027 $480P). Round-trip bid-ask came to -$4,350 against

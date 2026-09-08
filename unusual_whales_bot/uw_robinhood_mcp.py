@@ -216,6 +216,71 @@ class RobinhoodMCPClient:
         self.stats["orders_failed"] += 1
         return OrderResponse(success=False, order_id=None, message="Mock rejection")
 
+    # ------------------------------------------------------------ equities
+
+    async def place_equity_order(
+        self,
+        symbol: str,
+        quantity: float,
+        side: str = "buy",
+        order_type: str = "limit",
+        limit_price: Optional[float] = None,
+    ) -> OrderResponse:
+        """
+        Place a share order.
+
+        Sep 8: execution moved from options to equities. The UW option flow is
+        the signal; the trade is in the underlying. Shares round-trip for
+        pennies (~0.003%) versus 1-2% on the contracts, which is what was
+        consuming the edge.
+        """
+        self.stats["orders_placed"] += 1
+
+        if self.mode == MODE_MOCK:
+            order_id = f"mock-eq-{self.stats['orders_placed']:05d}"
+            self.stats["orders_successful"] += 1
+            return OrderResponse(True, order_id, "Mock equity order",
+                                 fill_price=limit_price, simulated=True)
+
+        if self.mode == MODE_PAPER:
+            if not limit_price or limit_price <= 0:
+                self.stats["orders_failed"] += 1
+                return OrderResponse(
+                    False, None,
+                    "PAPER: no price available; refusing to invent a fill",
+                )
+            # Shares are penny-wide; charge 1bp of slippage rather than
+            # pretending fills are free.
+            slip = limit_price * 0.0001
+            fill = round(limit_price + slip if side == "buy" else limit_price - slip, 2)
+            order_id = f"paper-eq-{self.stats['orders_placed']:05d}"
+            self.stats["orders_successful"] += 1
+            logger.info(f"📝 [PAPER] {side} {quantity} {symbol} @ ${fill:.2f}")
+            return OrderResponse(True, order_id, f"Paper fill @ ${fill:.2f}",
+                                 fill_price=fill, simulated=True)
+
+        # LIVE
+        if self.mcp_executor is None:
+            self.stats["orders_failed"] += 1
+            msg = ("LIVE execution unavailable: no Robinhood MCP executor connected. "
+                   "Authorize the robinhood-trading MCP server first.")
+            logger.error(f"🚨 {msg}")
+            return OrderResponse(False, None, msg)
+
+        try:
+            result = await self.mcp_executor.place_equity_order(
+                symbol=symbol, quantity=quantity, side=side,
+                order_type=order_type, limit_price=limit_price,
+            )
+            ok = bool(result.get("success"))
+            self.stats["orders_successful" if ok else "orders_failed"] += 1
+            return OrderResponse(ok, result.get("order_id"),
+                                 result.get("message", ""), result.get("fill_price"))
+        except Exception as e:
+            self.stats["orders_failed"] += 1
+            logger.error(f"❌ LIVE equity order failed: {e}")
+            return OrderResponse(False, None, str(e))
+
     # ------------------------------------------------------------- valuation
 
     @staticmethod

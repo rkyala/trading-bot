@@ -44,6 +44,14 @@ class OptionsPosition:
     # Provenance so simulated results are never mistaken for broker fills
     simulated: bool = True
 
+    # "equity" (shares, multiplier 1) or "option" (contracts, multiplier 100).
+    # Applying the option multiplier to a share position overstates P&L 100x.
+    instrument: str = "equity"
+
+    @property
+    def multiplier(self) -> int:
+        return 100 if self.instrument == "option" else 1
+
     # Exit tracking
     exit_price: Optional[float] = None
     exit_time: Optional[str] = None
@@ -118,6 +126,7 @@ class PositionManager:
         delta: float = 0.5,
         gamma: float = 0.0,
         simulated: bool = True,
+        instrument: str = "equity",
     ) -> str:
         """
         Add a new open position.
@@ -143,16 +152,19 @@ class PositionManager:
             delta=delta,
             gamma=gamma,
             simulated=simulated,
+            instrument=instrument,
         )
 
         self.positions[pos_id] = position
         self._save_positions()
 
+        unit = "sh" if instrument == "equity" else "ct"
+        is_put = str(direction).upper().startswith("P")
         logger.info(
             f"✅ Position opened: {pos_id}\n"
-            f"  Entry: ${entry_price:.2f} × {quantity} {direction}\n"
-            f"  Stop: {symbol} ≤ ${underlying_stop:.0f}\n"
-            f"  Target: {symbol} ≥ ${underlying_target:.0f}"
+            f"  Entry: {quantity}{unit} @ ${entry_price:.2f} ({direction})\n"
+            f"  Stop:   {symbol} {'≥' if is_put else '≤'} ${underlying_stop:.2f}\n"
+            f"  Target: {symbol} {'≤' if is_put else '≥'} ${underlying_target:.2f}"
         )
 
         return pos_id
@@ -184,8 +196,9 @@ class PositionManager:
         self._append_trade_log(position, pos_id)
 
         # Calculate P&L
-        entry_cost = position.entry_price * position.quantity * 100
-        exit_value = exit_price * position.quantity * 100
+        mult = position.multiplier
+        entry_cost = position.entry_price * position.quantity * mult
+        exit_value = exit_price * position.quantity * mult
         pnl = exit_value - entry_cost
         pnl_pct = (pnl / entry_cost * 100) if entry_cost != 0 else 0
 
@@ -257,8 +270,9 @@ class PositionManager:
     def _append_trade_log(self, position: OptionsPosition, pos_id: str):
         """Append a closed trade to closed_trades.jsonl for validation stats."""
         try:
-            entry_cost = position.entry_price * position.quantity * 100
-            exit_value = (position.exit_price or 0) * position.quantity * 100
+            mult = position.multiplier
+            entry_cost = position.entry_price * position.quantity * mult
+            exit_value = (position.exit_price or 0) * position.quantity * mult
             pnl = exit_value - entry_cost
             record = asdict(position)
             record["position_id"] = pos_id
@@ -317,6 +331,21 @@ class PositionManager:
         Returns: (exit_price, exit_underlying)
         """
         from uw_market_data import get_market_data
+
+        # ---------------------------------------------------------------
+        # EQUITY: the position IS the underlying, so the mark is simply the
+        # live share price. No option model, no modelling error — this is a
+        # real price, not an estimate.
+        # ---------------------------------------------------------------
+        if position.instrument == "equity":
+            spot = get_market_data().get_underlying_price(position.symbol)
+            if spot is None:
+                logger.warning(
+                    f"⚠️ {position.symbol}: no live price; booking flat rather "
+                    f"than inventing a P&L"
+                )
+                return position.entry_price, None
+            return round(spot, 2), spot
 
         # Prefer a real broker quote when one is actually available (LIVE).
         if robinhood_mcp is not None and getattr(robinhood_mcp, "mode", None) == "LIVE":

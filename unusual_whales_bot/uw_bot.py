@@ -32,6 +32,7 @@ from uw_config import (
     EXIT_RULES_CONFIG,
     TECHNICAL_GATES_CONFIG,
     EXECUTION_SAFEGUARDS_CONFIG,
+    INSTRUMENT_CONFIG,
     MAX_OPEN_POSITIONS,
     MAX_DAILY_LOSS_PCT,
 )
@@ -195,6 +196,24 @@ class UnusualWhalesBot:
 
         direction = classification.get("direction", "CALL")  # "CALL" | "PUT"
         confidence = float(classification.get("confidence", 0.0))
+        is_bearish = str(direction).upper().startswith("P")
+
+        if self.halted:
+            logger.warning("🛑 Trading halted by circuit breaker; skipping")
+            return False
+
+        # ---------------------------------------------------------------
+        # EQUITY MODE: long-only.
+        # Bearish option flow on a name we HOLD is an exit signal. Bearish
+        # flow on a name we do not hold is skipped rather than shorted —
+        # shorting needs margin and is restricted on retail Robinhood.
+        # ---------------------------------------------------------------
+        if is_bearish and not INSTRUMENT_CONFIG.get("allow_short", False):
+            if self.position_manager.has_open_position(symbol):
+                logger.info(f"📉 {symbol}: bearish flow on a held name → exiting")
+                return await self._exit_symbol(symbol, "bearish_flow")
+            logger.info(f"⏭️  {symbol}: bearish flow, not held, shorting disabled → skip")
+            return False
 
         # ---------------------------------------------------------------
         # BLOCKER FIX #9: enforce risk limits that were defined in config
@@ -203,10 +222,6 @@ class UnusualWhalesBot:
         open_count = self.position_manager.total_open_positions()
         if open_count >= MAX_OPEN_POSITIONS:
             logger.warning(f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); skipping {symbol}")
-            return False
-
-        if self.halted:
-            logger.warning("🛑 Trading halted by circuit breaker; skipping")
             return False
 
         # ---------------------------------------------------------------
@@ -232,26 +247,12 @@ class UnusualWhalesBot:
             logger.warning(f"❌ {symbol}: no underlying price available; skipping (no placeholder)")
             return False
 
-        # Real NBBO straight off the alert (the old code threw these away and
-        # validated spread against random mock quotes instead).
-        try:
-            nbbo_bid = float(alert.get("nbbo_bid") or 0)
-            nbbo_ask = float(alert.get("nbbo_ask") or 0)
-        except (TypeError, ValueError):
-            nbbo_bid = nbbo_ask = 0.0
-
-        if nbbo_bid <= 0 or nbbo_ask <= 0:
-            logger.warning(f"❌ {symbol}: no real NBBO on alert; skipping")
-            return False
-
-        if not self.execution_safeguards.validate_nbbo_spread({"bid": nbbo_bid, "ask": nbbo_ask}):
-            return False
-
-        limit_price, should_execute = self.execution_safeguards.calculate_midpoint_order(
-            nbbo_bid=nbbo_bid, nbbo_ask=nbbo_ask
-        )
-        if not should_execute or not limit_price:
-            return False
+        # ---------------------------------------------------------------
+        # EQUITY MODE: we trade the SHARES, so the entry price is the stock
+        # price. The option NBBO on the alert describes the contract the
+        # institution bought — it is signal metadata, not our fill price.
+        # ---------------------------------------------------------------
+        limit_price = underlying_price
 
         # ---------------------------------------------------------------
         # BLOCKER FIX #3: direction-aware execution plan (real ATR).
@@ -269,35 +270,38 @@ class UnusualWhalesBot:
             return False
 
         # ---------------------------------------------------------------
-        # Position sizing by confidence (was hardcoded quantity=1).
+        # Dollar-notional sizing, scaled by confidence. Shares are derived
+        # from the live price rather than a fixed contract count, so a $19
+        # stock and a $1,700 stock take comparable risk.
         # ---------------------------------------------------------------
-        quantity = self._size_position(confidence)
-        if quantity < 1:
+        conf_mult = self._size_multiplier(confidence)
+        if conf_mult <= 0:
             logger.info(f"⏭️  {symbol}: confidence {confidence:.0%} below trade threshold")
             return False
 
-        # option_chain_id is a REAL OCC symbol on the alert (e.g.
-        # NVDA260911C00225000) — never synthesize one.
-        option_chain_id = alert.get("option_chain_id")
-        if not option_chain_id:
-            logger.warning(f"❌ {symbol}: alert carries no option_chain_id; skipping")
+        target_dollars = INSTRUMENT_CONFIG.get("position_dollars", 500.0) * conf_mult
+        target_dollars = min(target_dollars, INSTRUMENT_CONFIG.get("max_dollars_per_symbol", 1500.0))
+        quantity = int(target_dollars // limit_price)
+
+        if quantity < 1:
+            logger.info(
+                f"⏭️  {symbol}: ${target_dollars:.0f} buys 0 shares at ${limit_price:.2f}; skipping"
+            )
             return False
 
         logger.info(
-            f"📤 EXECUTE: {symbol} {direction} x{quantity} @ ${limit_price:.2f} "
-            f"(spot ${underlying_price:.2f}, conf {confidence:.0%})"
+            f"📤 EXECUTE: {symbol} BUY {quantity}sh @ ${limit_price:.2f} "
+            f"(${quantity * limit_price:,.0f} notional, conf {confidence:.0%}) "
+            f"[signal: {alert.get('option_chain_id', 'n/a')}]"
         )
 
         try:
-            order_response = await self.robinhood_mcp.place_option_order(
+            order_response = await self.robinhood_mcp.place_equity_order(
                 symbol=symbol,
-                option_chain_id=option_chain_id,
                 quantity=quantity,
+                side="buy",
                 order_type="limit",
                 limit_price=limit_price,
-                direction="buy_to_open",
-                nbbo_bid=nbbo_bid,
-                nbbo_ask=nbbo_ask,
             )
 
             if not order_response.success:
@@ -313,12 +317,13 @@ class UnusualWhalesBot:
                 quantity=quantity,
                 underlying_stop=plan.underlying_stop_price,
                 underlying_target=plan.underlying_target_price,
-                option_chain_id=option_chain_id,
+                option_chain_id=alert.get("option_chain_id", ""),  # signal provenance
                 order_id=order_response.order_id,
                 entry_underlying=underlying_price,
                 delta=self._safe_float(alert.get("delta"), 0.5),
                 gamma=self._safe_float(alert.get("gamma"), 0.0),
                 simulated=order_response.simulated,
+                instrument="equity",
             )
 
             logger.info(f"✅ Order placed: {position_id} | {order_response.message}")
@@ -327,6 +332,37 @@ class UnusualWhalesBot:
         except Exception as e:
             logger.error(f"❌ Order placement error: {e}")
             return False
+
+    async def _exit_symbol(self, symbol: str, reason: str) -> bool:
+        """
+        Close every open position in `symbol` at the live share price.
+
+        Used when bearish option flow arrives on a name we are long — in a
+        long-only book that is an exit signal rather than a short entry.
+        """
+        closed_any = False
+        for pos_id, pos in list(self.position_manager.get_all_positions().items()):
+            if pos.symbol != symbol:
+                continue
+            exit_price, exit_spot = await self.position_manager.mark_position(
+                pos, self.robinhood_mcp
+            )
+            try:
+                await self.robinhood_mcp.place_equity_order(
+                    symbol=symbol, quantity=pos.quantity, side="sell",
+                    order_type="limit", limit_price=exit_price,
+                )
+            except Exception as e:
+                logger.error(f"❌ {symbol}: exit order failed ({e}); keeping position open")
+                continue
+
+            closed = self.position_manager.close_position(
+                pos_id, exit_price=exit_price, exit_reason=reason,
+                exit_underlying=exit_spot,
+            )
+            self._record_pnl(closed)
+            closed_any = True
+        return closed_any
 
     @staticmethod
     def _safe_float(value, default: float) -> float:
@@ -346,8 +382,9 @@ class UnusualWhalesBot:
         if not closed_position or closed_position.exit_price is None:
             return
 
-        entry_cost = closed_position.entry_price * closed_position.quantity * 100
-        exit_value = closed_position.exit_price * closed_position.quantity * 100
+        mult = closed_position.multiplier
+        entry_cost = closed_position.entry_price * closed_position.quantity * mult
+        exit_value = closed_position.exit_price * closed_position.quantity * mult
         self.session_realized_pnl += (exit_value - entry_cost)
 
         if self.session_start_equity > 0:
@@ -361,15 +398,21 @@ class UnusualWhalesBot:
                 )
 
     @staticmethod
-    def _size_position(confidence: float) -> int:
-        """Scale contracts by confidence (was hardcoded to 1)."""
+    def _size_multiplier(confidence: float) -> float:
+        """
+        Scale position notional by confidence (0 = do not trade).
+
+        Applied to INSTRUMENT_CONFIG["position_dollars"], so sizing is
+        dollar-based rather than a fixed share/contract count — a $19 stock
+        and a $1,700 stock then carry comparable risk.
+        """
         if confidence < TECHNICAL_GATES_CONFIG.get("min_confidence_to_trade", 0.50):
-            return 0
+            return 0.0
         if confidence < 0.65:
-            return 1
+            return 0.5
         if confidence < 0.85:
-            return 2
-        return 3
+            return 1.0
+        return 1.5
 
     async def high_frequency_risk_loop(self):
         """
