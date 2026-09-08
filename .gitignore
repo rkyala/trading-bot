@@ -13,3 +13,4 @@ backtest_v2_results.json
 __pycache__/
 .env
 .DS_Store
+.env.local
