@@ -428,6 +428,19 @@ class UnusualWhalesBot:
 
         candidates = []
         for pos_id, pos in self.position_manager.get_all_positions().items():
+            # ---------------------------------------------------------------
+            # UNKNOWN IS NOT WORST.
+            # Positions opened before entry_confidence existed load with the
+            # dataclass default 0.0. Treating that as "lowest quality" made
+            # every legacy position maximally rotatable, and the first live
+            # run promptly closed ORCL (96%), CRWV (100%) and NVDA (96%) to
+            # buy BE (54%), SKHY (60%) and TQQQ (70%) — strictly worse.
+            # A position whose quality is unrecorded cannot be judged, so it
+            # is never a rotation candidate.
+            # ---------------------------------------------------------------
+            if not pos.entry_confidence or pos.entry_confidence <= 0.0:
+                continue
+
             # Age gate
             try:
                 age_min = (datetime.now() - datetime.fromisoformat(pos.entry_time)).total_seconds() / 60.0
