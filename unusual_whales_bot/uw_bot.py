@@ -70,6 +70,17 @@ class UnusualWhalesBot:
         # Position tracking
         self.position_manager = PositionManager()
 
+        # Exposure conflict guard (inverse ETFs + concentration)
+        from uw_exposure_guard import ExposureGuard
+        self.exposure_guard = ExposureGuard()
+        self._position_sectors: Dict[str, str] = {}
+
+        # Surface conflicts that already exist in a restored book, rather than
+        # letting them sit quietly until someone reads the P&L.
+        existing = ExposureGuard.audit_book(list(self.position_manager.open_symbols()))
+        for problem in existing:
+            logger.warning(f"🛡️  PRE-EXISTING EXPOSURE CONFLICT: {problem}")
+
         # Circuit-breaker state (BLOCKER FIX #9)
         self.halted = False
         self.session_realized_pnl = 0.0
@@ -232,6 +243,24 @@ class UnusualWhalesBot:
             return False
 
         # ---------------------------------------------------------------
+        # EXPOSURE CONFLICT GUARD
+        # The book was found holding TQQQ (3x long Nasdaq) and SQQQ (3x short
+        # Nasdaq) simultaneously — self-cancelling, and both decaying. Neither
+        # consolidation (same-ticker call/put) nor the dedup check (same
+        # ticker) can see a conflict across DIFFERENT tickers.
+        # ---------------------------------------------------------------
+        held = list(self.position_manager.open_symbols())
+        allowed, reason = self.exposure_guard.check(
+            symbol,
+            held,
+            candidate_sector=alert.get("sector"),
+            held_sectors=[self._position_sectors.get(s) for s in held],
+        )
+        if not allowed:
+            logger.warning(f"🛡️  {symbol}: {reason}")
+            return False
+
+        # ---------------------------------------------------------------
         # BLOCKER FIX #2: use the REAL underlying price. The alert carries
         # `underlying_price`; fall back to live market data. Never 4500.
         # ---------------------------------------------------------------
@@ -325,6 +354,10 @@ class UnusualWhalesBot:
                 simulated=order_response.simulated,
                 instrument="equity",
             )
+
+            # Remember the sector for concentration checks on later entries.
+            if alert.get("sector"):
+                self._position_sectors[symbol] = alert["sector"]
 
             logger.info(f"✅ Order placed: {position_id} | {order_response.message}")
             return True
