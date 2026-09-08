@@ -278,9 +278,10 @@ class UnusualWhalesBot:
         Single bot cycle:
         1. Poll Unusual Whales API
         2. Run Phase 1 filter
-        3. Run Phase 2 Qwen classification
-        4. Execute if confidence high enough
-        5. Check EOD close
+        3. Consolidate directional conflicts (new)
+        4. Run Phase 2 Qwen classification
+        5. Execute if confidence high enough
+        6. Check EOD close
         """
         logger.info("🔄 Bot cycle starting...")
 
@@ -288,6 +289,7 @@ class UnusualWhalesBot:
             # Phase 1: Fetch UW alerts
             from uw_api_client import UnusualWhalesAPI
             from uw_phase1_filter import Phase1AlertFilter
+            from uw_position_consolidation import PositionConsolidation
 
             api = UnusualWhalesAPI()
             alerts = api.get_flow_alerts(limit=50, min_premium=100_000)
@@ -310,8 +312,19 @@ class UnusualWhalesBot:
 
             logger.info(f"✅ Phase 1: {len(approved_alerts)}/{len(alerts)} approved")
 
-            # Execute approved trades
-            for alert in approved_alerts[:5]:  # Limit to 5 per cycle
+            # NEW: Consolidate directional conflicts (single direction per symbol)
+            consolidator = PositionConsolidation(dominance_threshold=0.20)
+            consolidated_alerts = consolidator.consolidate_alerts(approved_alerts)
+
+            if not consolidated_alerts:
+                logger.info(f"⚠️ Consolidation rejected all {len(approved_alerts)} alerts (all conflicts)")
+                logger.info("✅ Cycle complete")
+                return
+
+            logger.info(f"✅ Consolidation: {len(consolidated_alerts)}/{len(approved_alerts)} approved")
+
+            # Execute consolidated trades
+            for alert in consolidated_alerts[:5]:  # Limit to 5 per cycle
                 try:
                     symbol = alert.get('underlying_symbol', 'SPX')
                     direction = "BULLISH" if alert.get('option_type', '').upper() == 'CALL' else "BEARISH"
