@@ -21,9 +21,9 @@ class Phase1AlertFilter:
 
     def __init__(
         self,
-        min_notional_usd_m: float = 1.0,  # $1M minimum
-        min_volume_oi_ratio: float = 0.15,  # Volume/OI > 15%
-        max_spread_pct: float = 0.05,  # Bid-ask spread < 5%
+        min_notional_usd_m: float = 0.1,  # $100K minimum (lowered for paper testing)
+        min_volume_oi_ratio: float = 0.05,  # Volume/OI > 5% (loosened for paper testing)
+        max_spread_pct: float = 0.15,  # Bid-ask spread < 15% (loosened for paper testing)
     ):
         self.min_notional_usd_m = min_notional_usd_m
         self.min_volume_oi_ratio = min_volume_oi_ratio
@@ -48,7 +48,13 @@ class Phase1AlertFilter:
         self.stats["alerts_received"] += 1
 
         # Filter 1: Notional value threshold
+        # Use premium as proxy for notional (premium = notional * % of stock move)
         notional_usd_m = alert.get("notional_value_usd_millions", 0)
+        if notional_usd_m == 0:
+            # Calculate from premium if not provided
+            premium = float(alert.get("premium", 0))
+            notional_usd_m = premium / 1_000_000
+
         if notional_usd_m < self.min_notional_usd_m:
             self.stats["rejected_size"] += 1
             logger.debug(f"❌ Alert rejected: Size ${notional_usd_m:.1f}M < ${self.min_notional_usd_m:.1f}M")
@@ -60,14 +66,17 @@ class Phase1AlertFilter:
         volume_oi_ratio = volume / open_interest if open_interest > 0 else 0
 
         if volume_oi_ratio < self.min_volume_oi_ratio:
-            self.stats["rejected_liquidity"] += 1
-            logger.debug(f"❌ Alert rejected: Vol/OI {volume_oi_ratio:.2%} < {self.min_volume_oi_ratio:.2%}")
-            return None
+            # For paper testing, allow if premium is high enough (shows conviction)
+            if notional_usd_m < 0.5:  # Only enforce for low-premium alerts
+                self.stats["rejected_liquidity"] += 1
+                logger.debug(f"❌ Alert rejected: Vol/OI {volume_oi_ratio:.2%} < {self.min_volume_oi_ratio:.2%}")
+                return None
 
         # Filter 3: Bid-ask spread (liquidity quality)
-        bid = alert.get("bid", 0)
-        ask = alert.get("ask", 0)
-        if ask > 0:
+        bid = float(alert.get("nbbo_bid", alert.get("bid", 0)) or 0)
+        ask = float(alert.get("nbbo_ask", alert.get("ask", 0)) or 0)
+        spread_pct = 0
+        if ask > 0 and bid > 0:
             spread_pct = (ask - bid) / ask
             if spread_pct > self.max_spread_pct:
                 self.stats["rejected_spread"] += 1
@@ -77,7 +86,7 @@ class Phase1AlertFilter:
         # PASSED all filters
         self.stats["alerts_passed"] += 1
         logger.info(
-            f"✅ Alert passed Phase 1: {alert.get('symbol')} ${notional_usd_m:.1f}M "
+            f"✅ Alert passed Phase 1: {alert.get('underlying_symbol', 'UNKNOWN')} ${notional_usd_m:.1f}M "
             f"(Vol/OI={volume_oi_ratio:.2%}, Spread={spread_pct:.2%})"
         )
 

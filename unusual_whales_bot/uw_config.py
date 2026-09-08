@@ -63,6 +63,47 @@ DEBATE_ENGINE_CONFIG = {
 }
 
 # ===========================================================================
+# EXIT RULES (Tier 2: Options-Based)
+# ===========================================================================
+EXIT_RULES_CONFIG = {
+    # Use Tier 2 exit monitor (4 options-based rules)
+    "tier2_enabled": True,  # ✅ TIER 2 ACTIVE (Paper Tuesday, Live Thursday)
+
+    # Individual rule toggles
+    "flow_exhaustion_enabled": True,  # #5: 45 min no sweeps
+    "put_call_flip_enabled": True,   # #1: Conviction reversal
+    "dark_pool_enabled": True,        # #2: Institutional dump
+    "market_tide_enabled": True,      # #6: Macro sentiment flip
+
+    # Thresholds
+    "flow_exhaustion_minutes": 45,    # No activity for X minutes = exit
+    "put_call_flip_threshold": 0.55,  # >55% puts for bullish = flip
+    "dark_pool_min_notional": 1_000_000,  # $1M threshold for dump
+    "market_tide_flip_threshold": 0.50,   # <50% bullish = bearish flip
+
+    # Fall back to ATR if no options trigger
+    "fallback_to_atr": True,  # Use ATR target/stop if no other exit
+}
+
+# ===========================================================================
+# TECHNICAL GATES (Gates 9-11: Price Confirmation for Tier 2)
+# ===========================================================================
+TECHNICAL_GATES_CONFIG = {
+    # Enable technical confirmation gates
+    "enabled": True,  # ✅ GATES 9-11 ACTIVE
+
+    # Individual gates
+    "gate_9_ma_enabled": True,      # #9: Moving average alignment
+    "gate_10_rsi_enabled": True,    # #10: RSI momentum check
+    "gate_11_vwap_enabled": True,   # #11: VWAP profitability check
+
+    # Position sizing based on confidence
+    "position_sizing_enabled": True,  # Scale 0.5x-1.5x by confidence
+    "min_confidence_to_trade": 0.50,  # Skip if confidence < 50%
+    "min_confidence_full_size": 0.75, # Full position at 75%+ confidence
+}
+
+# ===========================================================================
 # EXECUTION SAFEGUARDS (Phase 2.5)
 # ===========================================================================
 EXECUTION_SAFEGUARDS_CONFIG = {

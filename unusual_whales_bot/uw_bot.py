@@ -29,10 +29,12 @@ from uw_config import (
     DEBATE_ENGINE_CONFIG,
     SENTIMENT_CONFIG,
     DISCORD_CONFIG,
+    EXIT_RULES_CONFIG,
 )
 from uw_execution_safeguards import ExecutionSafeguards
 from uw_robinhood_mcp import RobinhoodMCPClient
 from uw_position_manager import PositionManager
+from uw_tier2_integration import Tier2ExitIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 class UnusualWhalesBot:
     """Main bot orchestration"""
 
-    def __init__(self):
+    def __init__(self, api_client=None):
         logger.info("🚀 Unusual Whales Bot starting...")
 
         # Phase 2.5: Execution safeguards
@@ -53,6 +55,15 @@ class UnusualWhalesBot:
 
         # Position tracking
         self.position_manager = PositionManager()
+
+        # Tier 2: Options-based exit monitoring
+        self.tier2_integration = None
+        if EXIT_RULES_CONFIG.get("tier2_enabled", True) and api_client:
+            try:
+                self.tier2_integration = Tier2ExitIntegration(api_client)
+                logger.info("✅ Tier 2 Exit Integration initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Tier 2 initialization failed: {e}")
 
         # Phase 3B: Debate engine (optional)
         self.debate_engine = None
@@ -175,18 +186,54 @@ class UnusualWhalesBot:
         Monitor open positions every 60 seconds.
 
         Checks:
-        - Underlying price vs stop/target levels
+        - Tier 2 exit rules (flow exhaustion, put/call flip, dark pool, market tide)
+        - Underlying price vs stop/target levels (fallback)
         - EOD force close (3:45 PM)
         """
         logger.info("🔄 Risk monitoring loop started (60s interval)")
 
         while True:
             try:
-                # Fetch index prices
-                symbols_to_check = set(
-                    p.symbol for p in self.position_manager.get_all_positions().values()
-                )
+                # Get all open positions
+                all_positions = self.position_manager.get_all_positions()
+                symbols_to_check = set(p.symbol for p in all_positions.values())
 
+                # Tier 2 exit check (if enabled)
+                tier2_exits = {}
+                if self.tier2_integration and symbols_to_check:
+                    try:
+                        # Convert positions to format expected by Tier 2
+                        tier2_positions = {
+                            sym: {
+                                "entry_time": next(
+                                    p.entry_time for p in all_positions.values() if p.symbol == sym
+                                ),
+                                "entry_direction": next(
+                                    p.direction for p in all_positions.values() if p.symbol == sym
+                                ),
+                            }
+                            for sym in symbols_to_check
+                        }
+                        tier2_exits = await self.tier2_integration.check_tier2_exits(tier2_positions)
+                    except Exception as e:
+                        logger.warning(f"Tier 2 check error: {e}")
+
+                # Process Tier 2 exits
+                for symbol, (exit_reason, confidence) in tier2_exits.items():
+                    matching_positions = [
+                        (pos_id, pos) for pos_id, pos in all_positions.items()
+                        if pos.symbol == symbol
+                    ]
+                    for pos_id, pos in matching_positions:
+                        logger.info(f"✅ TIER 2 EXIT: {pos_id} via {exit_reason} (conf={confidence:.0%})")
+                        self.position_manager.close_position(
+                            pos_id,
+                            exit_price=pos.entry_price,
+                            exit_reason=f"tier2_{exit_reason}",
+                        )
+                        self.tier2_integration.cleanup_position(symbol)
+
+                # Fallback: ATR-based exits (if Tier 2 didn't trigger)
                 if symbols_to_check:
                     try:
                         quotes = await self.robinhood_mcp.get_index_quotes(list(symbols_to_check))
@@ -195,19 +242,21 @@ class UnusualWhalesBot:
                             symbol = quote.get("symbol")
                             price = quote.get("last_price")
 
-                            # Check positions against price
-                            exits = self.position_manager.check_positions_against_price(
-                                symbol, price
-                            )
+                            # Only check ATR if Tier 2 didn't exit this symbol
+                            if symbol not in tier2_exits:
+                                exits = self.position_manager.check_positions_against_price(
+                                    symbol, price
+                                )
 
-                            for pos_id, reason in exits:
-                                pos = self.position_manager.get_all_positions().get(pos_id)
-                                if pos:
-                                    self.position_manager.close_position(
-                                        pos_id,
-                                        exit_price=pos.entry_price * 1.01,  # Simulated exit
-                                        exit_reason=reason,
-                                    )
+                                for pos_id, reason in exits:
+                                    pos = self.position_manager.get_all_positions().get(pos_id)
+                                    if pos:
+                                        logger.info(f"✅ ATR EXIT: {pos_id} via {reason}")
+                                        self.position_manager.close_position(
+                                            pos_id,
+                                            exit_price=pos.entry_price * 1.01,  # Simulated exit
+                                            exit_reason=reason,
+                                        )
 
                     except Exception as e:
                         logger.warning(f"Price fetch error: {e}")
@@ -235,9 +284,57 @@ class UnusualWhalesBot:
         """
         logger.info("🔄 Bot cycle starting...")
 
-        # TODO: Integrate with Phase 1 + Phase 2 logic
+        try:
+            # Phase 1: Fetch UW alerts
+            from uw_api_client import UnusualWhalesAPI
+            from uw_phase1_filter import Phase1AlertFilter
 
-        logger.info("✅ Cycle complete")
+            api = UnusualWhalesAPI()
+            alerts = api.get_flow_alerts(limit=50, min_premium=100_000)
+
+            if not alerts:
+                logger.debug("No alerts in this cycle")
+                logger.info("✅ Cycle complete")
+                return
+
+            logger.info(f"📢 Got {len(alerts)} UW alerts")
+
+            # Phase 1: Filter
+            phase1 = Phase1AlertFilter()
+            approved_alerts = phase1.filter_alerts(alerts)
+
+            if not approved_alerts:
+                logger.info(f"⚠️ Phase 1 rejected all {len(alerts)} alerts")
+                logger.info("✅ Cycle complete")
+                return
+
+            logger.info(f"✅ Phase 1: {len(approved_alerts)}/{len(alerts)} approved")
+
+            # Execute approved trades
+            for alert in approved_alerts[:5]:  # Limit to 5 per cycle
+                try:
+                    symbol = alert.get('underlying_symbol', 'SPX')
+                    direction = "BULLISH" if alert.get('option_type', '').upper() == 'CALL' else "BEARISH"
+                    confidence = 0.80  # Fixed for Phase 1 (no Phase 2 Qwen yet)
+
+                    result = await self.execute_trade(alert, {
+                        "direction": direction,
+                        "confidence": confidence
+                    })
+
+                    if result:
+                        logger.info(f"✅ TRADE EXECUTED: {symbol} {direction}")
+                    else:
+                        logger.warning(f"❌ TRADE FAILED: {symbol} {direction}")
+
+                except Exception as e:
+                    logger.error(f"Trade execution error: {e}")
+
+            logger.info("✅ Cycle complete")
+
+        except Exception as e:
+            logger.error(f"Cycle error: {e}")
+            logger.info("✅ Cycle complete")
 
     async def main_loop(self, poll_interval: int = 300):
         """
