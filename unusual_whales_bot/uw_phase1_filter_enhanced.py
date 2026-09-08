@@ -26,6 +26,7 @@ import logging
 from typing import Tuple, Dict, Any
 from datetime import datetime, timedelta
 import pytz
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,19 @@ class Phase1AlertFilterEnhanced:
             uw_api: UnusualWhalesAPI or UnusualWhalesMockAPI instance
         """
         self.uw_api = uw_api
+
+        # Import GEX + Dark Pool client for Gate 5.5
+        try:
+            from uw_gex_darkpool_client import GEXDarkPoolClient
+            api_key = os.getenv("UW_API_KEY")
+            if api_key:
+                self.gex_client = GEXDarkPoolClient(api_key)
+            else:
+                self.gex_client = None
+                logger.warning("UW_API_KEY not set - GEX data unavailable")
+        except ImportError:
+            self.gex_client = None
+            logger.warning("GEX client not available")
         self.stats = {
             "total_alerts": 0,
             "gate_1_rejected": 0,
@@ -211,16 +225,31 @@ class Phase1AlertFilterEnhanced:
 
         # ===== GATE 5.5: GEX-DARK POOL CONFLUENCE (NEW) =====
         # Validates alignment between dark pool flows and gamma regime
-        # This replaces the old static GEX scaling with dynamic confluence checks
+        gex_data = None
+        gex_gamma = None
+
+        # Try to fetch real GEX data
+        if self.gex_client:
+            try:
+                gex_data = await self.gex_client.get_gex_exposure(ticker)
+                if gex_data:
+                    gex_gamma = gex_data.get("gamma_per_one_percent_move_oi", 0)
+                    logger.info(f"  📊 GEX: {gex_data.get('gex_regime')} (gamma={gex_gamma:.0f})")
+            except Exception as e:
+                logger.debug(f"GEX fetch failed for {ticker}: {e}")
+
+        # Calculate confluence scale with real or placeholder GEX
         gex_alignment_scale = self._get_gex_dark_pool_alignment_scale(
-            dark_pool_side, gex_gamma=None  # Will fetch real GEX in production
+            dark_pool_side, gex_gamma=gex_gamma
         )
 
         if gex_alignment_scale <= 0.5:
             # Red flag: institutions dumping into favorable regime
+            self.stats["gate_5_5_red_flag"] += 1
             logger.warning(f"  ⚠️  Gate 5.5 CAUTION: {ticker} dark pool SELL into bullish GEX")
             logger.warning(f"     → Risk elevated, scale reduced to {gex_alignment_scale:.2f}x")
         elif gex_alignment_scale >= 1.25:
+            self.stats["gate_5_5_high_conviction"] += 1
             logger.info(f"  ✨ Gate 5.5 CONFLUENCE: {ticker} dark pool aligns with GEX")
             logger.info(f"     → High conviction signal, scale boosted to {gex_alignment_scale:.2f}x")
         else:
