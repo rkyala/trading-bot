@@ -121,6 +121,59 @@ class UnusualWhalesAPI:
         alerts = self.get_flow_alerts(symbols=[symbol], limit=1)
         return alerts[0] if alerts else None
 
+    def get_news_headlines(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Fetch recent news headlines (verified endpoint: /api/news/headlines).
+
+        Fields returned: headline, created_at, is_major, sentiment, source,
+        tags, tickers, meta.
+
+        NOTE on `sentiment`: verified useless on 2026-09-08 — all 40 sampled
+        headlines returned "neutral", including
+        "EXPLOSION SOUNDS REPORTED ON IRAN'S KHARG ISLAND". `tags` was empty
+        throughout. Callers should classify from the headline text and use
+        `is_major` rather than trusting the vendor sentiment field.
+        """
+        if not self.api_key:
+            return []
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/news/headlines",
+                params={"limit": limit},
+                timeout=8,
+            )
+            self.usage_monitor.process_response_headers(resp.headers)
+            if resp.status_code != 200:
+                logger.warning(f"news/headlines returned {resp.status_code}")
+                return []
+            return resp.json().get("data", [])
+        except requests.RequestException as e:
+            logger.warning(f"news fetch failed: {e}")
+            return []
+
+    def get_market_tide(self, symbol: str = "SPY") -> Dict[str, Any]:
+        """Market-wide net call/put premium (verified: /api/market/market-tide)."""
+        if not self.api_key:
+            return {}
+        try:
+            resp = self.session.get(f"{self.base_url}/market/market-tide", timeout=8)
+            if resp.status_code != 200:
+                return {}
+            rows = resp.json().get("data", [])
+            return rows[-1] if rows else {}
+        except requests.RequestException:
+            return {}
+
+    def get_economic_calendar(self) -> List[Dict[str, Any]]:
+        """Scheduled macro events (verified: /api/market/economic-calendar)."""
+        if not self.api_key:
+            return []
+        try:
+            resp = self.session.get(f"{self.base_url}/market/economic-calendar", timeout=8)
+            return resp.json().get("data", []) if resp.status_code == 200 else []
+        except requests.RequestException:
+            return []
+
     # CRITICAL FIX #2: Add async methods to match MockAPI interface
     # TODO Week 2: Replace with real UW API endpoints for market data
     # For Tuesday launch, these return placeholder data since Phase 1 filter

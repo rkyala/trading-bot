@@ -14,3 +14,15 @@ __pycache__/
 .env
 .DS_Store
 .env.local
+
+# Runtime state (not source)
+unusual_whales_bot/open_positions.json
+unusual_whales_bot/closed_trades*.jsonl
+unusual_whales_bot/features.jsonl
+unusual_whales_bot/labels.jsonl
+features.jsonl
+labels.jsonl
+closed_trades*.jsonl
+open_positions.json
+uw_bot*.log
+uw_bot.pid
