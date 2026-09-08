@@ -27,6 +27,9 @@ EXECUTION_MODE = {
     # Log what would happen without actually executing
     "log_orders_only": False,  # Orders actually placed (in paper account)
 
+    # Notional account equity used to evaluate the daily-loss circuit breaker
+    "session_equity": 25000.0,
+
     # Used by uw_robinhood_mcp.py to determine behavior
 }
 
@@ -107,8 +110,14 @@ TECHNICAL_GATES_CONFIG = {
 # EXECUTION SAFEGUARDS (Phase 2.5)
 # ===========================================================================
 EXECUTION_SAFEGUARDS_CONFIG = {
-    # Max bid-ask spread (as %) before rejecting order
-    "max_bid_ask_spread_pct": 0.05,  # 5%
+    # Max bid-ask spread (as %) before rejecting order.
+    #
+    # BLOCKER FIX: this was 0.05 (5%) while Phase 1 admitted spreads up to 15%.
+    # Alerts between 5% and 15% (e.g. HD at 11.68%, CAR at 13.68%) passed the
+    # filter, were counted as "approved", then were unconditionally rejected at
+    # execution — a silent funnel loss that inflated the approval numbers.
+    # Both stages now read this single value.
+    "max_bid_ask_spread_pct": 0.15,  # 15% — matches Phase1AlertFilter
 
     # Dynamic stop sizing (ATR-based)
     "stop_atr_multiplier": 1.5,  # 1.5x ATR for stop

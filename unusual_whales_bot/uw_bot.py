@@ -30,11 +30,16 @@ from uw_config import (
     SENTIMENT_CONFIG,
     DISCORD_CONFIG,
     EXIT_RULES_CONFIG,
+    TECHNICAL_GATES_CONFIG,
+    EXECUTION_SAFEGUARDS_CONFIG,
+    MAX_OPEN_POSITIONS,
+    MAX_DAILY_LOSS_PCT,
 )
 from uw_execution_safeguards import ExecutionSafeguards
 from uw_robinhood_mcp import RobinhoodMCPClient
 from uw_position_manager import PositionManager
 from uw_tier2_integration import Tier2ExitIntegration
+from uw_market_data import get_market_data
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +50,44 @@ class UnusualWhalesBot:
     def __init__(self, api_client=None):
         logger.info("🚀 Unusual Whales Bot starting...")
 
-        # Phase 2.5: Execution safeguards
-        self.execution_safeguards = ExecutionSafeguards()
+        # Phase 2.5: Execution safeguards (spread threshold from config so
+        # Phase 1 and execution cannot disagree — see uw_config alignment note)
+        self.execution_safeguards = ExecutionSafeguards(
+            max_bid_ask_spread_pct=EXECUTION_SAFEGUARDS_CONFIG.get("max_bid_ask_spread_pct", 0.15)
+        )
 
-        # Phase 2: Robinhood MCP (mock or live)
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #4: paper_trading is now actually routed. Previously
+        # this flag was read nowhere, so `mock_mode: False` fell through to a
+        # stub LIVE path where every order returned success=False.
+        # ---------------------------------------------------------------
         self.robinhood_mcp = RobinhoodMCPClient(
-            use_mock=EXECUTION_MODE.get("mock_mode", True)
+            use_mock=EXECUTION_MODE.get("mock_mode", False),
+            paper_trading=EXECUTION_MODE.get("paper_trading", True),
         )
 
         # Position tracking
         self.position_manager = PositionManager()
 
-        # Tier 2: Options-based exit monitoring
+        # Circuit-breaker state (BLOCKER FIX #9)
+        self.halted = False
+        self.session_realized_pnl = 0.0
+        self.session_start_equity = float(EXECUTION_MODE.get("session_equity", 25000.0))
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #6: Tier 2 required an api_client that main() never
+        # passed, so all four exit rules silently never initialized. The bot
+        # now builds its own client when one is not supplied.
+        # ---------------------------------------------------------------
+        if api_client is None:
+            try:
+                from uw_api_client import UnusualWhalesAPI
+                api_client = UnusualWhalesAPI()
+            except Exception as e:
+                logger.warning(f"⚠️ Could not construct UW API client: {e}")
+
+        self.api_client = api_client
+
         self.tier2_integration = None
         if EXIT_RULES_CONFIG.get("tier2_enabled", True) and api_client:
             try:
@@ -64,6 +95,24 @@ class UnusualWhalesBot:
                 logger.info("✅ Tier 2 Exit Integration initialized")
             except Exception as e:
                 logger.warning(f"⚠️ Tier 2 initialization failed: {e}")
+        else:
+            logger.warning("⚠️ Tier 2 exit monitoring is NOT active")
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #7: wire Technical Gates 9-11. They were fully built
+        # but imported nowhere, and would have crashed if they had been
+        # (they call get_historical_candles / get_intraday_ticks, which did
+        # not exist on any client until uw_market_data.py was added).
+        # ---------------------------------------------------------------
+        self.technical_gates = None
+        if TECHNICAL_GATES_CONFIG.get("enabled", True):
+            try:
+                from uw_technical_gates import TechnicalGates
+                from uw_market_data import get_async_market_data
+                self.technical_gates = TechnicalGates(get_async_market_data())
+                logger.info("✅ Technical Gates 9-11 initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Technical gates unavailable: {e}")
 
         # Phase 3B: Debate engine (optional)
         self.debate_engine = None
@@ -84,6 +133,46 @@ class UnusualWhalesBot:
 
         logger.info("✅ Bot initialized")
 
+    @staticmethod
+    def classify_alert(alert: Dict) -> Optional[Dict]:
+        """
+        Derive directional intent from the alert's own UW tags.
+
+        BLOCKER FIX: the previous mapping was `CALL -> BULLISH` from
+        option_type alone. That is wrong for seller-initiated flow: a CALL hit
+        on the BID is someone SELLING calls — bearish exposure — and UW tags it
+        `["bid_side", "bearish"]`. Roughly 40% of live alerts are bid_side, so
+        that mapping inverted a large share of signals.
+
+        Policy: follow the BUYERS. Only `ask_side` flow is actionable, because
+        buying the same contract expresses the same view as the institution
+        that initiated it. bid_side / mid_side / no_side are skipped.
+
+        Returns None when the alert is not actionable.
+        """
+        tags = {str(t).lower() for t in (alert.get("tags") or [])}
+        option_type = str(alert.get("option_type", "")).upper()
+
+        if "ask_side" not in tags:
+            return None  # seller-initiated or unsided: not a follow-the-buyer signal
+
+        if "bullish" in tags:
+            bias = "BULLISH"
+        elif "bearish" in tags:
+            bias = "BEARISH"
+        else:
+            return None  # neutral
+
+        direction = "CALL" if option_type == "CALL" else "PUT"
+
+        # Buying a call should be bullish and buying a put bearish. If the tag
+        # disagrees with the contract, the trade would not express the view.
+        expected = "BULLISH" if direction == "CALL" else "BEARISH"
+        if bias != expected:
+            return None
+
+        return {"direction": direction, "bias": bias}
+
     async def execute_trade(
         self,
         alert: Dict,
@@ -92,94 +181,195 @@ class UnusualWhalesBot:
         """
         Execute a single trade.
 
-        Args:
-            alert: Unusual Whales alert dict
-            classification: Qwen classification result
-
         Returns: True if order placed successfully
         """
-        symbol = alert.get("symbol", "SPX")
-        direction = classification.get("direction")  # "BULLISH" or "BEARISH"
-        confidence = classification.get("confidence", 0.0)
-
-        logger.info(
-            f"📤 EXECUTE: {symbol} {direction} (conf={confidence:.2f})"
-        )
-
-        # Phase 2.5: Get execution plan (ATR-based stops)
-        atr_14 = self.execution_safeguards.get_atr_14(symbol)
-        current_price = 4500  # TODO: Fetch real underlying price
-        entry_price = alert.get("entry_price", 4.50)
-
-        plan = self.execution_safeguards.generate_execution_plan(
-            symbol=symbol,
-            entry_price=entry_price,
-            quantity=1,
-            underlying_current_price=current_price,
-            iv_rank=0.65,
-            atr_14=atr_14,
-        )
-
-        # Phase 2.5: Validate NBBO spread
-        option_chain_id = alert.get("option_chain_id", f"{symbol}_mock")
-        try:
-            quotes = await self.robinhood_mcp.get_option_quotes([option_chain_id])
-            if not quotes:
-                logger.warning("❌ No quotes available")
-                return False
-
-            quote = quotes[0]
-            if not self.execution_safeguards.validate_nbbo_spread(quote):
-                logger.warning("❌ Spread too wide, rejecting order")
-                return False
-
-            # Phase 2.5: Calculate midpoint limit price
-            limit_price, should_execute = self.execution_safeguards.calculate_midpoint_order(
-                nbbo_bid=quote.get("bid", 4.40),
-                nbbo_ask=quote.get("ask", 4.60),
-            )
-
-            if not should_execute:
-                logger.warning("❌ Midpoint calculation failed")
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ Quote fetch error: {e}")
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #1: read `underlying_symbol`. The old code read
+        # alert.get("symbol", "SPX") — a key the UW API never returns — so
+        # EVERY order defaulted to SPX regardless of the actual signal.
+        # ---------------------------------------------------------------
+        symbol = alert.get("underlying_symbol") or alert.get("symbol")
+        if not symbol:
+            logger.error("❌ Alert has no underlying symbol; skipping")
             return False
 
-        # Phase 2: Place order via Robinhood MCP
+        direction = classification.get("direction", "CALL")  # "CALL" | "PUT"
+        confidence = float(classification.get("confidence", 0.0))
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #9: enforce risk limits that were defined in config
+        # but referenced nowhere in the execution path.
+        # ---------------------------------------------------------------
+        open_count = self.position_manager.total_open_positions()
+        if open_count >= MAX_OPEN_POSITIONS:
+            logger.warning(f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); skipping {symbol}")
+            return False
+
+        if self.halted:
+            logger.warning("🛑 Trading halted by circuit breaker; skipping")
+            return False
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #10: do not re-enter a symbol we already hold.
+        # ---------------------------------------------------------------
+        if self.position_manager.has_open_position(symbol):
+            logger.info(f"⏭️  {symbol}: position already open, skipping duplicate entry")
+            return False
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #2: use the REAL underlying price. The alert carries
+        # `underlying_price`; fall back to live market data. Never 4500.
+        # ---------------------------------------------------------------
+        try:
+            underlying_price = float(alert.get("underlying_price") or 0)
+        except (TypeError, ValueError):
+            underlying_price = 0.0
+
+        if underlying_price <= 0:
+            underlying_price = get_market_data().get_underlying_price(symbol) or 0.0
+
+        if underlying_price <= 0:
+            logger.warning(f"❌ {symbol}: no underlying price available; skipping (no placeholder)")
+            return False
+
+        # Real NBBO straight off the alert (the old code threw these away and
+        # validated spread against random mock quotes instead).
+        try:
+            nbbo_bid = float(alert.get("nbbo_bid") or 0)
+            nbbo_ask = float(alert.get("nbbo_ask") or 0)
+        except (TypeError, ValueError):
+            nbbo_bid = nbbo_ask = 0.0
+
+        if nbbo_bid <= 0 or nbbo_ask <= 0:
+            logger.warning(f"❌ {symbol}: no real NBBO on alert; skipping")
+            return False
+
+        if not self.execution_safeguards.validate_nbbo_spread({"bid": nbbo_bid, "ask": nbbo_ask}):
+            return False
+
+        limit_price, should_execute = self.execution_safeguards.calculate_midpoint_order(
+            nbbo_bid=nbbo_bid, nbbo_ask=nbbo_ask
+        )
+        if not should_execute or not limit_price:
+            return False
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #3: direction-aware execution plan (real ATR).
+        # ---------------------------------------------------------------
+        plan = self.execution_safeguards.generate_execution_plan(
+            symbol=symbol,
+            entry_price=limit_price,
+            quantity=1,
+            underlying_current_price=underlying_price,
+            atr_14=None,
+            direction=direction,
+        )
+        if plan is None:
+            logger.warning(f"❌ {symbol}: could not build a safe execution plan; skipping")
+            return False
+
+        # ---------------------------------------------------------------
+        # Position sizing by confidence (was hardcoded quantity=1).
+        # ---------------------------------------------------------------
+        quantity = self._size_position(confidence)
+        if quantity < 1:
+            logger.info(f"⏭️  {symbol}: confidence {confidence:.0%} below trade threshold")
+            return False
+
+        # option_chain_id is a REAL OCC symbol on the alert (e.g.
+        # NVDA260911C00225000) — never synthesize one.
+        option_chain_id = alert.get("option_chain_id")
+        if not option_chain_id:
+            logger.warning(f"❌ {symbol}: alert carries no option_chain_id; skipping")
+            return False
+
+        logger.info(
+            f"📤 EXECUTE: {symbol} {direction} x{quantity} @ ${limit_price:.2f} "
+            f"(spot ${underlying_price:.2f}, conf {confidence:.0%})"
+        )
+
         try:
             order_response = await self.robinhood_mcp.place_option_order(
                 symbol=symbol,
                 option_chain_id=option_chain_id,
-                quantity=1,
+                quantity=quantity,
                 order_type="limit",
                 limit_price=limit_price,
-                direction="buy_to_open" if direction == "BULLISH" else "buy_to_open",
+                direction="buy_to_open",
+                nbbo_bid=nbbo_bid,
+                nbbo_ask=nbbo_ask,
             )
 
             if not order_response.success:
                 logger.warning(f"❌ Order rejected: {order_response.message}")
                 return False
 
-            # Track position
+            fill = order_response.fill_price or limit_price
+
             position_id = self.position_manager.add_position(
                 symbol=symbol,
-                direction="CALL" if direction == "BULLISH" else "PUT",
-                entry_price=limit_price,
-                quantity=1,
+                direction=direction,
+                entry_price=fill,
+                quantity=quantity,
                 underlying_stop=plan.underlying_stop_price,
                 underlying_target=plan.underlying_target_price,
                 option_chain_id=option_chain_id,
                 order_id=order_response.order_id,
+                entry_underlying=underlying_price,
+                delta=self._safe_float(alert.get("delta"), 0.5),
+                gamma=self._safe_float(alert.get("gamma"), 0.0),
+                simulated=order_response.simulated,
             )
 
-            logger.info(f"✅ Order placed: {position_id} | Order ID: {order_response.order_id}")
+            logger.info(f"✅ Order placed: {position_id} | {order_response.message}")
             return True
 
         except Exception as e:
             logger.error(f"❌ Order placement error: {e}")
             return False
+
+    @staticmethod
+    def _safe_float(value, default: float) -> float:
+        try:
+            f = float(value)
+            return f if f == f else default  # reject NaN
+        except (TypeError, ValueError):
+            return default
+
+    def _record_pnl(self, closed_position) -> None:
+        """
+        Track realized P&L and trip the daily-loss circuit breaker.
+
+        BLOCKER FIX #9: MAX_DAILY_LOSS_PCT was defined in config and never
+        referenced, so there was no drawdown halt of any kind.
+        """
+        if not closed_position or closed_position.exit_price is None:
+            return
+
+        entry_cost = closed_position.entry_price * closed_position.quantity * 100
+        exit_value = closed_position.exit_price * closed_position.quantity * 100
+        self.session_realized_pnl += (exit_value - entry_cost)
+
+        if self.session_start_equity > 0:
+            drawdown_pct = (self.session_realized_pnl / self.session_start_equity) * 100
+            if drawdown_pct <= MAX_DAILY_LOSS_PCT:
+                self.halted = True
+                logger.error(
+                    f"🛑 CIRCUIT BREAKER TRIPPED: session P&L "
+                    f"${self.session_realized_pnl:,.0f} ({drawdown_pct:.2f}%) "
+                    f"breached {MAX_DAILY_LOSS_PCT}% limit. No new entries."
+                )
+
+    @staticmethod
+    def _size_position(confidence: float) -> int:
+        """Scale contracts by confidence (was hardcoded to 1)."""
+        if confidence < TECHNICAL_GATES_CONFIG.get("min_confidence_to_trade", 0.50):
+            return 0
+        if confidence < 0.65:
+            return 1
+        if confidence < 0.85:
+            return 2
+        return 3
 
     async def high_frequency_risk_loop(self):
         """
@@ -225,12 +415,20 @@ class UnusualWhalesBot:
                         if pos.symbol == symbol
                     ]
                     for pos_id, pos in matching_positions:
-                        logger.info(f"✅ TIER 2 EXIT: {pos_id} via {exit_reason} (conf={confidence:.0%})")
-                        self.position_manager.close_position(
-                            pos_id,
-                            exit_price=pos.entry_price,
-                            exit_reason=f"tier2_{exit_reason}",
+                        # BLOCKER FIX #8: mark to the real underlying instead of
+                        # booking exit_price = entry_price (always exactly $0 P&L,
+                        # which forced a 0% win rate on every Tier 2 exit).
+                        exit_price, exit_spot = await self.position_manager.mark_position(
+                            pos, self.robinhood_mcp
                         )
+                        logger.info(f"✅ TIER 2 EXIT: {pos_id} via {exit_reason} (conf={confidence:.0%})")
+                        closed = self.position_manager.close_position(
+                            pos_id,
+                            exit_price=exit_price,
+                            exit_reason=f"tier2_{exit_reason}",
+                            exit_underlying=exit_spot,
+                        )
+                        self._record_pnl(closed)
                         self.tier2_integration.cleanup_position(symbol)
 
                 # Fallback: ATR-based exits (if Tier 2 didn't trigger)
@@ -251,12 +449,20 @@ class UnusualWhalesBot:
                                 for pos_id, reason in exits:
                                     pos = self.position_manager.get_all_positions().get(pos_id)
                                     if pos:
-                                        logger.info(f"✅ ATR EXIT: {pos_id} via {reason}")
-                                        self.position_manager.close_position(
-                                            pos_id,
-                                            exit_price=pos.entry_price * 1.01,  # Simulated exit
-                                            exit_reason=reason,
+                                        # BLOCKER FIX #8: was `entry_price * 1.01`,
+                                        # i.e. every ATR exit booked a guaranteed
+                                        # +1% win regardless of what price did.
+                                        exit_price, exit_spot = await self.position_manager.mark_position(
+                                            pos, self.robinhood_mcp
                                         )
+                                        logger.info(f"✅ ATR EXIT: {pos_id} via {reason}")
+                                        closed = self.position_manager.close_position(
+                                            pos_id,
+                                            exit_price=exit_price,
+                                            exit_reason=reason,
+                                            exit_underlying=exit_spot,
+                                        )
+                                        self._record_pnl(closed)
 
                     except Exception as e:
                         logger.warning(f"Price fetch error: {e}")
@@ -323,27 +529,59 @@ class UnusualWhalesBot:
 
             logger.info(f"✅ Consolidation: {len(consolidated_alerts)}/{len(approved_alerts)} approved")
 
-            # Execute consolidated trades
-            for alert in consolidated_alerts[:5]:  # Limit to 5 per cycle
-                try:
-                    symbol = alert.get('underlying_symbol', 'SPX')
-                    direction = "BULLISH" if alert.get('option_type', '').upper() == 'CALL' else "BEARISH"
-                    confidence = 0.80  # Fixed for Phase 1 (no Phase 2 Qwen yet)
+            # ---------------------------------------------------------------
+            # Direction classification from UW tags (follow-the-buyer policy).
+            # Replaces the blind `CALL -> BULLISH` mapping.
+            # ---------------------------------------------------------------
+            actionable = []
+            for alert in consolidated_alerts:
+                cls = self.classify_alert(alert)
+                if cls:
+                    actionable.append((alert, cls))
 
-                    result = await self.execute_trade(alert, {
-                        "direction": direction,
-                        "confidence": confidence
-                    })
+            if not actionable:
+                logger.info("⚠️ No buyer-initiated (ask_side) signals this cycle")
+                logger.info("✅ Cycle complete")
+                return
+
+            logger.info(f"✅ Actionable (ask_side): {len(actionable)}/{len(consolidated_alerts)}")
+
+            # ---------------------------------------------------------------
+            # BLOCKER FIX #7: technical confirmation now actually runs and
+            # produces the confidence that drives position sizing (previously
+            # confidence was the constant 0.80).
+            # ---------------------------------------------------------------
+            executed = 0
+            for alert, cls in actionable:
+                if executed >= 5:  # per-cycle cap
+                    break
+                try:
+                    symbol = alert.get("underlying_symbol")
+                    direction = cls["direction"]
+                    confidence = 0.75  # Tier 2 baseline
+
+                    if self.technical_gates:
+                        try:
+                            spot = self._safe_float(alert.get("underlying_price"), 0.0)
+                            if spot > 0:
+                                confidence = await self.technical_gates.calculate_technical_confidence(
+                                    symbol, direction, spot
+                                )
+                        except Exception as e:
+                            logger.warning(f"Technical gates failed for {symbol}: {e}; using baseline")
+
+                    result = await self.execute_trade(
+                        alert, {"direction": direction, "confidence": confidence}
+                    )
 
                     if result:
-                        logger.info(f"✅ TRADE EXECUTED: {symbol} {direction}")
-                    else:
-                        logger.warning(f"❌ TRADE FAILED: {symbol} {direction}")
+                        executed += 1
+                        logger.info(f"✅ TRADE EXECUTED: {symbol} {direction} (conf {confidence:.0%})")
 
                 except Exception as e:
                     logger.error(f"Trade execution error: {e}")
 
-            logger.info("✅ Cycle complete")
+            logger.info(f"✅ Cycle complete ({executed} executed, {self.position_manager.total_open_positions()} open)")
 
         except Exception as e:
             logger.error(f"Cycle error: {e}")
@@ -380,9 +618,21 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
 
-    bot = UnusualWhalesBot()
+    from uw_config import validate_config, get_execution_mode_name
+    validate_config()
 
-    # Run bot
+    # BLOCKER FIX #6: pass the API client so Tier 2 exit monitoring actually
+    # initializes. main() previously called UnusualWhalesBot() with no client,
+    # which silently disabled all four Tier 2 exit rules in production.
+    from uw_api_client import UnusualWhalesAPI
+    api_client = UnusualWhalesAPI()
+
+    bot = UnusualWhalesBot(api_client=api_client)
+
+    logger.info(f"▶️  Execution mode: {get_execution_mode_name()}")
+    logger.info(f"▶️  Tier 2 exits: {'ACTIVE' if bot.tier2_integration else 'INACTIVE'}")
+    logger.info(f"▶️  Technical gates: {'ACTIVE' if bot.technical_gates else 'INACTIVE'}")
+
     asyncio.run(bot.main_loop(poll_interval=300))
 
 

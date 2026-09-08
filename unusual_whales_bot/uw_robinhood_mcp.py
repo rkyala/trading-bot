@@ -1,22 +1,41 @@
 """
-Phase 2: Robinhood MCP Client Wrapper
+Phase 2: Execution Client (MOCK / PAPER / LIVE)
 
-Abstracts Robinhood trading via Claude MCP tools.
-Supports three execution modes:
-- Mock (deterministic test responses)
-- Paper (Robinhood play money)
-- Live (real trading)
+BLOCKER FIX #4
+--------------
+Previously: `mock_mode: False` routed to a non-mock branch whose every method
+was a stub — place_option_order returned success=False, get_option_quotes
+returned []. execute_trade then hit `if not quotes: return False`. That is the
+real source of the "No quotes available" failures on every attempted trade.
+The `paper_trading: True` flag was read nowhere and routed to nothing.
 
-See: ROBINHOOD_MCP_STANDARD.md for production requirements
+Now there are three explicit modes:
+  MOCK  - random synthetic quotes; for unit tests only
+  PAPER - REAL NBBO from the Unusual Whales alert, simulated fills, positions
+          marked to market using delta against real underlying moves
+  LIVE  - refuses to run unless a real MCP executor is injected. It fails
+          LOUDLY instead of silently returning success=False.
+
+BLOCKER FIX #8
+--------------
+Exits previously used `exit_price = entry_price` (P&L exactly $0) or
+`entry_price * 1.01` (a fixed +1% "win"). Win rate was therefore an artifact of
+the code, not the market. PAPER mode now marks positions using a first-order
+delta/gamma approximation against the REAL underlying price. This is a model,
+not a broker fill — it is labelled as such everywhere it is surfaced.
 """
 
 import logging
-import asyncio
 import random
 from typing import Optional, List, Dict
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+MODE_MOCK = "MOCK"
+MODE_PAPER = "PAPER"
+MODE_LIVE = "LIVE"
 
 
 @dataclass
@@ -25,28 +44,54 @@ class OrderResponse:
     success: bool
     order_id: Optional[str]
     message: str
+    fill_price: Optional[float] = None
+    simulated: bool = False
+
+
+class LiveExecutionUnavailable(RuntimeError):
+    """Raised when LIVE mode is requested without a working MCP executor."""
 
 
 class RobinhoodMCPClient:
-    """
-    Robinhood MCP client wrapper.
+    """Execution client with explicit, non-silent mode handling."""
 
-    In production: Calls real Robinhood MCP tools (via Claude)
-    In testing: Returns deterministic mock responses
-    """
+    def __init__(
+        self,
+        use_mock: bool = True,
+        paper_trading: bool = False,
+        mcp_executor=None,
+    ):
+        if use_mock:
+            self.mode = MODE_MOCK
+        elif paper_trading:
+            self.mode = MODE_PAPER
+        else:
+            self.mode = MODE_LIVE
 
-    def __init__(self, use_mock: bool = True):
-        self.use_mock = use_mock
+        self.mcp_executor = mcp_executor
+        self._paper_fills: Dict[str, Dict] = {}
+
         self.stats = {
             "orders_placed": 0,
             "orders_successful": 0,
             "orders_failed": 0,
             "quotes_fetched": 0,
         }
-        if use_mock:
-            logger.info("🎭 Robinhood MCP Client: MOCK MODE (testing)")
+
+        if self.mode == MODE_MOCK:
+            logger.info("🎭 Execution client: MOCK (synthetic data, tests only)")
+        elif self.mode == MODE_PAPER:
+            logger.info("📝 Execution client: PAPER (real quotes, simulated fills)")
         else:
-            logger.info("🚀 Robinhood MCP Client: LIVE MODE (real trading)")
+            if self.mcp_executor is None:
+                logger.error(
+                    "🚨 LIVE mode requested but no MCP executor was injected. "
+                    "Orders will be REFUSED rather than silently dropped."
+                )
+            else:
+                logger.info("🚀 Execution client: LIVE (real money)")
+
+    # ------------------------------------------------------------------ orders
 
     async def place_option_order(
         self,
@@ -56,158 +101,223 @@ class RobinhoodMCPClient:
         order_type: str = "limit",
         limit_price: Optional[float] = None,
         direction: str = "buy_to_open",
+        nbbo_bid: Optional[float] = None,
+        nbbo_ask: Optional[float] = None,
     ) -> OrderResponse:
-        """
-        Place an option order.
-
-        Args:
-            symbol: Underlying (SPX, NDX, RUT)
-            option_chain_id: Option contract ID
-            quantity: Number of contracts
-            order_type: "limit" or "market"
-            limit_price: Limit price (required if order_type="limit")
-            direction: "buy_to_open" or "sell_to_close"
-
-        Returns: OrderResponse with success/order_id
-        """
+        """Place an option order in the configured mode."""
         self.stats["orders_placed"] += 1
 
-        if self.use_mock:
+        if self.mode == MODE_MOCK:
             return self._mock_place_option_order(
                 symbol, option_chain_id, quantity, order_type, limit_price, direction
             )
 
-        # TODO: Replace with real Robinhood MCP call
-        # order_id = await claude_mcp.place_option_order(...)
-        logger.warning("⚠️ Live mode not fully implemented yet")
-        return OrderResponse(
-            success=False,
-            order_id=None,
-            message="Live mode requires full MCP integration"
-        )
+        if self.mode == MODE_PAPER:
+            return self._paper_place_option_order(
+                symbol, option_chain_id, quantity, limit_price, direction,
+                nbbo_bid, nbbo_ask,
+            )
 
-    def _mock_place_option_order(
+        # LIVE
+        if self.mcp_executor is None:
+            self.stats["orders_failed"] += 1
+            msg = (
+                "LIVE execution unavailable: no Robinhood MCP executor is connected. "
+                "Authorize the robinhood-trading MCP server before enabling live mode."
+            )
+            logger.error(f"🚨 {msg}")
+            return OrderResponse(success=False, order_id=None, message=msg)
+
+        try:
+            result = await self.mcp_executor.place_option_order(
+                symbol=symbol,
+                option_chain_id=option_chain_id,
+                quantity=quantity,
+                order_type=order_type,
+                limit_price=limit_price,
+                direction=direction,
+            )
+            ok = bool(result.get("success"))
+            self.stats["orders_successful" if ok else "orders_failed"] += 1
+            return OrderResponse(
+                success=ok,
+                order_id=result.get("order_id"),
+                message=result.get("message", ""),
+                fill_price=result.get("fill_price"),
+            )
+        except Exception as e:
+            self.stats["orders_failed"] += 1
+            logger.error(f"❌ LIVE order failed: {e}")
+            return OrderResponse(success=False, order_id=None, message=str(e))
+
+    def _paper_place_option_order(
         self,
         symbol: str,
         option_chain_id: str,
         quantity: int,
-        order_type: str,
         limit_price: Optional[float],
         direction: str,
+        nbbo_bid: Optional[float],
+        nbbo_ask: Optional[float],
     ) -> OrderResponse:
-        """Mock order placement (for testing)"""
+        """
+        Simulate a fill against the REAL NBBO carried on the alert.
 
-        # Simulate 95% success rate
-        if random.random() > 0.05:
-            order_id = f"mock-order-{self.stats['orders_placed']:05d}"
-            self.stats["orders_successful"] += 1
-
-            price_str = f"${limit_price:.2f}" if limit_price else "market"
-            logger.info(
-                f"✅ [MOCK] Order placed: {direction} {quantity}x {symbol} @ {price_str}"
-            )
-            return OrderResponse(
-                success=True,
-                order_id=order_id,
-                message=f"Mock order {order_id} placed"
-            )
-        else:
+        Fill assumption: marketable limit at the midpoint fills at the midpoint
+        plus half the remaining half-spread (conservative slippage), never
+        better than the midpoint.
+        """
+        if not nbbo_bid or not nbbo_ask or nbbo_ask <= 0 or nbbo_bid <= 0:
             self.stats["orders_failed"] += 1
-            logger.warning(f"❌ [MOCK] Order rejected (simulated)")
             return OrderResponse(
                 success=False,
                 order_id=None,
-                message="Mock order rejected (simulated 5% rejection rate)"
+                message="PAPER: no real NBBO available; refusing to invent a fill price",
             )
 
+        midpoint = (nbbo_bid + nbbo_ask) / 2.0
+        half_spread = (nbbo_ask - nbbo_bid) / 2.0
+        # Conservative: pay half the half-spread on entry, give it up on exit.
+        fill = midpoint + (half_spread * 0.5) if "buy" in direction else midpoint - (half_spread * 0.5)
+        fill = round(max(fill, 0.01), 2)
+
+        order_id = f"paper-{self.stats['orders_placed']:05d}"
+        self._paper_fills[order_id] = {
+            "symbol": symbol,
+            "option_chain_id": option_chain_id,
+            "quantity": quantity,
+            "fill_price": fill,
+            "direction": direction,
+        }
+        self.stats["orders_successful"] += 1
+
+        logger.info(
+            f"📝 [PAPER] {direction} {quantity}x {option_chain_id} @ ${fill:.2f} "
+            f"(NBBO ${nbbo_bid:.2f}/${nbbo_ask:.2f})"
+        )
+        return OrderResponse(
+            success=True,
+            order_id=order_id,
+            message=f"Paper fill @ ${fill:.2f}",
+            fill_price=fill,
+            simulated=True,
+        )
+
+    def _mock_place_option_order(
+        self, symbol, option_chain_id, quantity, order_type, limit_price, direction
+    ) -> OrderResponse:
+        if random.random() > 0.05:
+            order_id = f"mock-order-{self.stats['orders_placed']:05d}"
+            self.stats["orders_successful"] += 1
+            return OrderResponse(
+                success=True, order_id=order_id,
+                message=f"Mock order {order_id}", fill_price=limit_price, simulated=True,
+            )
+        self.stats["orders_failed"] += 1
+        return OrderResponse(success=False, order_id=None, message="Mock rejection")
+
+    # ------------------------------------------------------------- valuation
+
+    @staticmethod
+    def estimate_option_value(
+        entry_option_price: float,
+        entry_underlying: float,
+        current_underlying: float,
+        delta: float,
+        gamma: float = 0.0,
+        direction: str = "CALL",
+    ) -> float:
+        """
+        First-order (delta + gamma) mark for a paper position.
+
+        NOT a broker fill. Used so paper P&L responds to real price action
+        instead of the previous hardcoded `entry_price * 1.01`.
+        """
+        move = current_underlying - entry_underlying
+
+        # UW reports delta signed for the contract type; normalize defensively.
+        d = abs(delta) if delta else 0.5
+        if str(direction).upper().startswith("P"):
+            d = -d
+
+        value = entry_option_price + (d * move) + (0.5 * (gamma or 0.0) * move * move)
+        return round(max(value, 0.01), 2)
+
+    # ---------------------------------------------------------------- quotes
+
     async def get_option_quotes(self, option_chain_ids: List[str]) -> List[Dict]:
-        """
-        Fetch option quotes.
-
-        Args:
-            option_chain_ids: List of option contract IDs
-
-        Returns: List of quote dicts with bid/ask/last
-        """
-        if self.use_mock:
+        if self.mode == MODE_MOCK:
             return self._mock_get_option_quotes(option_chain_ids)
 
-        # TODO: Replace with real Robinhood MCP call
-        logger.warning("⚠️ Live mode not fully implemented yet")
-        return []
+        if self.mode == MODE_PAPER:
+            # PAPER never needs synthetic option quotes: the caller supplies the
+            # real NBBO straight from the alert. Returning [] here would trip
+            # the old `if not quotes: return False` path, so signal explicitly.
+            return []
+
+        if self.mcp_executor is None:
+            logger.error("🚨 LIVE quotes unavailable: no MCP executor connected")
+            return []
+        try:
+            return await self.mcp_executor.get_option_quotes(option_chain_ids)
+        except Exception as e:
+            logger.error(f"❌ LIVE quote fetch failed: {e}")
+            return []
 
     def _mock_get_option_quotes(self, option_chain_ids: List[str]) -> List[Dict]:
-        """Mock option quotes (for testing)"""
         quotes = []
-
         for chain_id in option_chain_ids:
-            # Generate realistic mock quotes
             bid = 4.40 + random.uniform(-0.05, 0.05)
             ask = bid + random.uniform(0.05, 0.15)
-            last = (bid + ask) / 2 + random.uniform(-0.02, 0.02)
-
             quotes.append({
                 "option_chain_id": chain_id,
                 "bid": round(bid, 2),
                 "ask": round(ask, 2),
-                "last": round(last, 2),
-                "volume": random.randint(100, 5000),
-                "open_interest": random.randint(1000, 50000),
+                "last": round((bid + ask) / 2, 2),
             })
-
         self.stats["quotes_fetched"] += 1
         return quotes
 
     async def get_index_quotes(self, symbols: List[str]) -> List[Dict]:
         """
-        Fetch index quotes (SPX, NDX, RUT).
-
-        Args:
-            symbols: List of index symbols
-
-        Returns: List of quote dicts with last_price
+        Underlying prices. PAPER and LIVE both use REAL market data — the old
+        implementation returned a random walk around a hardcoded 4500 for SPX.
         """
-        if self.use_mock:
+        if self.mode == MODE_MOCK:
             return self._mock_get_index_quotes(symbols)
 
-        # TODO: Replace with real Robinhood MCP call
-        logger.warning("⚠️ Live mode not fully implemented yet")
-        return []
-
-    def _mock_get_index_quotes(self, symbols: List[str]) -> List[Dict]:
-        """Mock index quotes with random walk (for testing)"""
-        # Base prices for indices
-        base_prices = {
-            "SPX": 4500,
-            "NDX": 14000,
-            "RUT": 2050,
-        }
+        from uw_market_data import get_market_data
+        md = get_market_data()
 
         quotes = []
         for symbol in symbols:
-            # Realistic ±0.1% random walk
-            base = base_prices.get(symbol, 4500)
-            change_pct = random.uniform(-0.001, 0.001)
-            price = base * (1 + change_pct)
-
-            quotes.append({
-                "symbol": symbol,
-                "last_price": round(price, 2),
-                "bid": round(price * 0.9995, 2),
-                "ask": round(price * 1.0005, 2),
-                "change": round(change_pct * 100, 2),
-            })
+            price = md.get_underlying_price(symbol)
+            if price is None:
+                logger.warning(f"⚠️ No price for {symbol}; omitting from quote batch")
+                continue
+            quotes.append({"symbol": symbol, "last_price": price})
 
         self.stats["quotes_fetched"] += 1
         return quotes
 
+    def _mock_get_index_quotes(self, symbols: List[str]) -> List[Dict]:
+        base_prices = {"SPX": 4500, "NDX": 14000, "RUT": 2050}
+        quotes = []
+        for symbol in symbols:
+            base = base_prices.get(symbol, 4500)
+            price = base * (1 + random.uniform(-0.001, 0.001))
+            quotes.append({"symbol": symbol, "last_price": round(price, 2)})
+        self.stats["quotes_fetched"] += 1
+        return quotes
+
     def log_stats(self):
-        """Log order statistics"""
         logger.info("\n" + "=" * 80)
-        logger.info("ROBINHOOD MCP STATISTICS")
+        logger.info(f"EXECUTION CLIENT STATISTICS (mode={self.mode})")
         logger.info("=" * 80)
         logger.info(f"Orders placed: {self.stats['orders_placed']}")
         logger.info(f"  ✅ Successful: {self.stats['orders_successful']}")
         logger.info(f"  ❌ Failed: {self.stats['orders_failed']}")
         logger.info(f"Quotes fetched: {self.stats['quotes_fetched']}")
+        if self.mode == MODE_PAPER:
+            logger.info("NOTE: fills and marks are SIMULATED (delta-modelled), not broker fills")
         logger.info("=" * 80 + "\n")

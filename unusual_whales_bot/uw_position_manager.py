@@ -20,24 +20,35 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OptionsPosition:
     """Single open option position"""
-    symbol: str  # SPX, NDX, RUT
+    symbol: str
     direction: str  # "CALL" or "PUT"
     entry_price: float  # What we paid for the option
     quantity: int  # Number of contracts
     entry_time: str  # ISO timestamp
 
-    # Underlying stops (SPX level, not option price)
-    underlying_stop: float  # SPX ≤ this = stop hit
-    underlying_target: float  # SPX ≥ this = target hit
+    # Underlying stop/target levels (meaning depends on `direction`)
+    underlying_stop: float
+    underlying_target: float
 
     # MCP tracking
     option_chain_id: str
     order_id: Optional[str] = None
 
+    # BLOCKER FIX #8: entry context required to mark the position to market.
+    # Without the entry underlying price and greeks there is no way to compute
+    # a real exit value, which is why exits previously used entry_price * 1.01.
+    entry_underlying: float = 0.0
+    delta: float = 0.5
+    gamma: float = 0.0
+
+    # Provenance so simulated results are never mistaken for broker fills
+    simulated: bool = True
+
     # Exit tracking
     exit_price: Optional[float] = None
     exit_time: Optional[str] = None
     exit_reason: Optional[str] = None
+    exit_underlying: Optional[float] = None
 
 
 class PositionManager:
@@ -62,12 +73,34 @@ class PositionManager:
             self.positions = {}
 
     def _save_positions(self):
-        """Save positions to file"""
+        """
+        Atomically persist positions (write temp + fsync + rename).
+
+        BLOCKER FIX: the previous plain `open(...,"w")` + json.dump left a
+        window where a crash mid-write truncated open_positions.json and lost
+        all position state — the bot would come back believing it held nothing
+        while the broker still held everything.
+        """
+        import os
+        import tempfile
+
         try:
             data = {k: asdict(v) for k, v in self.positions.items()}
-            with open(self.positions_file, "w") as f:
-                json.dump(data, f, indent=2)
-            logger.debug(f"💾 Saved {len(self.positions)} positions")
+            directory = os.path.dirname(os.path.abspath(self.positions_file)) or "."
+
+            fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.positions_file)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+
+            logger.debug(f"💾 Saved {len(self.positions)} positions (atomic)")
         except Exception as e:
             logger.error(f"❌ Failed to save positions: {e}")
 
@@ -81,6 +114,10 @@ class PositionManager:
         underlying_target: float,
         option_chain_id: str,
         order_id: Optional[str] = None,
+        entry_underlying: float = 0.0,
+        delta: float = 0.5,
+        gamma: float = 0.0,
+        simulated: bool = True,
     ) -> str:
         """
         Add a new open position.
@@ -102,6 +139,10 @@ class PositionManager:
             underlying_target=underlying_target,
             option_chain_id=option_chain_id,
             order_id=order_id,
+            entry_underlying=entry_underlying,
+            delta=delta,
+            gamma=gamma,
+            simulated=simulated,
         )
 
         self.positions[pos_id] = position
@@ -121,6 +162,7 @@ class PositionManager:
         pos_id: str,
         exit_price: float,
         exit_reason: str,
+        exit_underlying: Optional[float] = None,
     ) -> Optional[OptionsPosition]:
         """
         Close a position.
@@ -135,6 +177,11 @@ class PositionManager:
         position.exit_price = exit_price
         position.exit_time = datetime.now().isoformat()
         position.exit_reason = exit_reason
+        position.exit_underlying = exit_underlying
+
+        # Append to a durable trade log so validation win-rate can be computed
+        # from actual closed trades rather than re-derived from live state.
+        self._append_trade_log(position, pos_id)
 
         # Calculate P&L
         entry_cost = position.entry_price * position.quantity * 100
@@ -162,6 +209,11 @@ class PositionManager:
         """
         Check all positions of a symbol against current price.
 
+        BLOCKER FIX #3: comparisons are direction-aware. Previously every
+        position was evaluated as if bullish, so a PUT whose underlying fell
+        (a winning trade) was closed as "STOP_HIT", and one whose underlying
+        rose (a losing trade) was booked as "TARGET_HIT".
+
         Returns: List of (pos_id, exit_reason) for positions that should close
         """
         exits = []
@@ -170,16 +222,53 @@ class PositionManager:
             if position.symbol != symbol:
                 continue
 
-            # Check stop
-            if current_underlying_price <= position.underlying_stop:
-                exits.append((pos_id, "STOP_HIT"))
-                continue
+            is_put = str(position.direction).upper().startswith("P")
 
-            # Check target
-            if current_underlying_price >= position.underlying_target:
+            if is_put:
+                stop_hit = current_underlying_price >= position.underlying_stop
+                target_hit = current_underlying_price <= position.underlying_target
+            else:
+                stop_hit = current_underlying_price <= position.underlying_stop
+                target_hit = current_underlying_price >= position.underlying_target
+
+            if stop_hit:
+                exits.append((pos_id, "STOP_HIT"))
+            elif target_hit:
                 exits.append((pos_id, "TARGET_HIT"))
 
         return exits
+
+    def has_open_position(self, symbol: str) -> bool:
+        """
+        BLOCKER FIX #10: entry de-duplication against ALREADY OPEN positions.
+
+        Consolidation only de-duplicates within a single cycle. Without this
+        check, cycle N+1 re-enters every symbol still held from cycle N — at
+        5-minute cycles with 4-hour holds that is up to ~48 stacked entries per
+        symbol. This is the same defect recorded in the Aug 7 and Aug 12
+        production incidents.
+        """
+        return any(p.symbol == symbol for p in self.positions.values())
+
+    def open_symbols(self) -> set:
+        """Set of symbols currently held."""
+        return {p.symbol for p in self.positions.values()}
+
+    def _append_trade_log(self, position: OptionsPosition, pos_id: str):
+        """Append a closed trade to closed_trades.jsonl for validation stats."""
+        try:
+            entry_cost = position.entry_price * position.quantity * 100
+            exit_value = (position.exit_price or 0) * position.quantity * 100
+            pnl = exit_value - entry_cost
+            record = asdict(position)
+            record["position_id"] = pos_id
+            record["pnl"] = round(pnl, 2)
+            record["pnl_pct"] = round((pnl / entry_cost * 100) if entry_cost else 0.0, 4)
+            record["win"] = pnl > 0
+            with open("closed_trades.jsonl", "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as e:
+            logger.warning(f"Could not append trade log: {e}")
 
     async def check_eod_force_close(self, robinhood_mcp=None) -> List[str]:
         """
@@ -198,20 +287,9 @@ class PositionManager:
 
         closed_ids = []
         for pos_id, position in list(self.positions.items()):
-            # In live mode: fetch current option quote and place exit
-            # In mock mode: simulate exit
-            if robinhood_mcp:
-                try:
-                    quotes = await robinhood_mcp.get_option_quotes([position.option_chain_id])
-                    if quotes:
-                        exit_price = quotes[0].get("last", position.entry_price)
-                    else:
-                        exit_price = position.entry_price  # Fallback
-                except Exception as e:
-                    logger.warning(f"Failed to fetch exit quote: {e}")
-                    exit_price = position.entry_price
+            exit_price, exit_underlying = await self.mark_position(position, robinhood_mcp)
 
-                # Place exit order
+            if robinhood_mcp is not None:
                 try:
                     await robinhood_mcp.place_option_order(
                         symbol=position.symbol,
@@ -221,17 +299,55 @@ class PositionManager:
                         direction="sell_to_close",
                     )
                 except Exception as e:
-                    logger.error(f"Failed to place EOD exit order: {e}")
-                    exit_price = position.entry_price
-            else:
-                # Mock/test mode: assume mid exit
-                exit_price = position.entry_price * 1.01  # Slight profit
+                    logger.error(f"Failed to place EOD exit order for {pos_id}: {e}")
 
-            # Close position
-            self.close_position(pos_id, exit_price, "EOD_FORCE_CLOSE")
+            self.close_position(pos_id, exit_price, "EOD_FORCE_CLOSE", exit_underlying)
             closed_ids.append(pos_id)
 
         return closed_ids
+
+    async def mark_position(self, position: OptionsPosition, robinhood_mcp=None):
+        """
+        Value a position using the REAL current underlying price.
+
+        BLOCKER FIX #8: replaces `exit_price = entry_price` (always $0 P&L) and
+        `entry_price * 1.01` (always +1%). Those made the ≥55% win-rate gate
+        unmeasurable — win rate was a property of the code, not the market.
+
+        Returns: (exit_price, exit_underlying)
+        """
+        from uw_market_data import get_market_data
+
+        # Prefer a real broker quote when one is actually available (LIVE).
+        if robinhood_mcp is not None and getattr(robinhood_mcp, "mode", None) == "LIVE":
+            try:
+                quotes = await robinhood_mcp.get_option_quotes([position.option_chain_id])
+                if quotes and quotes[0].get("last"):
+                    spot = get_market_data().get_underlying_price(position.symbol)
+                    return float(quotes[0]["last"]), spot
+            except Exception as e:
+                logger.warning(f"Live exit quote failed for {position.symbol}: {e}")
+
+        spot = get_market_data().get_underlying_price(position.symbol)
+        if spot is None or not position.entry_underlying:
+            # No honest way to mark it — hold the entry price and say so.
+            logger.warning(
+                f"⚠️ {position.symbol}: cannot mark to market "
+                f"(spot={spot}, entry_underlying={position.entry_underlying}); "
+                f"booking flat rather than inventing a P&L"
+            )
+            return position.entry_price, spot
+
+        from uw_robinhood_mcp import RobinhoodMCPClient
+        value = RobinhoodMCPClient.estimate_option_value(
+            entry_option_price=position.entry_price,
+            entry_underlying=position.entry_underlying,
+            current_underlying=spot,
+            delta=position.delta,
+            gamma=position.gamma,
+            direction=position.direction,
+        )
+        return value, spot
 
     def get_all_positions(self) -> Dict[str, OptionsPosition]:
         """Get all open positions"""

@@ -21,6 +21,28 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# BLOCKER FIX: EOD close was `time(15, 45)` compared against machine-local time.
+# The machine runs CDT, so 15:45 local = 4:45 PM ET — 45 minutes AFTER the
+# 4:00 PM ET close. The force-close therefore never fired before the bell.
+# Now anchored explicitly to US/Eastern and evaluated in that zone.
+# ---------------------------------------------------------------------------
+try:
+    from zoneinfo import ZoneInfo
+    MARKET_TZ = ZoneInfo("America/New_York")
+except Exception:  # pragma: no cover
+    MARKET_TZ = None
+
+EOD_FORCE_CLOSE_TIME = time(15, 45)  # 3:45 PM *Eastern* (15 min before close)
+MARKET_CLOSE_TIME = time(16, 0)      # 4:00 PM Eastern
+
+
+def now_eastern() -> datetime:
+    """Current time in US/Eastern, regardless of host timezone."""
+    if MARKET_TZ is not None:
+        return datetime.now(MARKET_TZ)
+    return datetime.now()  # last resort; logged by caller
+
 
 @dataclass
 class ExecutionPlan:
@@ -32,6 +54,11 @@ class ExecutionPlan:
     # Stop-loss on UNDERLYING price, not option price
     underlying_stop_price: float  # SPX level, e.g., 4450
     underlying_target_price: float  # SPX level, e.g., 4600
+
+    # BLOCKER FIX #3: stops/targets are inverted for bearish positions.
+    # "CALL" -> profits when underlying rises  (stop below, target above)
+    # "PUT"  -> profits when underlying falls  (stop above, target below)
+    direction: str = "CALL"
 
     # Execution controls
     order_type: str = "limit"  # Not "market"
@@ -77,20 +104,20 @@ class ExecutionSafeguards:
             "dropped_wide_spread": 0,
         }
 
-    def get_atr_14(self, symbol: str) -> float:
+    def get_atr_14(self, symbol: str) -> Optional[float]:
         """
-        Fetch 14-period ATR for underlying symbol.
+        Fetch real 14-period ATR for the underlying.
 
-        Used for dynamic stop/target calculation (adapts to volatility).
-
-        Returns: Estimated ATR based on symbol
+        BLOCKER FIX: previously a 3-entry lookup table that returned 18.0 for
+        every equity symbol. An 18.0 ATR on a $38 stock (NKE) and on a $1,795
+        stock (SNDK) cannot both be right; stops were meaningless on both.
         """
-        atr_defaults = {
-            "SPX": 18.0,  # S&P 500 typical ATR
-            "NDX": 40.0,  # Nasdaq-100 more volatile
-            "RUT": 25.0,  # Russell 2000 mid-range
-        }
-        return atr_defaults.get(symbol, 18.0)
+        from uw_market_data import get_market_data
+
+        atr = get_market_data().get_atr(symbol, period=14)
+        if atr is None:
+            logger.warning(f"⚠️ ATR unavailable for {symbol}")
+        return atr
 
     def generate_execution_plan(
         self,
@@ -98,39 +125,53 @@ class ExecutionSafeguards:
         entry_price: float,
         quantity: int,
         underlying_current_price: float,
-        iv_rank: float,
+        iv_rank: float = 0.0,
         atr_14: Optional[float] = None,
-    ) -> ExecutionPlan:
+        direction: str = "CALL",
+    ) -> Optional[ExecutionPlan]:
         """
         Generate safe execution plan for a trade.
 
-        Phase 2.5 HOTFIX: Dynamic ATR-based stops instead of hardcoded offsets
+        Returns None when the plan cannot be built safely (no ATR, bad price) —
+        callers MUST skip the trade rather than proceed on a placeholder.
         """
-
-        # =====================================================================
-        # HOTFIX: ADAPTIVE STOPS (ATR-based)
-        # =====================================================================
+        if not underlying_current_price or underlying_current_price <= 0:
+            logger.error(f"❌ {symbol}: invalid underlying price {underlying_current_price}")
+            return None
 
         if atr_14 is None:
             atr_14 = self.get_atr_14(symbol)
+        if atr_14 is None or atr_14 <= 0:
+            logger.error(f"❌ {symbol}: no ATR available, cannot size stops safely")
+            return None
 
-        # Dynamic offsets based on volatility
-        underlying_stop_offset = 1.5 * atr_14  # Tighter in low-vol, wider in high-vol
-        underlying_target_offset = 2.5 * atr_14  # Target adapts too
+        # Cap ATR at 10% of price to avoid absurd stops on illiquid/gappy names
+        atr_14 = min(atr_14, underlying_current_price * 0.10)
+
+        underlying_stop_offset = 1.5 * atr_14
+        underlying_target_offset = 2.5 * atr_14
+
+        # ---------------------------------------------------------------
+        # BLOCKER FIX #3: direction-aware stop/target placement.
+        # A PUT profits when the underlying FALLS, so its stop sits ABOVE
+        # entry and its target BELOW. The previous code placed both as if
+        # every position were bullish, inverting every bearish trade.
+        # ---------------------------------------------------------------
+        normalized = "PUT" if str(direction).upper().startswith("P") or "BEAR" in str(direction).upper() else "CALL"
+
+        if normalized == "CALL":
+            underlying_stop_price = underlying_current_price - underlying_stop_offset
+            underlying_target_price = underlying_current_price + underlying_target_offset
+        else:
+            underlying_stop_price = underlying_current_price + underlying_stop_offset
+            underlying_target_price = underlying_current_price - underlying_target_offset
 
         logger.info(
-            f"📊 ATR-based stops: ATR={atr_14:.2f} → Stop offset={underlying_stop_offset:.2f}, "
-            f"Target offset={underlying_target_offset:.2f}"
+            f"📊 {symbol} {normalized}: spot=${underlying_current_price:.2f} ATR={atr_14:.2f} → "
+            f"stop=${underlying_stop_price:.2f} target=${underlying_target_price:.2f}"
         )
 
-        underlying_stop_price = underlying_current_price - underlying_stop_offset
-        underlying_target_price = underlying_current_price + underlying_target_offset
-
-        # =====================================================================
-        # RULE 2: Use LIMIT orders at midpoint (not market)
-        # =====================================================================
-
-        limit_price = entry_price * 0.995  # Slightly below to improve fills
+        limit_price = entry_price * 0.995
 
         plan = ExecutionPlan(
             symbol=symbol,
@@ -138,11 +179,12 @@ class ExecutionSafeguards:
             entry_quantity=quantity,
             underlying_stop_price=underlying_stop_price,
             underlying_target_price=underlying_target_price,
+            direction=normalized,
             order_type="limit",
             limit_price=limit_price,
-            max_bid_ask_spread_pct=0.05,
+            max_bid_ask_spread_pct=self.max_bid_ask_spread_pct,
             max_hold_minutes=240,
-            eod_force_close_time=time(15, 45),  # 3:45 PM EST
+            eod_force_close_time=EOD_FORCE_CLOSE_TIME,
         )
 
         self.stats["orders_placed"] += 1
@@ -154,45 +196,64 @@ class ExecutionSafeguards:
         self, current_underlying_price: float, plan: ExecutionPlan
     ) -> Optional[str]:
         """
-        Check if underlying price has breached stop-loss level.
+        Check if the underlying has breached stop or target.
 
-        Returns None if position should stay open, or exit reason if triggered.
+        BLOCKER FIX #3: comparison direction now depends on the position's
+        direction. Previously a falling price on a PUT (a WIN) was recorded
+        as a stop-out, and a rising price (a LOSS) as a target hit.
         """
-        if current_underlying_price <= plan.underlying_stop_price:
-            reason = (
-                f"UNDERLYING STOP HIT: {plan.symbol} ${current_underlying_price:.0f} "
-                f"<= ${plan.underlying_stop_price:.0f}"
-            )
-            self.stats["underlying_stops_triggered"] += 1
-            return reason
+        if plan.direction == "CALL":
+            stop_hit = current_underlying_price <= plan.underlying_stop_price
+            target_hit = current_underlying_price >= plan.underlying_target_price
+        else:
+            stop_hit = current_underlying_price >= plan.underlying_stop_price
+            target_hit = current_underlying_price <= plan.underlying_target_price
 
-        if current_underlying_price >= plan.underlying_target_price:
-            reason = (
-                f"UNDERLYING TARGET: {plan.symbol} ${current_underlying_price:.0f} "
-                f">= ${plan.underlying_target_price:.0f}"
+        if stop_hit:
+            self.stats["underlying_stops_triggered"] += 1
+            return (
+                f"UNDERLYING STOP HIT: {plan.symbol} {plan.direction} "
+                f"${current_underlying_price:.2f} vs stop ${plan.underlying_stop_price:.2f}"
             )
-            return reason
+
+        if target_hit:
+            return (
+                f"UNDERLYING TARGET: {plan.symbol} {plan.direction} "
+                f"${current_underlying_price:.2f} vs target ${plan.underlying_target_price:.2f}"
+            )
 
         return None
 
     def check_eod_force_close(self) -> bool:
         """
-        Check if current time is past EOD close time (3:45 PM EST).
-        If so, ALL positions must be closed before market close.
+        True once we are inside the EOD liquidation window (3:45 PM Eastern).
 
-        Returns True if should force close all positions.
+        Evaluated in US/Eastern so the host timezone cannot shift the trigger.
         """
-        now = datetime.now().time()
-        eod_close_time = time(15, 45)  # 3:45 PM EST
+        now_et = now_eastern()
+        current = now_et.time()
 
-        if now >= eod_close_time:
+        # Only meaningful during a weekday session
+        if now_et.weekday() >= 5:
+            return False
+
+        if EOD_FORCE_CLOSE_TIME <= current < MARKET_CLOSE_TIME:
             logger.warning(
-                f"⏰ EOD FORCE CLOSE triggered: {now.strftime('%H:%M')} >= {eod_close_time.strftime('%H:%M')}"
+                f"⏰ EOD FORCE CLOSE window: {current.strftime('%H:%M')} ET "
+                f">= {EOD_FORCE_CLOSE_TIME.strftime('%H:%M')} ET"
             )
             self.stats["eod_forced_closes"] += 1
             return True
 
         return False
+
+    @staticmethod
+    def is_market_open() -> bool:
+        """Regular session check (9:30 AM - 4:00 PM ET, weekdays)."""
+        now_et = now_eastern()
+        if now_et.weekday() >= 5:
+            return False
+        return time(9, 30) <= now_et.time() < MARKET_CLOSE_TIME
 
     def validate_nbbo_spread(self, quote: dict) -> bool:
         """
