@@ -107,6 +107,38 @@ TECHNICAL_GATES_CONFIG = {
 }
 
 # ===========================================================================
+# CONTRACT TRADEABILITY FILTER (BLOCKER #11 — economic)
+# ===========================================================================
+# Sep 8: the bot executed deep-ITM LEAPs (AAPL Dec-2028 $100C with the stock
+# at $316; GOOGL Dec-2027 $480P). Round-trip bid-ask came to -$4,350 against
+# +$187 of directional P&L — spread cost ~20x the edge.
+#
+# Cause: premium >= $100K structurally selects EXPENSIVE contracts, which
+# means long-dated and deep ITM. Measured on live flow, 36 of 39 Phase-1
+# survivors were >120 DTE. Phase 1's percentage spread gate cannot catch this:
+# AAPL's $4.60 spread on a $226 contract is only 2.0%.
+#
+# Values below were calibrated against live flow: ~5 tradeable contracts per
+# 200-alert fetch, round-trip cost $15-90 per 3 contracts (was $1,110-1,380).
+CONTRACT_FILTER_CONFIG = {
+    "enabled": True,
+    "min_dte": 2,             # skip 0DTE lottery tickets
+    "max_dte": 60,            # skip LEAPs — this is the binding gate
+    "min_abs_delta": 0.20,    # skip far OTM
+    "max_abs_delta": 0.80,    # skip deep ITM (no gamma, huge premium)
+    "max_spread_abs": 0.35,   # DOLLAR cap — what percentage gates miss
+    "max_spread_pct": 0.08,
+    "max_premium": 40.0,      # caps capital and round-trip cost per contract
+    "min_gamma": 0.0005,
+    "max_cost_to_move": 0.50, # round-trip spread vs option move per 1 ATR
+}
+
+# Alerts fetched per cycle. Raised from 50: the contract filter is selective
+# (~3% of Phase-1 survivors), so a larger pool is needed to find enough
+# tradeable contracts each cycle.
+ALERTS_PER_CYCLE = 200
+
+# ===========================================================================
 # EXECUTION SAFEGUARDS (Phase 2.5)
 # ===========================================================================
 EXECUTION_SAFEGUARDS_CONFIG = {

@@ -496,9 +496,11 @@ class UnusualWhalesBot:
             from uw_api_client import UnusualWhalesAPI
             from uw_phase1_filter import Phase1AlertFilter
             from uw_position_consolidation import PositionConsolidation
+            from uw_contract_filter import ContractFilter
+            from uw_config import CONTRACT_FILTER_CONFIG, ALERTS_PER_CYCLE
 
-            api = UnusualWhalesAPI()
-            alerts = api.get_flow_alerts(limit=50, min_premium=100_000)
+            api = self.api_client or UnusualWhalesAPI()
+            alerts = api.get_flow_alerts(limit=ALERTS_PER_CYCLE, min_premium=100_000)
 
             if not alerts:
                 logger.debug("No alerts in this cycle")
@@ -517,6 +519,28 @@ class UnusualWhalesBot:
                 return
 
             logger.info(f"✅ Phase 1: {len(approved_alerts)}/{len(alerts)} approved")
+
+            # ---------------------------------------------------------------
+            # BLOCKER FIX #11: screen the CONTRACT, not just the signal.
+            # Runs before consolidation so that consolidation picks the best
+            # *tradeable* contract per symbol rather than the highest-premium
+            # one (which is systematically a deep-ITM LEAP).
+            # ---------------------------------------------------------------
+            if CONTRACT_FILTER_CONFIG.get("enabled", True):
+                cf_kwargs = {k: v for k, v in CONTRACT_FILTER_CONFIG.items() if k != "enabled"}
+                contract_filter = ContractFilter(**cf_kwargs)
+                md = get_market_data()
+                approved_alerts = contract_filter.filter_alerts(
+                    approved_alerts, atr_lookup=lambda s: md.get_atr(s) if s else None
+                )
+                contract_filter.log_stats()
+
+                if not approved_alerts:
+                    logger.info("⚠️ No tradeable contracts this cycle (all LEAPs/wide spreads)")
+                    logger.info("✅ Cycle complete")
+                    return
+
+                logger.info(f"✅ Contract filter: {len(approved_alerts)} tradeable")
 
             # NEW: Consolidate directional conflicts (single direction per symbol)
             consolidator = PositionConsolidation(dominance_threshold=0.20)
