@@ -128,7 +128,15 @@ TECHNICAL_GATES_CONFIG = {
 #   - winners are protected, since dumping a working position to chase a
 #     marginally better signal is exactly the behaviour that loses money
 CAPACITY_CONFIG = {
-    "quality_rotation_enabled": True,
+    # DISABLED 2026-09-08 14:05 CDT after two defects in one hour:
+    #   1. unrecorded confidence read as worst-possible -> closed ORCL(96%),
+    #      CRWV(100%), NVDA(96%) to buy BE(54%), SKHY(60%), TQQQ(70%)
+    #   2. rotation ran BEFORE the duplicate check -> liquidated FSLR(73%)
+    #      "to make room" for TSLA, which was then rejected as already held
+    # Both are fixed and regression-tested, but the feature has not earned
+    # trust yet. Re-enable tomorrow on a clean book where every position
+    # carries a recorded confidence, and watch the first few rotations.
+    "quality_rotation_enabled": False,
     "rotation_margin": 0.15,        # candidate must beat the weakest by 15 pts
     "min_hold_minutes": 30,         # a position is not rotatable before this
     "protect_winners_pct": 1.0,     # never rotate out a position up > +1%

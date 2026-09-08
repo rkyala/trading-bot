@@ -241,24 +241,18 @@ class UnusualWhalesBot:
             logger.info(f"⏭️  {symbol}: bearish flow, not held, shorting disabled → skip")
             return False
 
-        # ---------------------------------------------------------------
-        # BLOCKER FIX #9: enforce risk limits that were defined in config
-        # but referenced nowhere in the execution path.
-        # ---------------------------------------------------------------
-        open_count = self.position_manager.total_open_positions()
-        if open_count >= MAX_OPEN_POSITIONS:
-            # QUALITY-AWARE CAPACITY: the cap used to be first-come-first-served,
-            # so the book held a 70%-confidence position while rejecting a 94%
-            # candidate. Try to make room by rotating out a clearly weaker
-            # holding; if nothing qualifies, decline as before.
-            rotated = await self._try_rotate_for(symbol, confidence)
-            if not rotated:
-                self._last_reject_reason = "position_cap"
-                logger.warning(
-                    f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); "
-                    f"skipping {symbol} (conf {confidence:.0%})"
-                )
-                return False
+        # ===============================================================
+        # ELIGIBILITY CHECKS FIRST, CAPACITY LAST.
+        #
+        # Rotation closes a real position, so it must never run before we
+        # know the candidate is actually takeable. Running it first caused a
+        # live incident: FSLR (73%) was liquidated "to make room" for TSLA,
+        # and TSLA was then rejected on the very next line as a duplicate —
+        # a position destroyed for nothing, book down to 9.
+        #
+        # Everything that can decline a trade for free is therefore
+        # evaluated before anything that costs money.
+        # ===============================================================
 
         # ---------------------------------------------------------------
         # BLOCKER FIX #10: do not re-enter a symbol we already hold.
@@ -343,10 +337,27 @@ class UnusualWhalesBot:
         quantity = int(target_dollars // limit_price)
 
         if quantity < 1:
+            self._last_reject_reason = "size_rounds_to_zero"
             logger.info(
                 f"⏭️  {symbol}: ${target_dollars:.0f} buys 0 shares at ${limit_price:.2f}; skipping"
             )
             return False
+
+        # ---------------------------------------------------------------
+        # CAPACITY — evaluated LAST, once the trade is fully qualified.
+        # Rotation liquidates a real holding, so it only runs at the point
+        # where the order is otherwise certain to be placed.
+        # ---------------------------------------------------------------
+        open_count = self.position_manager.total_open_positions()
+        if open_count >= MAX_OPEN_POSITIONS:
+            rotated = await self._try_rotate_for(symbol, confidence)
+            if not rotated:
+                self._last_reject_reason = "position_cap"
+                logger.warning(
+                    f"🛑 Position cap reached ({open_count}/{MAX_OPEN_POSITIONS}); "
+                    f"skipping {symbol} (conf {confidence:.0%})"
+                )
+                return False
 
         logger.info(
             f"📤 EXECUTE: {symbol} BUY {quantity}sh @ ${limit_price:.2f} "
