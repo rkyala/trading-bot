@@ -43,11 +43,12 @@ class PositionConsolidation:
     def consolidate_alerts(self, approved_alerts: List[Dict]) -> List[Dict]:
         """
         Filter approved alerts to single direction per underlying symbol.
+        ALSO deduplicate multiple alerts for same symbol+direction (pick highest premium).
 
         Args:
             approved_alerts: List of Phase 1 approved UW alerts
 
-        Returns: Consolidated alerts (calls or puts only per symbol)
+        Returns: Consolidated alerts (max 1 per symbol per direction)
         """
         self.stats["alerts_received"] = len(approved_alerts)
 
@@ -74,7 +75,16 @@ class PositionConsolidation:
 
             # No conflict: single direction only
             if not calls or not puts:
-                consolidated.extend(calls or puts)
+                # Pick best alert (highest premium) from this direction
+                best_alerts = calls or puts
+                if best_alerts:
+                    best = max(best_alerts, key=lambda a: float(a.get("premium", 0)))
+                    consolidated.append(best)
+                    if len(best_alerts) > 1:
+                        logger.info(
+                            f"ℹ️  {symbol}: Multiple {best_alerts[0].get('option_type', 'UNKNOWN')} alerts, "
+                            f"selected top by premium (${float(best.get('premium', 0))/1e6:.2f}M)"
+                        )
                 continue
 
             # CONFLICT: Both calls and puts exist
@@ -105,11 +115,13 @@ class PositionConsolidation:
                 # Calls dominate
                 minority_ratio = put_premium_total / call_premium_total
                 if minority_ratio < self.dominance_threshold:
-                    # Puts are minority (<20% of calls) → APPROVE CALLS only
-                    consolidated.extend(calls)
+                    # Puts are minority (<20% of calls) → APPROVE CALLS only (pick best)
+                    best_call = max(calls, key=lambda c: float(c.get("premium", 0)))
+                    consolidated.append(best_call)
                     logger.info(
                         f"✅ {symbol}: CALLS dominate "
-                        f"(${call_premium_total/1e6:.2f}M calls vs ${put_premium_total/1e6:.2f}M puts)"
+                        f"(${call_premium_total/1e6:.2f}M calls vs ${put_premium_total/1e6:.2f}M puts) "
+                        f"[selected ${float(best_call.get('premium', 0))/1e6:.2f}M]"
                     )
                 else:
                     # Puts are close to calls (≥20% of calls) → REJECT both
@@ -123,11 +135,13 @@ class PositionConsolidation:
                 # Puts dominate
                 minority_ratio = call_premium_total / put_premium_total
                 if minority_ratio < self.dominance_threshold:
-                    # Calls are minority (<20% of puts) → APPROVE PUTS only
-                    consolidated.extend(puts)
+                    # Calls are minority (<20% of puts) → APPROVE PUTS only (pick best)
+                    best_put = max(puts, key=lambda p: float(p.get("premium", 0)))
+                    consolidated.append(best_put)
                     logger.info(
                         f"✅ {symbol}: PUTS dominate "
-                        f"(${put_premium_total/1e6:.2f}M puts vs ${call_premium_total/1e6:.2f}M calls)"
+                        f"(${put_premium_total/1e6:.2f}M puts vs ${call_premium_total/1e6:.2f}M calls) "
+                        f"[selected ${float(best_put.get('premium', 0))/1e6:.2f}M]"
                     )
                 else:
                     # Calls are close to puts (≥20% of puts) → REJECT both
@@ -148,7 +162,7 @@ class PositionConsolidation:
             f"Symbols analyzed: {self.stats['symbols_analyzed']}\n"
             f"Conflicts resolved: {self.stats['conflicts_resolved']}\n"
             f"Both directions rejected: {self.stats['both_rejected']}\n"
-            f"Approved final: {self.stats['approved_final']}\n"
+            f"Approved final: {self.stats['approved_final']} (1 per symbol max)\n"
             f"{'='*80}\n"
         )
 
