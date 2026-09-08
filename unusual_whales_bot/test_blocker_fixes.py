@@ -148,8 +148,15 @@ async def main():
 
     # ---------------------------------------------------------------- #5
     print("\n--- #5 option_chain_id ---")
-    check("#5 real OCC id used, never synthesized '_mock'",
-          "_mock" not in src and 'alert.get("option_chain_id")' in src)
+    # Execution moved to equities, so option_chain_id is now SIGNAL PROVENANCE
+    # rather than an order field. The original defect (synthesizing a fake
+    # "<sym>_mock" contract id) must still be gone.
+    check("#5 no synthesized '_mock' contract id anywhere",
+          "_mock" not in src)
+    check("#5 option contract retained as signal provenance",
+          'option_chain_id' in src)
+    check("#5 orders are placed as EQUITIES",
+          "place_equity_order" in src and "place_option_order" not in src)
 
     # ---------------------------------------------------------------- #7
     print("\n--- #7 Technical gates ---")

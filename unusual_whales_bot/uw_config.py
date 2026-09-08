@@ -100,10 +100,16 @@ TECHNICAL_GATES_CONFIG = {
     "gate_10_rsi_enabled": True,    # #10: RSI momentum check
     "gate_11_vwap_enabled": True,   # #11: VWAP profitability check
 
-    # Position sizing based on confidence
+    # Position sizing based on confidence.
+    #
+    # Sep 8: raised 0.50 -> 0.55 after replacing the gate scoring. The old
+    # "0.75 baseline + nudge" formula produced only 0.90-1.00 in live use and
+    # rejected nothing, so the floor never bound. Continuous ATR-normalised
+    # scoring now spans ~0.00-0.92 (stdev 0.38 vs 0.02), so the floor does real
+    # work: it rejects setups that previously scored 0.96 and took full size.
     "position_sizing_enabled": True,  # Scale 0.5x-1.5x by confidence
-    "min_confidence_to_trade": 0.50,  # Skip if confidence < 50%
-    "min_confidence_full_size": 0.75, # Full position at 75%+ confidence
+    "min_confidence_to_trade": 0.55,
+    "min_confidence_full_size": 0.85,
 }
 
 # ===========================================================================
