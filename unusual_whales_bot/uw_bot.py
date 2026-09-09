@@ -263,6 +263,22 @@ class UnusualWhalesBot:
                 return await self._exit_symbol(symbol, "bearish_flow")
             self._last_reject_reason = "bearish_no_short"
             logger.info(f"⏭️  {symbol}: bearish flow, not held, shorting disabled → skip")
+            # Collected here, posted as one digest at cycle end so three
+            # skips in a cycle do not become three separate alerts.
+            # NB: `confidence` is NOT in scope here — the technical gates run
+            # in the caller, so execute_trade only sees (alert, classification).
+            # Record the premium, which is in scope and is what makes the
+            # signal notable in the first place.
+            try:
+                if not hasattr(self, "_skipped_bearish"):
+                    self._skipped_bearish = []
+                self._skipped_bearish.append({
+                    "symbol": symbol,
+                    "direction": str(alert.get("option_type", "PUT")).upper(),
+                    "premium": float(alert.get("premium") or 0.0),
+                })
+            except Exception:
+                pass
             return False
 
         # ===============================================================
@@ -722,6 +738,90 @@ class UnusualWhalesBot:
     _RISK_EXITS = ("STOP_HIT", "TARGET_HIT")
     _FIRST_FIRE_MARKER = "first_risk_exit_seen.flag"
 
+    @staticmethod
+    def _discord_post(embed: dict) -> bool:
+        """
+        Single place every Discord alert goes through.
+
+        Returns True only on a real 2xx. Delivery failures are logged rather
+        than swallowed silently — a notification path that fails quietly is
+        indistinguishable from one that has nothing to say, which is how the
+        hardcoded ATR multipliers and the dead all_opening_trades gate both
+        stayed hidden. Never raises; alerting must not break trading.
+
+        TLS verification stays on: the webhook URL is a credential.
+        """
+        import os
+        wh = os.getenv("DISCORD_WEBHOOK_URL")
+        if not wh:
+            return False
+        try:
+            import requests
+            r = requests.post(wh, json={"embeds": [embed]}, timeout=10)
+            if r.status_code not in (200, 204):
+                logger.warning(f"Discord alert rejected: HTTP {r.status_code}")
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"Discord alert failed to send: {e}")
+            return False
+
+    def _alert_entry(self, symbol, direction, qty, price, confidence,
+                     stop, target, signal="") -> None:
+        """Announce a fill. The bot opened 5 positions today in silence."""
+        notional = qty * price
+        risk = abs(price - stop) / price * 100 if price else 0.0
+        rew = abs(target - price) / price * 100 if price else 0.0
+        self._discord_post({
+            "title": f"📥 ENTRY — {symbol} {direction}",
+            "color": 3447003,
+            "timestamp": datetime.utcnow().isoformat(),
+            "fields": [
+                {"name": "Fill", "value": f"{qty} @ ${price:,.2f}", "inline": True},
+                {"name": "Notional", "value": f"${notional:,.0f}", "inline": True},
+                {"name": "Confidence", "value": f"{confidence:.0%}", "inline": True},
+                {"name": "Stop", "value": f"${stop:,.2f} ({risk:.2f}%)", "inline": True},
+                {"name": "Target", "value": f"${target:,.2f} ({rew:.2f}%)", "inline": True},
+                {"name": "Signal", "value": (signal or "n/a")[:60], "inline": True},
+            ],
+            "footer": {"text": "Unusual Whales bot · "
+                       + ("PAPER" if EXECUTION_MODE.get("paper_trading", True) else "LIVE")},
+        })
+
+    def _alert_skipped_bearish(self, skipped: list) -> None:
+        """
+        One digest per cycle of bearish signals the long-only rule discarded.
+
+        These are routinely the STRONGEST reads of the cycle — on 2026-09-09
+        the two highest-conviction signals were GOOGL PUT at 96% and IWM PUT
+        at 94%, both dropped in silence. Whether or not shorting is ever
+        enabled, the fact that the best information is being discarded should
+        be visible rather than buried in a log nobody reads.
+
+        Batched, not one alert per symbol: three fired in a single cycle today.
+        """
+        if not skipped:
+            return
+        lines = []
+        for s in sorted(skipped, key=lambda x: -x.get("premium", 0))[:12]:
+            prem = s.get("premium") or 0.0
+            tag = f" — ${prem/1e6:.2f}M premium" if prem else ""
+            lines.append(f"**{s['symbol']}** {s.get('direction','PUT')}{tag}")
+        self._discord_post({
+            "title": f"📉 {len(skipped)} bearish signal(s) skipped — shorting disabled",
+            "description": "\n".join(lines),
+            "color": 16776960,
+            "timestamp": datetime.utcnow().isoformat(),
+            "fields": [{
+                "name": "Why",
+                "value": ("Long-only: bearish flow on a name we do not hold is "
+                          "skipped rather than shorted. Shown because these are "
+                          "often the highest-conviction reads of the cycle."),
+                "inline": False,
+            }],
+            "footer": {"text": "Unusual Whales bot · long-only"},
+        })
+
     def _alert_exit(self, pos, pnl: float, pnl_pct: float) -> None:
         """
         Post every position close to Discord, flagging risk-rule exits.
@@ -781,38 +881,31 @@ class UnusualWhalesBot:
                 "observed working, not merely assumed."
             )
 
-        wh = os.getenv("DISCORD_WEBHOOK_URL")
-        if not wh:
-            return
-        try:
-            import requests
-            fields = [
-                {"name": "Entry", "value": f"${pos.entry_price:,.2f}", "inline": True},
-                {"name": "Exit", "value": f"${pos.exit_price:,.2f}", "inline": True},
-                {"name": "P&L", "value": f"${pnl:,.0f} ({pnl_pct:+.2f}%)", "inline": True},
-                {"name": "Reason", "value": reason or "n/a", "inline": True},
-                {"name": "Qty", "value": f"{pos.quantity}", "inline": True},
-                {"name": "Held", "value": held or "n/a", "inline": True},
-            ]
-            if first:
-                fields.append({
-                    "name": "⚠️ Milestone",
-                    "value": ("First stop/target ever to fire in this bot. Until "
-                              "now every position closed on the time barrier, so "
-                              "the exit logic was untested in live conditions."),
-                    "inline": False,
-                })
-            requests.post(wh, json={"embeds": [{
-                "title": f"{head} — {pos.symbol}",
-                "color": colour,
-                "timestamp": datetime.utcnow().isoformat(),
-                "fields": fields,
-                "footer": {"text": "Unusual Whales bot · "
-                           + ("PAPER" if EXECUTION_MODE.get("paper_trading", True)
-                              else "LIVE")},
-            }]}, timeout=10)
-        except Exception as e:
-            logger.debug(f"exit alert failed: {e}")
+        fields = [
+            {"name": "Entry", "value": f"${pos.entry_price:,.2f}", "inline": True},
+            {"name": "Exit", "value": f"${pos.exit_price:,.2f}", "inline": True},
+            {"name": "P&L", "value": f"${pnl:,.0f} ({pnl_pct:+.2f}%)", "inline": True},
+            {"name": "Reason", "value": reason or "n/a", "inline": True},
+            {"name": "Qty", "value": f"{pos.quantity}", "inline": True},
+            {"name": "Held", "value": held or "n/a", "inline": True},
+        ]
+        if first:
+            fields.append({
+                "name": "⚠️ Milestone",
+                "value": ("First stop/target ever to fire in this bot. Until "
+                          "now every position closed on the time barrier, so "
+                          "the exit logic was untested in live conditions."),
+                "inline": False,
+            })
+        self._discord_post({
+            "title": f"{head} — {pos.symbol}",
+            "color": colour,
+            "timestamp": datetime.utcnow().isoformat(),
+            "fields": fields,
+            "footer": {"text": "Unusual Whales bot · "
+                       + ("PAPER" if EXECUTION_MODE.get("paper_trading", True)
+                          else "LIVE")},
+        })
 
     def _record_pnl(self, closed_position) -> None:
         """
@@ -1215,11 +1308,36 @@ class UnusualWhalesBot:
                     if result:
                         executed += 1
                         logger.info(f"✅ TRADE EXECUTED: {symbol} {direction} (conf {confidence:.0%})")
+                        try:
+                            # No get_latest_position() on the manager — take the
+                            # most recent open position for this symbol. pos_id
+                            # carries an HHMMSS suffix, so max() is newest.
+                            cands = [(pid, p) for pid, p in
+                                     self.position_manager.get_all_positions().items()
+                                     if p.symbol == symbol]
+                            pos = max(cands, key=lambda x: x[0])[1] if cands else None
+                            if pos:
+                                self._alert_entry(
+                                    symbol, direction, pos.quantity, pos.entry_price,
+                                    confidence, pos.underlying_stop,
+                                    pos.underlying_target,
+                                    getattr(pos, "option_chain_id", "") or "",
+                                )
+                        except Exception as e:
+                            logger.debug(f"entry alert skipped for {symbol}: {e}")
 
                 except Exception as e:
                     logger.error(f"Trade execution error: {e}")
 
             logger.info(f"✅ Cycle complete ({executed} executed, {self.position_manager.total_open_positions()} open)")
+
+            # Post the bearish-skip digest for this cycle, then clear it.
+            try:
+                self._alert_skipped_bearish(getattr(self, "_skipped_bearish", []))
+            except Exception as e:
+                logger.debug(f"skip digest failed: {e}")
+            finally:
+                self._skipped_bearish = []
 
         except Exception as e:
             logger.error(f"Cycle error: {e}")
