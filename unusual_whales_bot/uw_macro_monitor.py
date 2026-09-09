@@ -109,6 +109,50 @@ class MacroHeadline:
     tickers: List[str] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# INDEX PUT PRESSURE
+#
+# Institutions hedge equity books with index puts, so a surge in index put
+# BUYING is one of the earliest signs of a book going defensive.
+#
+# The measurement must use ask-side premium, never put volume. Measured on IWM
+# 2026-09-08: $54.2M of puts versus $11.6M of calls reads as 4.7:1 put-heavy
+# and screams bearish — but 60% of that put premium was SOLD, and the single
+# largest line was $9.34M of the 293 put sold (someone collecting premium that
+# IWM holds). Net positioning was BULLISH 1.36:1. A volume-based flag would
+# have fired exactly backwards.
+#
+# Two distinct things are tracked, because they mean different things:
+#   directional  near-dated, near-the-money puts bought -> expects a fall soon
+#   tail hedge   far-OTM, long-dated puts bought -> paying for crash insurance
+# Tail hedging can rise in a calm market and is not a timing signal.
+# ---------------------------------------------------------------------------
+INDEX_TICKERS = ["SPY", "QQQ", "IWM", "DIA"]
+
+TAIL_OTM_PCT = 10.0      # >10% out of the money
+TAIL_MIN_DTE = 45        # and >45 days out => insurance, not a directional bet
+
+
+@dataclass
+class PutPressure:
+    put_buy_premium: float = 0.0
+    call_buy_premium: float = 0.0
+    tail_hedge_premium: float = 0.0
+    directional_put_premium: float = 0.0
+    per_ticker: Dict[str, float] = field(default_factory=dict)
+
+    @property
+    def buy_side_put_ratio(self) -> float:
+        """
+        Among AGGRESSIVELY BOUGHT index options, the share that were puts.
+
+        Self-normalising, and immune to the put-selling that corrupts raw
+        put/call volume.
+        """
+        total = self.put_buy_premium + self.call_buy_premium
+        return (self.put_buy_premium / total) if total > 0 else 0.0
+
+
 @dataclass
 class RegimeAssessment:
     regime: str
@@ -118,6 +162,7 @@ class RegimeAssessment:
     vix: Optional[float]
     vix_vs_20d_max: Optional[float]
     headlines: List[MacroHeadline]
+    put_pressure: Optional["PutPressure"]
     size_multiplier: float
     allow_new_entries: bool
 
@@ -216,6 +261,64 @@ class MacroMonitor:
             self._alerted.add(h.headline)
         return fresh
 
+    # ------------------------------------------------------ index put buying
+
+    def index_put_pressure(self) -> PutPressure:
+        """
+        Measure how hard institutions are BUYING index puts.
+
+        Uses ask-side premium only. Put volume is actively misleading here —
+        see the IWM note above.
+        """
+        pp = PutPressure()
+        if not self.api_client:
+            return pp
+
+        from datetime import date as _date
+
+        for ticker in INDEX_TICKERS:
+            try:
+                rows = self.api_client.get_flow_alerts_for_ticker(ticker, limit=200)
+            except Exception as e:
+                logger.debug(f"index flow fetch failed for {ticker}: {e}")
+                continue
+
+            spot = 0.0
+            ticker_put_buy = 0.0
+            for r in rows or []:
+                def _f(k, d=0.0):
+                    try:
+                        return float(r.get(k) or d)
+                    except (TypeError, ValueError):
+                        return d
+
+                spot = spot or _f("underlying_price")
+                ask = _f("total_ask_side_prem")
+                is_put = str(r.get("type", "")).lower().startswith("p")
+
+                if is_put:
+                    pp.put_buy_premium += ask
+                    ticker_put_buy += ask
+                    # classify: insurance or directional
+                    strike = _f("strike")
+                    try:
+                        dte = (datetime.strptime(str(r.get("expiry"))[:10], "%Y-%m-%d").date()
+                               - _date.today()).days
+                    except Exception:
+                        dte = None
+                    otm_pct = ((spot - strike) / spot * 100) if spot and strike else 0.0
+                    if otm_pct >= TAIL_OTM_PCT and dte is not None and dte >= TAIL_MIN_DTE:
+                        pp.tail_hedge_premium += ask
+                    else:
+                        pp.directional_put_premium += ask
+                else:
+                    pp.call_buy_premium += ask
+
+            if ticker_put_buy:
+                pp.per_ticker[ticker] = ticker_put_buy
+
+        return pp
+
     # ----------------------------------------------------------------- price
 
     def _price_state(self) -> Dict:
@@ -254,6 +357,7 @@ class MacroMonitor:
     def assess(self) -> RegimeAssessment:
         px = self._price_state()
         headlines = self.fetch_macro_headlines()
+        put_pressure = self.index_put_pressure()
 
         regime = NORMAL
         reasons: List[str] = []
@@ -287,6 +391,20 @@ class MacroMonitor:
         if vchg is not None and vchg >= self.vix_spike_pct:
             escalate(CAUTION, f"VIX +{vchg:.1f}% on the day")
 
+        # Index put BUYING. Same asymmetry as headlines: it can add a notch of
+        # caution but must not set the regime alone. Institutions buy index
+        # puts in calm markets too (tail hedging), so on its own it is a poor
+        # timing signal — and a volume-based version would have fired
+        # backwards on IWM today.
+        ratio = put_pressure.buy_side_put_ratio
+        if put_pressure.put_buy_premium > 0:
+            if ratio >= 0.80 and put_pressure.directional_put_premium > 5_000_000:
+                escalate(CAUTION,
+                         f"index put buying {ratio:.0%} of bought premium "
+                         f"(${put_pressure.directional_put_premium/1e6:.1f}M directional)")
+            elif ratio >= 0.70:
+                reasons.append(f"elevated index put buying ({ratio:.0%}) — noted, not acted on")
+
         # Headlines RAISE the alarm but never set the regime on their own.
         # A major macro story with price already soft is worth one extra notch;
         # the same story with price flat is worth a notification only.
@@ -308,6 +426,7 @@ class MacroMonitor:
             vix=vix,
             vix_vs_20d_max=(vix - px["vix_20d_max"]) if (vix and px["vix_20d_max"]) else None,
             headlines=headlines,
+            put_pressure=put_pressure,
             size_multiplier=size_mult,
             allow_new_entries=allow,
         )

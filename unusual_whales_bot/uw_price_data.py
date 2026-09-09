@@ -131,8 +131,33 @@ class UWPriceData:
 
     # ------------------------------------------------------------------- API
 
+    # ---------------------------------------------------------------------
+    # Symbols UW does not serve. Verified 2026-09-08: /stock/VIX/* returns 422
+    # for every interval. VIXY exists but tracks VIX FUTURES with roll decay,
+    # so its level is not comparable to VIX thresholds ("VIX > 22") and using
+    # it as a proxy would silently mis-scale the regime model.
+    #
+    # VIX drives two of the three macro price thresholds, so leaving it None
+    # would quietly disable half the risk-off detection. This narrow fallback
+    # is preferable to that, and is announced rather than silent.
+    # ---------------------------------------------------------------------
+    UNSUPPORTED = {"VIX", "^VIX", "VVIX"}
+
+    def _yf_fallback_price(self, symbol: str) -> Optional[float]:
+        try:
+            from uw_market_data import MarketDataProvider
+            if not hasattr(self, "_yf"):
+                self._yf = MarketDataProvider()
+                logger.info(f"📊 {symbol}: not served by UW — using yfinance for this symbol only")
+            return self._yf.get_underlying_price(symbol)
+        except Exception as e:
+            logger.debug(f"yfinance fallback failed for {symbol}: {e}")
+            return None
+
     def get_underlying_price(self, symbol: str) -> Optional[float]:
         """Latest price. Returns None if unavailable — callers must skip, not guess."""
+        if symbol.upper() in self.UNSUPPORTED:
+            return self._yf_fallback_price(symbol)
         d = self._get(f"/stock/{symbol.upper()}/stock-state", ttl=30)
         if isinstance(d, dict):
             try:
@@ -146,6 +171,15 @@ class UWPriceData:
 
     def get_bars(self, symbol: str, interval: str = "1d", limit: int = 60) -> List[Dict]:
         """OHLCV bars. interval: 1d | 1h | 30m | 15m | 5m | 1m"""
+        if symbol.upper() in self.UNSUPPORTED:
+            try:
+                from uw_market_data import MarketDataProvider
+                if not hasattr(self, "_yf"):
+                    self._yf = MarketDataProvider()
+                iv = "day" if interval == "1d" else "hour"
+                return self._yf.get_historical_candles(symbol, iv, limit)
+            except Exception:
+                return []
         # NOTE: UW ignores the limit param (asked 20, received 756), so the
         # slice happens locally AFTER filtering to regular-hours rows.
         d = self._get(f"/stock/{symbol.upper()}/ohlc/{interval}",

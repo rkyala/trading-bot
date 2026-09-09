@@ -156,6 +156,23 @@ class UnusualWhalesAPI:
     # Tier 2 data methods — every caller awaits it. A sync duplicate briefly
     # existed here and was silently shadowed by the later async definition.
 
+    def get_flow_alerts_for_ticker(self, ticker: str, limit: int = 200) -> List[Dict[str, Any]]:
+        """
+        Aggregated flow alerts for one ticker, carrying total_ask_side_prem /
+        total_bid_side_prem — the bought-vs-sold split.
+
+        Aggregated and ~5min lagged, which is fine for a regime read but NOT
+        for per-contract questions (it is blind to clean blocks).
+        """
+        if not self.api_key:
+            return []
+        try:
+            r = self.session.get(f"{self.base_url}/stock/{ticker.upper()}/flow-alerts",
+                                 params={"limit": limit}, timeout=12)
+            return r.json().get("data", []) if r.status_code == 200 else []
+        except requests.RequestException:
+            return []
+
     def get_option_contracts(self, ticker: str, expiry: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Option chain rows for a ticker, carrying open_interest and volume.
