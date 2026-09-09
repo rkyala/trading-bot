@@ -282,6 +282,14 @@ class UnusualWhalesBot:
         if is_bearish and not INSTRUMENT_CONFIG.get("allow_short", False):
             if self.position_manager.has_open_position(symbol):
                 logger.info(f"📉 {symbol}: bearish flow on a held name → exiting")
+                # Mark this as an EXIT, not an entry. execute_trade returns
+                # True on a successful exit, and the caller was counting that
+                # as a trade executed — so a cycle that only closed a position
+                # reported "2 executed" and logged "TRADE EXECUTED: TSLA PUT",
+                # which reads as though a put was opened. Trade counts were
+                # inflated by every bearish-flow exit. (Same class of error as
+                # yesterday's EOD count needing two corrections.)
+                self._last_action_was_exit = True
                 return await self._exit_symbol(symbol, "bearish_flow")
             self._last_reject_reason = "bearish_no_short"
             logger.info(f"⏭️  {symbol}: bearish flow, not held, shorting disabled → skip")
@@ -1373,6 +1381,7 @@ class UnusualWhalesBot:
             # confidence was the constant 0.80).
             # ---------------------------------------------------------------
             executed = 0
+            exited = 0
             for alert, cls in actionable:
                 if executed >= 5:  # per-cycle cap
                     break
@@ -1419,7 +1428,15 @@ class UnusualWhalesBot:
                     except Exception as e:
                         logger.debug(f"feature logging skipped for {symbol}: {e}")
 
-                    if result:
+                    was_exit = getattr(self, "_last_action_was_exit", False)
+                    self._last_action_was_exit = False
+
+                    if result and was_exit:
+                        # Closed a held name on bearish flow. Real, but it is
+                        # not a new trade and must not inflate the count.
+                        exited += 1
+                        logger.info(f"↩️  EXIT COMPLETED: {symbol} (bearish flow)")
+                    elif result:
                         executed += 1
                         logger.info(f"✅ TRADE EXECUTED: {symbol} {direction} (conf {confidence:.0%})")
                         try:
@@ -1443,7 +1460,10 @@ class UnusualWhalesBot:
                 except Exception as e:
                     logger.error(f"Trade execution error: {e}")
 
-            logger.info(f"✅ Cycle complete ({executed} executed, {self.position_manager.total_open_positions()} open)")
+            logger.info(
+                f"✅ Cycle complete ({executed} entered, {exited} exited, "
+                f"{self.position_manager.total_open_positions()} open)"
+            )
 
             # Post the bearish-skip digest for this cycle, then clear it.
             try:

@@ -280,11 +280,41 @@ class UnusualWhalesAPI:
                     pass
             return s
 
-        # Premium can be negative (net selling); the ratio downstream needs
-        # magnitudes, so clamp at zero.
+        # ------------------------------------------------------------------
+        # SIGN CARRIES THE MEANING — DO NOT CLAMP IT AWAY.
+        #
+        # This previously returned max(total(...), 0.0) for each leg. Net call
+        # premium is frequently NEGATIVE (calls being sold), and clamping made
+        # net_calls exactly 0, so downstream
+        #
+        #     put_call_ratio = net_puts / (net_calls + net_puts) = 1.0
+        #
+        # for any name with net call selling — always above the 0.55 flip
+        # threshold. On 2026-09-09 that fired "100.0% puts" on all nine held
+        # names simultaneously, every minute. A rule that triggers on
+        # everything is not a filter.
+        #
+        # Correct reading of the four cases:
+        #     call premium > 0  calls bought   -> bullish
+        #     call premium < 0  calls sold     -> bearish
+        #     put  premium > 0  puts bought    -> bearish
+        #     put  premium < 0  puts sold      -> bullish
+        #
+        # So each leg contributes to whichever side it actually supports, and
+        # "net_puts" is bearish pressure rather than raw put premium. The keys
+        # keep their names because the monitor's ratio is a bearish-share.
+        # ------------------------------------------------------------------
+        call_prem = total("net_call_premium")
+        put_prem = total("net_put_premium")
+
+        bullish = max(call_prem, 0.0) + max(-put_prem, 0.0)
+        bearish = max(-call_prem, 0.0) + max(put_prem, 0.0)
+
         return {
-            "net_calls": max(total("net_call_premium"), 0.0),
-            "net_puts": max(total("net_put_premium"), 0.0),
+            "net_calls": bullish,
+            "net_puts": bearish,
+            "call_premium": call_prem,
+            "put_premium": put_prem,
             "window_minutes": len(recent),
         }
 
