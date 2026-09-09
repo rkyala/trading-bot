@@ -23,6 +23,13 @@ from uw_api_usage_monitor import APIUsageMonitor
 
 logger = logging.getLogger(__name__)
 
+# Dark-pool rule tuning. Only prints inside this window can trigger an exit,
+# so a large morning print stops re-firing all afternoon; min premium keeps
+# retail-sized prints out of an "institutions are leaving" signal.
+DARKPOOL_LOOKBACK_MIN = 30
+DARKPOOL_MIN_PREMIUM = 1_000_000
+
+
 
 class UnusualWhalesAPI:
     """Production Unusual Whales API Client"""
@@ -327,7 +334,36 @@ class UnusualWhalesAPI:
         seller-initiated, at/above the ask is buyer-initiated. Prints inside
         the spread are left unsided rather than guessed.
         """
-        rows = await self._aget(f"/darkpool/{ticker}", {"limit": 50})
+        # ------------------------------------------------------------------
+        # QUERY THE LARGEST PRINTS, NOT THE MOST RECENT ONES.
+        #
+        # This asked for {"limit": 50} and took the biggest print in the
+        # result. But /darkpool/{ticker} defaults to order_by=executed_at,
+        # order=desc — so that was the 50 MOST RECENT prints, and the "largest"
+        # changed every time the window slid. Measured on NVDA 2026-09-09:
+        #
+        #     limit=50  (recent window)   largest $  1.0M
+        #     limit=500 (recent window)   largest $  1.7M
+        #     order_by=premium            largest $447.3M
+        #
+        # The rule was reading a $1.0M print while the day's real institutional
+        # activity was $447M — off by 400x, and re-rolling every minute as
+        # prints aged out. That is exactly why dark-pool confidence swung
+        # 35% -> 95% -> 35% on what looked like "the same" print.
+        #
+        # newer_than bounds it to recent activity so a 09:30 print does not
+        # keep firing an exit at 15:30, while order_by=premium makes the
+        # selection deterministic within that window.
+        # ------------------------------------------------------------------
+        import time as _time
+        window_ms = int((_time.time() - DARKPOOL_LOOKBACK_MIN * 60) * 1000)
+        rows = await self._aget(f"/darkpool/{ticker}", {
+            "limit": 50,
+            "order_by": "premium",
+            "order": "desc",
+            "newer_than": window_ms,
+            "min_premium": DARKPOOL_MIN_PREMIUM,
+        })
         if not rows:
             return {}
 
