@@ -228,6 +228,20 @@ class FeatureLogger:
         if not symbol:
             return
 
+        # Index alerts (SPX, SPXW, NDXP, VIX) carry no `underlying_price`.
+        # Without a fallback that silently dropped 67 of 79 observations —
+        # i.e. all index flow — from the dataset. execute_trade already does
+        # this lookup; the logger must too or the analysis is blind to indices.
+        # The provider caches, so repeated symbols cost nothing.
+        if spot is None:
+            spot = _f(alert.get("underlying_price"))
+        if not spot:
+            try:
+                from uw_market_data import get_market_data
+                spot = get_market_data().get_underlying_price(symbol)
+            except Exception:
+                spot = None
+
         bid, ask = _f(alert.get("nbbo_bid")), _f(alert.get("nbbo_ask"))
         mid = (bid + ask) / 2 if bid and ask else None
         delta = _f(alert.get("delta"))
@@ -238,7 +252,7 @@ class FeatureLogger:
             "observed_at": datetime.now().isoformat(),
             "symbol": symbol,
             "option_chain_id": alert.get("option_chain_id"),
-            "spot_at_observation": spot if spot else _f(alert.get("underlying_price")),
+            "spot_at_observation": spot,
 
             # the dimensions the filter screens on
             "dte": self._dte(alert.get("expiry")),
