@@ -104,9 +104,11 @@ def _f(v, d=None):
 
 
 class CondorBacktest:
-    def __init__(self, ticker: str = "SPY", max_skew: float = 3.0):
+    def __init__(self, ticker: str = "SPY", max_skew: float = 3.0,
+                 min_dte: int = 0, max_dte: int = 0):
         import requests
         self.max_skew = max_skew
+        self.min_dte, self.max_dte = min_dte, max_dte
         self.t = ticker.upper()
         self.s = requests.Session()
         key = os.getenv("UW_API_KEY")
@@ -165,8 +167,15 @@ class CondorBacktest:
                     return cg + pg
         return None
 
-    def chain_0dte(self, day: str) -> List[Dict]:
-        """Contracts EXPIRING on `day` — the 0DTE chain, priced."""
+    def chain_dte(self, day: str, min_dte: int = 0, max_dte: int = 0) -> List[Dict]:
+        """
+        Priced contracts whose expiry falls in [min_dte, max_dte] days from
+        `day`. min=max=0 is the 0DTE chain.
+
+        The server has no exact-DTE filter (min_dte=0&max_dte=0 returns
+        nothing, max_dte=0 alone returns mixed expiries), so the window is
+        applied here against the returned expiry.
+        """
         try:
             r = self.s.get(f"{BASE}/screener/option-contracts",
                            params={"date": day, "ticker_symbol": self.t,
@@ -176,13 +185,18 @@ class CondorBacktest:
             return []
         out = []
         for x in rows or []:
-            if str(x.get("expiry"))[:10] != day:
-                continue          # server has no exact-DTE filter; do it here
+            exp = str(x.get("expiry"))[:10]
+            try:
+                dte = (date.fromisoformat(exp) - date.fromisoformat(day)).days
+            except Exception:
+                continue
+            if not (min_dte <= dte <= max_dte):
+                continue
             k, op = _f(x.get("strike")), _f(x.get("open"))
             typ = str(x.get("option_type") or "").lower()
             if not k or op is None or op <= 0 or typ not in ("call", "put"):
                 continue
-            out.append({"strike": k, "type": typ, "open": op,
+            out.append({"strike": k, "type": typ, "open": op, "expiry": exp,
                         "close": _f(x.get("close")), "delta": _f(x.get("delta"))})
         return out
 
@@ -201,8 +215,15 @@ class CondorBacktest:
         days.sort()
 
         panel = {}
+        skip_until = None
         for n, day in enumerate(days, 1):
-            ch = self.chain_0dte(day)
+            # NON-OVERLAPPING HOLDS. A weekly entered every session would hold
+            # 3-5 overlapping positions at once, so t-stats computed on them
+            # would be inflated by roughly sqrt(hold). Entering only once the
+            # previous position has expired makes each trade independent.
+            if skip_until and day <= skip_until:
+                continue
+            ch = self.chain_dte(day, self.min_dte, self.max_dte)
             if len(ch) < 8:
                 self.stats["no_0dte_chain"] += 1
                 continue
@@ -210,8 +231,14 @@ class CondorBacktest:
             if not w:
                 self.stats["no_walls"] += 1
                 continue
-            panel[day] = {"bar": bars[day], "chain": ch, "walls": w,
-                          "gamma": self.gamma(day)}
+            exp = min(c["expiry"] for c in ch)
+            if exp not in bars:
+                self.stats["no_expiry_bar"] += 1
+                continue
+            panel[day] = {"bar": bars[day], "chain": [c for c in ch if c["expiry"] == exp],
+                          "walls": w, "gamma": self.gamma(day),
+                          "expiry": exp, "expiry_bar": bars[exp]}
+            skip_until = exp
             self.stats["days_ok"] += 1
             if n % 20 == 0:
                 print(f"  {n}/{len(days)} days ... {len(panel)} usable")
@@ -340,7 +367,7 @@ class CondorBacktest:
             if not legs:
                 self.stats["no_legs"] += 1
                 continue
-            r = self.settle(legs, rec["bar"]["close"], friction)
+            r = self.settle(legs, rec["expiry_bar"]["close"], friction)
             if r["credit"] <= 0:
                 self.stats["no_credit"] += 1
                 continue
@@ -356,10 +383,24 @@ class CondorBacktest:
 
 
 def summarise(trades: List[Dict]) -> Optional[Dict]:
+    """
+    Sharpe is annualised by TRADES PER YEAR, not sqrt(252).
+
+    sqrt(252) is only correct when one trade is one trading day, which holds
+    for 0DTE and not for weeklies. A 3-7 day hold produces ~50 trades a year,
+    so sqrt(252) overstates Sharpe by about 2.2x — it silently made a weekly
+    result look like a daily one.
+    """
     if len(trades) < 10:
         return None
     p = [t["pnl"] * MULT for t in trades]
     n = len(p)
+    try:
+        ds = sorted(t["date"] for t in trades)
+        span_yrs = max((date.fromisoformat(ds[-1]) - date.fromisoformat(ds[0])).days, 1) / 365.0
+        per_year = n / max(span_yrs, 1e-9)
+    except Exception:
+        per_year = 252.0
     m = st.mean(p)
     sd = st.pstdev(p)
     t = m / (sd / math.sqrt(n)) if sd > 0 else 0.0
@@ -369,7 +410,8 @@ def summarise(trades: List[Dict]) -> Optional[Dict]:
             "breach": sum(1 for x in trades if x["breached"]) / n * 100,
             "worst": min(p), "best": max(p),
             "credit": st.mean([x["credit"] for x in trades]) * MULT,
-            "sharpe": (m / sd * math.sqrt(252)) if sd > 0 else 0.0}
+            "sharpe": (m / sd * math.sqrt(per_year)) if sd > 0 else 0.0,
+            "per_year": per_year}
 
 
 def _line(label: str, s: Optional[Dict]) -> str:
@@ -461,13 +503,15 @@ def main():
     ap.add_argument("--otm-pct", type=float, default=0.003,
                     help="baseline short strike distance from spot, e.g. 0.003 = 0.3%%")
     ap.add_argument("--gamma-pct", type=float, default=0.75)
+    ap.add_argument("--min-dte", type=int, default=0)
+    ap.add_argument("--max-dte", type=int, default=0)
     ap.add_argument("--max-skew", type=float, default=3.0,
                     help="max ratio between the two shorts' distance from spot")
     ap.add_argument("--cache", action="store_true")
     a = ap.parse_args()
 
-    bt = CondorBacktest(a.ticker, a.max_skew)
-    cache = f"{a.ticker.lower()}_{CACHE}"
+    bt = CondorBacktest(a.ticker, a.max_skew, a.min_dte, a.max_dte)
+    cache = f"{a.ticker.lower()}_{a.min_dte}_{a.max_dte}_{CACHE}"
     if a.cache and os.path.exists(cache):
         panel = json.load(open(cache))
         print(f"cached panel: {len(panel)} sessions\n")
