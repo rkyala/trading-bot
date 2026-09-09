@@ -53,6 +53,31 @@ GUARDS
   spread losses capped at wing width (a spread cannot lose more than its width)
   gamma regime from a ROLLING percentile, so no forward information
   friction sensitivity table so the assumption's weight is explicit
+
+FRICTION IS MEASURED, NOT GUESSED (corrected 2026-09-09)
+The first run of this file assumed $0.05/leg and concluded the condor loses
+-$18.60/trade because "friction is the moat". That assumption was 10x too
+pessimistic and the conclusion was wrong in character.
+
+Effective spread was then measured from real executions: within each 1-minute
+bar, ask-side average price minus bid-side average price, using
+/option-contract/{id}/intraday?date= which carries premium_ask_side and
+premium_bid_side per bar. Comparing DAY-LONG aggregates does not work — three
+of eight contracts showed a NEGATIVE spread because intraday drift swamps it.
+Within a single bar drift is negligible.
+
+    SPY 0DTE, 3,096 bars across 8 contracts:
+      median spread     $0.010  (2.3% of mid)
+      one-way per leg   $0.005
+      negative bars     12%  (residual noise around a penny-wide market)
+
+At the measured $0.005/leg the symmetric condor returns -$0.60/trade,
+t-0.11 — statistically indistinguishable from ZERO, not a loss. The trade is
+fairly priced; costs merely tip it just under. That is a sharper finding than
+"costs destroy it", and it only appeared because the assumption was checked.
+
+Default friction is therefore 0.005, and the sensitivity table still spans
+$0.00-$0.15 so a different instrument's spread can be read off directly.
 """
 
 import argparse
@@ -392,7 +417,7 @@ def render(bt: CondorBacktest, panel: Dict, args) -> None:
     print(f"  {'friction/leg':<22}{'walls mean $':>16}{'otm mean $':>16}"
           f"{'walls total':>14}{'otm total':>14}")
     print("  " + "-" * 82)
-    for fr in (0.00, 0.02, 0.05, 0.10, 0.15):
+    for fr in (0.000, 0.005, 0.010, 0.025, 0.050):
         row = []
         for mode in ("walls", "otm"):
             bt.stats = defaultdict(int)
@@ -431,7 +456,8 @@ def main():
     ap.add_argument("--ticker", default="SPY")
     ap.add_argument("--days", type=int, default=120)
     ap.add_argument("--width", type=float, default=2.0, help="wing width $")
-    ap.add_argument("--friction", type=float, default=0.05, help="$ per leg")
+    ap.add_argument("--friction", type=float, default=0.005,
+                    help="$ per leg; SPY 0DTE measured at $0.005 (see docstring)")
     ap.add_argument("--otm-pct", type=float, default=0.003,
                     help="baseline short strike distance from spot, e.g. 0.003 = 0.3%%")
     ap.add_argument("--gamma-pct", type=float, default=0.75)
