@@ -35,3 +35,21 @@ screened_alerts.jsonl
 unusual_whales_bot/whale_watchlist.json
 whale_watchlist.json
 uw_confirmation_ab.jsonl
+
+# ---------------------------------------------------------------------------
+# Training archives.
+#
+# The rules above (features.jsonl, labels.jsonl, tier2_shadow.jsonl, ...) are
+# BASENAME patterns, so they match those files ANYWHERE in the tree — including
+# the dated archive copies, which is not intended. `git add` on them is then a
+# silent no-op. These negations re-include the archived copies and must stay
+# BELOW those rules to take effect.
+#
+# Compact feature/label/outcome files are tracked so the trainable core is
+# durable. Bulk raw capture stays local: screened_alerts ~4MB/day and logs
+# ~5MB/day would bloat the repo without adding signal.
+# ---------------------------------------------------------------------------
+!archive/*/data/*.jsonl
+!archive/*/data/*.json
+archive/*/data/screened_alerts.jsonl
+archive/*/logs/
