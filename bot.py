@@ -2013,6 +2013,39 @@ def run_trading_loop():
     high_confidence = [d for d in decisions if d.get("confidence", 0) >= current_threshold]
     log.info("High-confidence trades (threshold=%d): %d", current_threshold, len(high_confidence))
 
+    # ------------------------------------------------------------------
+    # UW options confirmation — SHADOW MODE.
+    #
+    # Attaches an options-flow opinion to each decision and records the pair
+    # for later A/B analysis. It does NOT change which trades execute, does
+    # not touch Stage 3 / MCP / OAuth, and cannot halt a cycle: every failure
+    # path leaves `high_confidence` exactly as it was.
+    #
+    # WHY SHADOW: UW flow has NO measured standalone directional edge (10,099
+    # blocks, 192 days, excess bounded at <=0.03%/day, hit rates 47-53%). Its
+    # value as a CONFIRMATION filter on an independent technical signal is a
+    # different and genuinely untested question. The A/B log answers it with
+    # data. Do not set UW_CONFIRM_SHADOW=0 until that log shows CONFIRM trades
+    # beating CONTRADICT trades over >=100 closed trades per bucket.
+    # ------------------------------------------------------------------
+    try:
+        from uw_confirmation import OptionsConfirmation
+        _shadow = os.getenv("UW_CONFIRM_SHADOW", "1") != "0"
+        _oc = OptionsConfirmation(shadow=_shadow)
+        log.info("=== UW options confirmation (%s) ===",
+                 "SHADOW - no behaviour change" if _shadow else "LIVE - filtering")
+        _annotated = _oc.annotate(high_confidence, direction="BUY")
+        if _shadow:
+            high_confidence = _annotated          # identical content, extra keys
+        else:
+            _kept = [t for t in _annotated
+                     if t.get("uw_confirmation", {}).get("verdict") != "CONTRADICT"]
+            log.info("Options filter: %d -> %d (dropped %d contradicted)",
+                     len(_annotated), len(_kept), len(_annotated) - len(_kept))
+            high_confidence = _kept
+    except Exception as _e:
+        log.warning("UW options confirmation skipped (%s) - trading unchanged", _e)
+
     # Reset daily tracking at midnight UTC
     today = datetime.now(pytz.UTC).date().isoformat()
     if state.get("daily_date") != today:
