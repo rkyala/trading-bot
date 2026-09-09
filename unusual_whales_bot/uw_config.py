@@ -270,8 +270,18 @@ EXECUTION_SAFEGUARDS_CONFIG = {
     "max_bid_ask_spread_pct": 0.15,  # 15% — matches Phase1AlertFilter
 
     # Dynamic stop sizing (ATR-based)
-    "stop_atr_multiplier": 1.5,  # 1.5x ATR for stop
-    "target_atr_multiplier": 2.5,  # 2.5x ATR for target
+    # Calibrated Sep 9 to the INTRADAY holding period. Measured over ~250
+    # sessions x 10 liquid names, probability a barrier k x ATR from the open
+    # is touched the same session: 0.50->66.6%, 0.75->35.7%, 1.00->19.4%,
+    # 1.50->5.3%, 2.50->0.3%.
+    #
+    # The old 1.5/2.5 was multi-day sizing on a book that flattens at 15:45,
+    # so the target was reachable on 1 session in 333 and no stop or target
+    # ever fired in the bot's entire history. These values make the barriers
+    # actually bind while staying above intraday noise. Widen them again if
+    # the strategy ever holds overnight.
+    "stop_atr_multiplier": 0.75,   # ~36% same-session touch
+    "target_atr_multiplier": 1.0,  # ~19% same-session touch
 
     # Time-based controls
     "max_hold_minutes": 240,  # 4 hours max per position

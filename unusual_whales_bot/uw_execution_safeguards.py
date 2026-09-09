@@ -159,8 +159,42 @@ class ExecutionSafeguards:
         # Cap ATR at 10% of price to avoid absurd stops on illiquid/gappy names
         atr_14 = min(atr_14, underlying_current_price * 0.10)
 
-        underlying_stop_offset = 1.5 * atr_14
-        underlying_target_offset = 2.5 * atr_14
+        # ---------------------------------------------------------------
+        # BARRIER SIZING — read from config, calibrated to the HOLDING PERIOD.
+        #
+        # These multipliers were hardcoded at 1.5 / 2.5 while
+        # RISK_CONFIG["stop_atr_multiplier"] / ["target_atr_multiplier"] sat in
+        # config being ignored, so tuning them did nothing.
+        #
+        # 1.5/2.5 ATR is multi-day sizing. Measured over ~250 sessions across
+        # 10 liquid names, the probability a barrier k x ATR from the open is
+        # touched in the SAME session:
+        #
+        #     k=0.50  66.6%      k=1.00  19.4%
+        #     k=0.75  35.7%      k=1.50   5.3%   <- old stop
+        #                        k=2.50   0.3%   <- old target
+        #
+        # The bot flattens at 15:45 the same day, so the old target could only
+        # be reached on 1 session in 333. That is the whole reason no stop or
+        # target has ever fired in this bot's history — arithmetic, not luck,
+        # and it left the exit path permanently unexercised.
+        #
+        # Defaults now sit where barriers actually bind intraday while leaving
+        # room above noise. Widen them again if the holding period ever
+        # becomes multi-day.
+        # ---------------------------------------------------------------
+        try:
+            from uw_config import EXECUTION_SAFEGUARDS_CONFIG as _ESC
+            stop_k = float(_ESC["stop_atr_multiplier"])
+            target_k = float(_ESC["target_atr_multiplier"])
+        except Exception as _e:
+            # Loud, not silent: falling back here means config went missing,
+            # which is exactly how the hardcoded values hid for so long.
+            logger.warning(f"barrier config unreadable ({_e}) — using 0.75/1.0")
+            stop_k, target_k = 0.75, 1.0
+
+        underlying_stop_offset = stop_k * atr_14
+        underlying_target_offset = target_k * atr_14
 
         # ---------------------------------------------------------------
         # BLOCKER FIX #3: direction-aware stop/target placement.
