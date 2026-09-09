@@ -156,6 +156,28 @@ class UnusualWhalesAPI:
     # Tier 2 data methods — every caller awaits it. A sync duplicate briefly
     # existed here and was silently shadowed by the later async definition.
 
+    def get_option_contracts(self, ticker: str, expiry: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Option chain rows for a ticker, carrying open_interest and volume.
+
+        Open interest is the field that distinguishes a real position from
+        churn: volume says a trade happened, OI says a position exists. Used by
+        the whale watchlist to confirm a block actually opened and to detect it
+        being unwound later.
+        """
+        if not self.api_key:
+            return []
+        try:
+            params = {"expiry": expiry} if expiry else {}
+            resp = self.session.get(
+                f"{self.base_url}/stock/{ticker.upper()}/option-contracts",
+                params=params, timeout=12,
+            )
+            return resp.json().get("data", []) if resp.status_code == 200 else []
+        except requests.RequestException as e:
+            logger.debug(f"option-contracts fetch failed for {ticker}: {e}")
+            return []
+
     def get_economic_calendar(self) -> List[Dict[str, Any]]:
         """Scheduled macro events (verified: /api/market/economic-calendar)."""
         if not self.api_key:

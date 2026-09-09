@@ -32,3 +32,5 @@ excursions.jsonl
 tier2_shadow.jsonl
 unusual_whales_bot/screened_alerts.jsonl
 screened_alerts.jsonl
+unusual_whales_bot/whale_watchlist.json
+whale_watchlist.json

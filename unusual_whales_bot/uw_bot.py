@@ -68,8 +68,25 @@ class UnusualWhalesBot:
             paper_trading=EXECUTION_MODE.get("paper_trading", True),
         )
 
+        # Build the UW client early: the watchlist needs it at construction.
+        if api_client is None:
+            try:
+                from uw_api_client import UnusualWhalesAPI
+                api_client = UnusualWhalesAPI()
+            except Exception as e:
+                logger.warning(f"⚠️ Could not construct UW API client: {e}")
+        api_client_for_watchlist = api_client
+
         # Position tracking
         self.position_manager = PositionManager()
+
+        # Whale watchlist — follows large blocks via open interest from open
+        # to close. Detection happens BEFORE the contract filter, because the
+        # blocks most worth following (e.g. GOOGL 73-DTE) are exactly the ones
+        # that filter rejects for trading.
+        from uw_whale_watchlist import WhaleWatchlist
+        self.watchlist = WhaleWatchlist(api_client=api_client_for_watchlist)
+        self._watchlist_polled_on = None
 
         # Training-data capture. Features cannot be recovered retroactively,
         # so this runs from day one even though no model consumes it yet.
@@ -106,13 +123,6 @@ class UnusualWhalesBot:
         # passed, so all four exit rules silently never initialized. The bot
         # now builds its own client when one is not supplied.
         # ---------------------------------------------------------------
-        if api_client is None:
-            try:
-                from uw_api_client import UnusualWhalesAPI
-                api_client = UnusualWhalesAPI()
-            except Exception as e:
-                logger.warning(f"⚠️ Could not construct UW API client: {e}")
-
         self.api_client = api_client
 
         self.tier2_integration = None
@@ -423,6 +433,70 @@ class UnusualWhalesBot:
             logger.error(f"❌ Order placement error: {e}")
             return False
 
+    async def _poll_watchlist(self) -> None:
+        """
+        Refresh open interest on tracked whale blocks, once per day.
+
+        OI only updates overnight, so polling per cycle would burn API calls
+        for no new information.
+        """
+        from uw_execution_safeguards import now_eastern
+        today = now_eastern().date()
+        if self._watchlist_polled_on == today:
+            return
+        # Poll after the open, once OI for the prior session has settled.
+        if now_eastern().time() < __import__("datetime").time(10, 0):
+            return
+
+        self._watchlist_polled_on = today
+        events = await asyncio.to_thread(self.watchlist.poll)
+        for ev in events:
+            self._alert_watchlist_event(ev["event"], ev["position"])
+        if self.watchlist.active():
+            logger.info(f"👁️  Watchlist: {len(self.watchlist.active())} positions tracked")
+
+    def _alert_watchlist_event(self, event: str, pos) -> None:
+        """Notify on a tracked whale position changing state."""
+        import os
+        headline = {
+            "CONFIRMED": "🐋 WHALE POSITION CONFIRMED",
+            "UNWINDING": "⚠️ WHALE POSITION UNWINDING",
+            "CLOSED":    "🚪 WHALE POSITION CLOSED",
+            "FAILED":    "👻 BLOCK DID NOT OPEN A POSITION",
+            "EXPIRED":   "⌛ TRACKED CONTRACT EXPIRED",
+        }.get(event, event)
+
+        detail = (
+            f"**{pos.symbol} ${pos.strike:.0f} {pos.option_type}** exp {pos.expiry}\n"
+            f"Block: {pos.block_size:,.0f} contracts, ${pos.block_premium/1e6:.2f}M "
+            f"({pos.side}, {pos.bias})\n"
+            f"OI: baseline {pos.baseline_oi:,.0f} → peak {pos.peak_oi:,.0f} → "
+            f"now {pos.current_oi:,.0f} ({pos.pct_off_peak:+.1f}% off peak)\n"
+            f"Block was {pos.oi_concentration:.0%} of peak OI"
+        )
+        logger.warning(f"{headline}: {pos.symbol} {pos.strike:.0f}{pos.option_type[0]}")
+
+        wh = os.getenv("DISCORD_WEBHOOK_URL")
+        if not wh:
+            return
+        try:
+            import requests
+            colour = {"CONFIRMED": 3066993, "UNWINDING": 16776960,
+                      "CLOSED": 15158332, "FAILED": 9807270}.get(event, 10181046)
+            note = ("Open interest is aggregate — a fall means somebody closed, "
+                    "not provably this holder. Concentration above shows how "
+                    "strong that inference is.")
+            requests.post(wh, json={"embeds": [{
+                "title": headline,
+                "description": detail,
+                "color": colour,
+                "timestamp": datetime.utcnow().isoformat(),
+                "fields": [{"name": "Caveat", "value": note, "inline": False}],
+                "footer": {"text": "Unusual Whales bot · whale watchlist"},
+            }]}, timeout=10, verify=False)
+        except Exception as e:
+            logger.debug(f"watchlist alert failed: {e}")
+
     def _log_shadow_exit(self, pos, reason, confidence, mark, spot, ret_pct) -> None:
         """Record a Tier 2 signal that was observed but not acted on."""
         import json
@@ -718,6 +792,13 @@ class UnusualWhalesBot:
 
         while True:
             try:
+                # Whale watchlist: OI settles overnight, so poll once a day
+                # rather than every cycle.
+                try:
+                    await self._poll_watchlist()
+                except Exception as e:
+                    logger.debug(f"watchlist poll error: {e}")
+
                 # Sample how far each position has travelled toward its
                 # barriers before evaluating any exit.
                 try:
@@ -877,6 +958,15 @@ class UnusualWhalesBot:
                 return
 
             logger.info(f"✅ Phase 1: {len(approved_alerts)}/{len(alerts)} approved")
+
+            # Register whale-sized blocks for OI tracking. Runs before the
+            # contract filter deliberately — a 73-DTE block is rejected for
+            # TRADING but is exactly what we want to FOLLOW.
+            try:
+                for a in approved_alerts:
+                    self.watchlist.consider(a)
+            except Exception as e:
+                logger.debug(f"watchlist detection skipped: {e}")
 
             # ---------------------------------------------------------------
             # BLOCKER FIX #11: screen the CONTRACT, not just the signal.
