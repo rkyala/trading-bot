@@ -141,6 +141,20 @@ TECHNICAL_GATES_CONFIG = {
 }
 
 # ===========================================================================
+# PRICE DATA SOURCE
+# ===========================================================================
+# "uw"       — Unusual Whales OHLC. Same source as the flow data, so bar and
+#              alert timestamps come from one clock. Provides the 15m/1h bars
+#              the screener's trend gates need, which yfinance covers poorly.
+# "yfinance" — previous behaviour, kept as a fallback.
+#
+# Verified 2026-09-08 against yfinance: prices agree 6/6 within 1%, ATR within
+# ~3%. Two bugs were found and fixed getting there — UW returns THREE rows per
+# period (pre/regular/post) and mixing them understated ATR by 25-35%, and the
+# regular-hours filter means indicator windows must over-request ~4x.
+PRICE_SOURCE = "uw"
+
+# ===========================================================================
 # CAPACITY — how the position cap allocates slots
 # ===========================================================================
 # Sep 8: with the cap at 10/10 the bot held TQQQ at 70% confidence while

@@ -252,10 +252,43 @@ _provider: Optional[MarketDataProvider] = None
 _async_adapter: Optional[AsyncMarketDataAdapter] = None
 
 
-def get_market_data() -> MarketDataProvider:
+def get_market_data():
+    """
+    Price provider, selected by PRICE_SOURCE.
+
+    Both implementations expose the same interface (get_underlying_price,
+    get_historical_candles, get_intraday_ticks, get_atr, is_tradeable), so
+    callers are unaffected by the choice.
+    """
     global _provider
     if _provider is None:
+        source = "yfinance"
+        try:
+            from uw_config import PRICE_SOURCE
+            source = PRICE_SOURCE
+        except Exception:
+            pass
+        if source == "uw":
+            try:
+                from uw_price_data import get_price_data
+                candidate = get_price_data()
+
+                # Without a key the UW provider returns empty results for every
+                # call rather than raising — the bot would then skip every trade
+                # for "no price available" and look merely quiet, not broken.
+                # Prove it can actually serve a price before adopting it.
+                if not candidate.api_key:
+                    raise RuntimeError("UW_API_KEY not set")
+                if candidate.get_underlying_price("SPY") is None:
+                    raise RuntimeError("UW price probe returned nothing")
+
+                _provider = candidate
+                logger.info("📊 Price source: Unusual Whales (probe OK)")
+                return _provider
+            except Exception as e:
+                logger.error(f"❌ UW price source unusable ({e}); falling back to yfinance")
         _provider = MarketDataProvider()
+        logger.info("📊 Price source: yfinance")
     return _provider
 
 
