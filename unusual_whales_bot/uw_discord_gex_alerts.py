@@ -41,16 +41,28 @@ class GEXDiscordAlerts:
         return None
 
     async def get_current_price(self, ticker: str) -> float:
-        """Fetch current price for ticker"""
+        """
+        Fetch current price.
+
+        Uses /stock/{t}/stock-state. The previous implementation called the
+        bare /stock/{ticker}, which returns 404 "Route not found" — so this
+        ALWAYS returned 0.0. Every alert would have read "Current: $0.00" and
+        fallen through to "IN TARGET ZONE" (the price comparisons are all
+        `price and ...`, so zero silently disables them), while still
+        returning success because Discord accepted the post.
+        """
         async with httpx.AsyncClient(
             headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=10.0
         ) as client:
             try:
-                response = await client.get(f"{self.base_url}/stock/{ticker}")
+                response = await client.get(f"{self.base_url}/stock/{ticker}/stock-state")
                 if response.status_code == 200:
-                    data = response.json().get("data", {})
-                    return float(data.get("last", 0) or data.get("price", 0))
+                    data = response.json().get("data", {}) or {}
+                    px = self.safe_float(data.get("close") or data.get("last"))
+                    if px > 0:
+                        return px
+                logger.warning(f"price unavailable for {ticker}: HTTP {response.status_code}")
             except Exception as e:
                 logger.error(f"Price fetch error for {ticker}: {e}")
         return 0.0
@@ -149,7 +161,7 @@ class GEXDiscordAlerts:
     async def send_index_alerts(self, tickers: List[str] = None) -> Dict[str, bool]:
         """Send alerts for indices"""
         if tickers is None:
-            tickers = ["SPX", "SPY", "NDX", "IWM"]
+            tickers = ["SPY", "QQQ", "IWM", "DIA"]
 
         results = {}
 
@@ -172,6 +184,84 @@ class GEXDiscordAlerts:
                 results[ticker] = False
 
         return results
+
+
+    # ------------------------------------------------------------------
+    # Event-driven alerting.
+    #
+    # send_index_alerts() posts unconditionally. Called from the bot's 300s
+    # cycle across 4 indices that is ~48 messages an hour, which trains the
+    # reader to ignore the channel — and an ignored alert channel is worse
+    # than none, because it looks like coverage.
+    #
+    # Instead: one snapshot on the first call of the day, then alerts only
+    # when price CROSSES a level. A crossing is the tradeable event; sitting
+    # between the same two walls for an hour is not news.
+    # ------------------------------------------------------------------
+    _zone_state: Dict[str, str] = {}
+    _snapshot_day: Optional[str] = None
+
+    @staticmethod
+    def _zone(price: float, levels: Dict) -> str:
+        """Which gamma zone the price occupies."""
+        f = GEXDiscordAlerts.safe_float
+        pw, gf, cw = f(levels.get("put_wall")), f(levels.get("gamma_flip")), f(levels.get("call_wall"))
+        if not price:
+            return "unknown"
+        if pw and price < pw:
+            return "below_put_wall"
+        if cw and price > cw:
+            return "above_call_wall"
+        if gf and price < gf:
+            return "below_flip"
+        return "above_flip"
+
+    async def check_crossings(self, tickers: List[str] = None) -> List[str]:
+        """
+        Poll indices; alert on the first call of the day and on zone changes.
+
+        Returns the list of tickers alerted on.
+        """
+        # SPX/NDX have no price endpoint on this plan (/stock-state and /ohlc
+        # both 422), so they could only ever post "$0.00". SPY/QQQ/IWM/DIA
+        # serve both gex-levels and price, and are what the bot trades.
+        tickers = tickers or ["SPY", "QQQ", "IWM", "DIA"]
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        first_of_day = self._snapshot_day != today
+        alerted = []
+
+        for t in tickers:
+            try:
+                levels = await self.get_gex_levels(t)
+                if not levels or not (levels.get("put_wall") or levels.get("call_wall")):
+                    continue
+                price = await self.get_current_price(t)
+                if not price:
+                    logger.warning(f"GEX {t}: no price, skipping (would post $0.00)")
+                    continue
+
+                zone = self._zone(price, levels)
+                prev = self._zone_state.get(t)
+                self._zone_state[t] = zone
+
+                if not first_of_day and (prev is None or prev == zone):
+                    continue    # nothing changed — stay quiet
+
+                embed = self.format_gex_embed(t, price, levels)
+                if prev and prev != zone:
+                    embed["title"] = f"⚡ GEX ZONE CHANGE — {t}"
+                    embed["description"] = (
+                        f"**{prev.replace('_',' ')} → {zone.replace('_',' ')}**\n"
+                        + embed["description"]
+                    )
+                if await self.send_discord_alert(t, embed):
+                    alerted.append(t)
+            except Exception as e:
+                logger.error(f"GEX crossing check failed for {t}: {e}")
+
+        if first_of_day:
+            self._snapshot_day = today
+        return alerted
 
 
 async def main():

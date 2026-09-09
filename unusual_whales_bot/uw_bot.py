@@ -107,6 +107,12 @@ class UnusualWhalesBot:
         # Per-position max favourable/adverse excursion, in ATR units
         self._excursions: Dict[str, Dict] = {}
 
+        # Bearish signals dropped by the long-only rule, digested per cycle
+        self._skipped_bearish: list = []
+
+        # GEX zone-crossing alerter; built lazily on first cycle
+        self._gex_alerts = None
+
         # Rotations performed today (bounded to prevent churn)
         self._rotations_today = 0
 
@@ -1338,6 +1344,19 @@ class UnusualWhalesBot:
                 logger.debug(f"skip digest failed: {e}")
             finally:
                 self._skipped_bearish = []
+
+            # GEX zone alerts. Event-driven: one snapshot at the first cycle
+            # of the day, then only when an index CROSSES a gamma level.
+            # Posting all four every 300s would be ~48 messages an hour.
+            try:
+                if self._gex_alerts is None:
+                    from uw_discord_gex_alerts import GEXDiscordAlerts
+                    self._gex_alerts = GEXDiscordAlerts()
+                fired = await self._gex_alerts.check_crossings()
+                if fired:
+                    logger.info(f"⚡ GEX alerts posted: {', '.join(fired)}")
+            except Exception as e:
+                logger.debug(f"GEX alert check failed: {e}")
 
         except Exception as e:
             logger.error(f"Cycle error: {e}")
