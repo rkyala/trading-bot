@@ -493,7 +493,10 @@ class UnusualWhalesBot:
                 "timestamp": datetime.utcnow().isoformat(),
                 "fields": [{"name": "Caveat", "value": note, "inline": False}],
                 "footer": {"text": "Unusual Whales bot · whale watchlist"},
-            }]}, timeout=10, verify=False)
+            # TLS verification stays ON: a Discord webhook URL is a credential
+            # (anyone holding it can post as this bot), so verify=False would
+            # expose it to interception for no benefit.
+            }]}, timeout=10)
         except Exception as e:
             logger.debug(f"watchlist alert failed: {e}")
 
@@ -714,6 +717,103 @@ class UnusualWhalesBot:
         except (TypeError, ValueError):
             return default
 
+    # Exit reasons that mean a RISK RULE fired, as opposed to housekeeping
+    # (rotation, EOD flatten). These are the ones worth waking someone for.
+    _RISK_EXITS = ("STOP_HIT", "TARGET_HIT")
+    _FIRST_FIRE_MARKER = "first_risk_exit_seen.flag"
+
+    def _alert_exit(self, pos, pnl: float, pnl_pct: float) -> None:
+        """
+        Post every position close to Discord, flagging risk-rule exits.
+
+        WHY THIS EXISTS
+        Across the bot's entire history NO stop or target has ever fired —
+        every position closed on the time barrier, so the exit logic has never
+        once been observed working. Win rate cannot validate it: the LEAP run
+        scored 60% wins while losing ~$3,500. The first genuine STOP_HIT or
+        TARGET_HIT is therefore a milestone, and it is called out as such the
+        first time it happens.
+
+        Routed from _record_pnl, which every one of the four close_position
+        call sites funnels through, so this cannot miss an exit type.
+        """
+        import os
+        reason = (getattr(pos, "exit_reason", "") or "").upper()
+        is_risk = any(r in reason for r in self._RISK_EXITS)
+
+        if "STOP_HIT" in reason:
+            head, colour = "🛑 STOP LOSS FIRED", 15158332          # red
+        elif "TARGET_HIT" in reason:
+            head, colour = "🎯 TARGET HIT", 3066993                # green
+        elif reason.startswith("TIER2"):
+            head, colour = "🧠 TIER 2 EXIT", 10181046              # purple
+        elif "ROTAT" in reason:
+            head, colour = "🔄 ROTATED OUT", 9807270               # grey
+        elif "EOD" in reason:
+            head, colour = "🌆 EOD FLATTEN", 9807270
+        else:
+            head, colour = "🚪 POSITION CLOSED", 9807270
+
+        # Announce the first-ever risk-rule exit once, then never again.
+        first = False
+        if is_risk and not os.path.exists(self._FIRST_FIRE_MARKER):
+            try:
+                with open(self._FIRST_FIRE_MARKER, "w") as fh:
+                    fh.write(datetime.now().isoformat())
+                first = True
+            except Exception:
+                pass
+
+        held = ""
+        try:
+            t0 = datetime.fromisoformat(str(pos.entry_time))
+            mins = (datetime.now() - t0).total_seconds() / 60.0
+            held = f"{mins:.0f}m" if mins < 120 else f"{mins/60:.1f}h"
+        except Exception:
+            pass
+
+        logger.warning(
+            f"{head}: {pos.symbol} ${pnl:,.0f} ({pnl_pct:+.2f}%) [{reason}]"
+        )
+        if first:
+            logger.warning(
+                "🎉 FIRST risk-rule exit ever recorded — exit logic is now "
+                "observed working, not merely assumed."
+            )
+
+        wh = os.getenv("DISCORD_WEBHOOK_URL")
+        if not wh:
+            return
+        try:
+            import requests
+            fields = [
+                {"name": "Entry", "value": f"${pos.entry_price:,.2f}", "inline": True},
+                {"name": "Exit", "value": f"${pos.exit_price:,.2f}", "inline": True},
+                {"name": "P&L", "value": f"${pnl:,.0f} ({pnl_pct:+.2f}%)", "inline": True},
+                {"name": "Reason", "value": reason or "n/a", "inline": True},
+                {"name": "Qty", "value": f"{pos.quantity}", "inline": True},
+                {"name": "Held", "value": held or "n/a", "inline": True},
+            ]
+            if first:
+                fields.append({
+                    "name": "⚠️ Milestone",
+                    "value": ("First stop/target ever to fire in this bot. Until "
+                              "now every position closed on the time barrier, so "
+                              "the exit logic was untested in live conditions."),
+                    "inline": False,
+                })
+            requests.post(wh, json={"embeds": [{
+                "title": f"{head} — {pos.symbol}",
+                "color": colour,
+                "timestamp": datetime.utcnow().isoformat(),
+                "fields": fields,
+                "footer": {"text": "Unusual Whales bot · "
+                           + ("PAPER" if EXECUTION_MODE.get("paper_trading", True)
+                              else "LIVE")},
+            }]}, timeout=10)
+        except Exception as e:
+            logger.debug(f"exit alert failed: {e}")
+
     def _record_pnl(self, closed_position) -> None:
         """
         Track realized P&L and trip the daily-loss circuit breaker.
@@ -750,7 +850,16 @@ class UnusualWhalesBot:
         mult = closed_position.multiplier
         entry_cost = closed_position.entry_price * closed_position.quantity * mult
         exit_value = closed_position.exit_price * closed_position.quantity * mult
-        self.session_realized_pnl += (exit_value - entry_cost)
+        pnl = exit_value - entry_cost
+        self.session_realized_pnl += pnl
+
+        # Alert on every close. Wrapped so a webhook problem can never stop
+        # the circuit-breaker check below from running.
+        try:
+            self._alert_exit(closed_position, pnl,
+                             (pnl / entry_cost * 100) if entry_cost else 0.0)
+        except Exception as e:
+            logger.debug(f"exit alert skipped: {e}")
 
         if self.session_start_equity > 0:
             drawdown_pct = (self.session_realized_pnl / self.session_start_equity) * 100
