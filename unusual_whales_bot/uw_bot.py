@@ -888,9 +888,42 @@ class UnusualWhalesBot:
                 cf_kwargs = {k: v for k, v in CONTRACT_FILTER_CONFIG.items() if k != "enabled"}
                 contract_filter = ContractFilter(**cf_kwargs)
                 md = get_market_data()
+
+                # ---------------------------------------------------------
+                # Record the verdict on EVERY Phase-1 survivor, passed or not.
+                # The filter discards ~53% of all premium, and the discarded
+                # flow is systematically the largest (mean premium at >120 DTE
+                # is 4.4x the 0-1d bucket). The 60-day cutoff was a judgement
+                # call; without these rows there is no way to check it.
+                # De-duplicated by contract so repeated hits on one position
+                # are counted once.
+                # ---------------------------------------------------------
+                pre_filter = list(approved_alerts)
                 approved_alerts = contract_filter.filter_alerts(
                     approved_alerts, atr_lookup=lambda s: md.get_atr(s) if s else None
                 )
+                kept_ids = {a.get("option_chain_id") for a in approved_alerts}
+
+                seen_contracts = set()
+                for a in pre_filter:
+                    cid = a.get("option_chain_id")
+                    if not cid or cid in seen_contracts:
+                        continue
+                    seen_contracts.add(cid)
+                    passed = cid in kept_ids
+                    reason = ""
+                    if not passed:
+                        try:
+                            _, reason = ContractFilter(**cf_kwargs).evaluate(
+                                a, atr=md.get_atr(a.get("underlying_symbol"))
+                            )
+                        except Exception:
+                            reason = "unknown"
+                    try:
+                        self.feature_logger.log_screened_alert(a, passed, reason)
+                    except Exception as e:
+                        logger.debug(f"screened-alert log skipped: {e}")
+
                 contract_filter.log_stats()
 
                 if not approved_alerts:

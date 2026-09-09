@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 FEATURES_FILE = "features.jsonl"
 LABELS_FILE = "labels.jsonl"
+SCREENED_FILE = "screened_alerts.jsonl"
 
 
 def _f(value, default=None) -> Optional[float]:
@@ -54,10 +55,12 @@ def _f(value, default=None) -> Optional[float]:
 class FeatureLogger:
     """Append-only capture of decision-time features and realized outcomes."""
 
-    def __init__(self, features_file: str = FEATURES_FILE, labels_file: str = LABELS_FILE):
+    def __init__(self, features_file: str = FEATURES_FILE, labels_file: str = LABELS_FILE,
+                 screened_file: str = SCREENED_FILE):
         self.features_file = features_file
         self.labels_file = labels_file
-        self.stats = {"features": 0, "labels": 0, "errors": 0}
+        self.screened_file = screened_file
+        self.stats = {"features": 0, "labels": 0, "screened": 0, "errors": 0}
 
     # ------------------------------------------------------------------ util
 
@@ -193,6 +196,80 @@ class FeatureLogger:
         if self._append(self.features_file, row):
             self.stats["features"] += 1
         return cid
+
+    # ------------------------------------------------------ screened alerts
+
+    def log_screened_alert(
+        self,
+        alert: Dict,
+        passed: bool,
+        reject_reason: str = "",
+        spot: Optional[float] = None,
+    ) -> None:
+        """
+        Record an alert's SIGNAL-FILTER verdict, whether it passed or not.
+
+        WHY THIS EXISTS
+        log_candidate() only sees alerts that survived the contract filter, so
+        everything rejected on DTE/moneyness/spread was invisible to the
+        dataset. Measured Sep 8, that is **53% of all premium** — and the
+        discarded flow is systematically the largest (mean premium at >120 DTE
+        is 4.4x the 0-1d bucket).
+
+        The 60-day DTE cutoff was a judgement call, not a measured threshold.
+        Without these rows the question "is 60 right?" cannot be answered from
+        our own logs, which defeats the purpose of logging at all.
+
+        Only the observation is stored here. Forward returns are computed
+        offline later from `symbol` + `observed_at` against historical bars —
+        no live tracking, and no risk of look-ahead leaking into a decision.
+        """
+        symbol = alert.get("underlying_symbol") or alert.get("symbol")
+        if not symbol:
+            return
+
+        bid, ask = _f(alert.get("nbbo_bid")), _f(alert.get("nbbo_ask"))
+        mid = (bid + ask) / 2 if bid and ask else None
+        delta = _f(alert.get("delta"))
+        volume = _f(alert.get("volume"))
+        tags = [str(t).lower() for t in (alert.get("tags") or [])]
+
+        row = {
+            "observed_at": datetime.now().isoformat(),
+            "symbol": symbol,
+            "option_chain_id": alert.get("option_chain_id"),
+            "spot_at_observation": spot if spot else _f(alert.get("underlying_price")),
+
+            # the dimensions the filter screens on
+            "dte": self._dte(alert.get("expiry")),
+            "expiry": alert.get("expiry"),
+            "abs_delta": abs(delta) if delta is not None else None,
+            "spread_abs": (ask - bid) if bid and ask else None,
+            "spread_pct": ((ask - bid) / mid) if (bid and ask and mid) else None,
+            "option_mid": mid,
+
+            # conviction measures
+            "premium": _f(alert.get("premium")),
+            "volume": volume,
+            "open_interest": _f(alert.get("open_interest")),
+            "net_delta_dollars": (
+                volume * delta * 100 * _f(alert.get("underlying_price"), 0)
+                if None not in (volume, delta) else None
+            ),
+            "side": ("ask_side" if "ask_side" in tags else
+                     "bid_side" if "bid_side" in tags else "other"),
+            "uw_bias": ("bullish" if "bullish" in tags else
+                        "bearish" if "bearish" in tags else "neutral"),
+            "option_type": str(alert.get("option_type", "")).upper(),
+            "iv": _f(alert.get("implied_volatility")),
+            "sector": alert.get("sector"),
+
+            # the verdict under test
+            "filter_passed": passed,
+            "reject_reason": reject_reason or None,
+        }
+        self._append(self.screened_file, row)
+        self.stats["screened"] += 1
 
     # ---------------------------------------------------------------- labels
 
