@@ -92,6 +92,36 @@ class UnusualWhalesAPI:
                 "min_premium": min_premium,
             }
 
+            # ----------------------------------------------------------
+            # FILTER DTE SERVER-SIDE.
+            #
+            # /option-trades accepts min_dte/max_dte, and applying them at the
+            # API means every row returned is already inside the tradeable
+            # window. Without them the feed is dominated by LEAPs: measured
+            # 2026-09-09, only 12-16% of a 200-row fetch fell inside DTE 2-60,
+            # and the contract filter was rejecting ~79% of each cycle on DTE
+            # alone before anything else got a look.
+            #
+            #     no dte filter        25/200 usable (12%)
+            #     min_dte=2 max_dte=60 200/200 usable (100%)
+            #
+            # Roughly 8x more actionable candidates per call for no extra
+            # quota, and greeks + NBBO are still present on every row (checked
+            # 200/200), so the contract filter's delta and absolute-spread
+            # gates are unaffected — those caught the deep-ITM LEAP problem
+            # and must keep working.
+            #
+            # Bounds come from CONTRACT_FILTER_CONFIG so the server-side and
+            # client-side windows cannot silently diverge. The client-side
+            # check stays as defence in depth.
+            # ----------------------------------------------------------
+            try:
+                from uw_config import CONTRACT_FILTER_CONFIG as _CF
+                params["min_dte"] = int(_CF["min_dte"])
+                params["max_dte"] = int(_CF["max_dte"])
+            except Exception as _e:
+                logger.warning(f"DTE prefilter unavailable ({_e}); fetching unfiltered")
+
             # CRITICAL FIX #2: Correct API parameter name (not 'symbols')
             if symbols:
                 params["ticker_symbol"] = ",".join(symbols)
