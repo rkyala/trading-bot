@@ -260,10 +260,15 @@ class WhaleWatchlist:
             if pos.state == PENDING:
                 if gain >= pos.block_size * self.confirm_ratio:
                     pos.state = CONFIRMED
-                elif len(pos.history) >= 2:
-                    # Two settlement cycles with no OI rise: the block was not
-                    # an opening position (day-traded, or offset elsewhere).
-                    pos.state = FAILED
+                else:
+                    # FAILED means two SETTLEMENTS with no OI rise — not two
+                    # polls. Open interest updates once overnight, so counting
+                    # poll entries marked a position FAILED after two calls
+                    # minutes apart (observed on HYG). Count distinct dates.
+                    days = {str(h.get("at", ""))[:10] for h in pos.history}
+                    days.discard("")
+                    if len(days) >= 3:  # detection day + two settlements
+                        pos.state = FAILED
             elif pos.state in (CONFIRMED, UNWINDING):
                 off = pos.pct_off_peak
                 if off <= self.closed_pct:
