@@ -45,6 +45,22 @@ from uw_market_data import get_market_data
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# CREDENTIAL HYGIENE.
+#
+# httpx logs every request line at INFO, including the full URL. A Discord
+# webhook URL embeds its own token, so the complete credential was being
+# written into logs/uw_bot_*.log on every alert — anyone with read access to
+# the log could post as this bot. Same applies to any UW URL carrying a query
+# token.
+#
+# Raising these to WARNING keeps genuine HTTP failures visible while keeping
+# request URLs out of the log. Do not lower this to INFO for debugging without
+# scrubbing afterwards.
+# ---------------------------------------------------------------------------
+for _noisy in ("httpx", "httpcore", "urllib3", "requests.packages.urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 
 class UnusualWhalesBot:
     """Main bot orchestration"""
@@ -757,10 +773,43 @@ class UnusualWhalesBot:
 
         TLS verification stays on: the webhook URL is a credential.
         """
-        import os
+        import os, json as _json
         wh = os.getenv("DISCORD_WEBHOOK_URL")
         if not wh:
             return False
+
+        # ------------------------------------------------------------------
+        # OUTBOUND SECRET SCRUB.
+        #
+        # Nothing here is supposed to embed a credential, but Discord is an
+        # external surface and a leak there is irreversible — the message is
+        # delivered before anyone notices. So the payload is checked against
+        # the actual live secret values immediately before sending, and any
+        # match is redacted rather than posted.
+        #
+        # Cheap, and it fails safe: a future field that interpolates an env
+        # var by mistake gets caught here instead of in someone's channel.
+        # ------------------------------------------------------------------
+        try:
+            blob = _json.dumps(embed)
+            leaked = []
+            for var in ("UW_API_KEY", "DISCORD_WEBHOOK_URL", "ANTHROPIC_API_KEY",
+                        "RH_CLIENT_ID", "RH_REFRESH_TOKEN", "RH_ACCESS_TOKEN",
+                        "SCHWAB_CLIENT_ID", "SCHWAB_CLIENT_SECRET"):
+                val = os.getenv(var)
+                if val and len(val) >= 12 and val in blob:
+                    blob = blob.replace(val, "<REDACTED>")
+                    leaked.append(var)
+            if leaked:
+                logger.error(
+                    f"🔒 BLOCKED credential(s) from a Discord payload: "
+                    f"{', '.join(leaked)} — redacted before sending"
+                )
+                embed = _json.loads(blob)
+        except Exception as e:
+            logger.warning(f"secret scrub failed, not sending: {e}")
+            return False
+
         try:
             import requests
             r = requests.post(wh, json={"embeds": [embed]}, timeout=10)
@@ -906,6 +955,12 @@ class UnusualWhalesBot:
             head, colour = "🎯 TARGET HIT", 3066993                # green
         elif reason.startswith("TIER2"):
             head, colour = "🧠 TIER 2 EXIT", 10181046              # purple
+        elif "BEARISH" in reason:
+            # Observed live on 2026-09-09 (ORCL, AAPL): bearish option flow
+            # arriving on a name we hold is an exit signal, and in equity
+            # long-only mode it is the most common non-EOD exit. It was
+            # falling through to the generic label.
+            head, colour = "📉 BEARISH FLOW EXIT", 15105570        # orange
         elif "ROTAT" in reason:
             head, colour = "🔄 ROTATED OUT", 9807270               # grey
         elif "EOD" in reason:

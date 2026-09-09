@@ -57,6 +57,42 @@ class Tier2ExitMonitor:
         self.market_tide_update_time: float = 0
         self.tide_cache_ttl = 180  # 3 min cache for market tide
 
+    @staticmethod
+    def _as_epoch(value) -> float:
+        """
+        Coerce a position's entry_time to epoch seconds.
+
+        PositionMonitor.entry_time is typed float, but positions store
+        entry_time as an ISO string (datetime.now().isoformat()). The previous
+        code passed it through unconverted, so line
+
+            age_min = (time.time() - monitor.entry_time) / 60.0
+
+        raised "unsupported operand type(s) for -: 'float' and 'str'" on EVERY
+        check. The exception was caught and logged one level up in
+        uw_tier2_integration, so the bot reported "Tier 2 Exit Integration:
+        ENABLED" and "Tier 2 exits: ACTIVE" at startup while all four exit
+        rules did nothing at all — an error line every 60 seconds was the only
+        symptom.
+
+        Falling back to now() would make a position look brand new and be
+        suppressed by the min-hold gate forever, so an unparseable value
+        returns 0.0 (treated as old) rather than hiding the position.
+        """
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str) and value:
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                pass
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+        logger.warning(f"entry_time unparseable ({value!r}) — treating position as aged")
+        return 0.0
+
     async def check_all_exits(self, positions: Dict) -> Dict[str, ExitSignal]:
         """
         Check all positions for exit signals across 4 rules.
@@ -70,7 +106,7 @@ class Tier2ExitMonitor:
             if symbol not in self.positions:
                 self.positions[symbol] = PositionMonitor(
                     symbol=symbol,
-                    entry_time=position.get("entry_time", time.time()),
+                    entry_time=self._as_epoch(position.get("entry_time")),
                     entry_direction=position.get("entry_direction", "CALL")
                 )
 
