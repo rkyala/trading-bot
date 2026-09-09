@@ -17,6 +17,7 @@ import requests
 import httpx
 from typing import List, Dict, Optional, Any
 import os
+from datetime import datetime
 
 from uw_api_usage_monitor import APIUsageMonitor
 
@@ -151,18 +152,9 @@ class UnusualWhalesAPI:
             logger.warning(f"news fetch failed: {e}")
             return []
 
-    def get_market_tide(self, symbol: str = "SPY") -> Dict[str, Any]:
-        """Market-wide net call/put premium (verified: /api/market/market-tide)."""
-        if not self.api_key:
-            return {}
-        try:
-            resp = self.session.get(f"{self.base_url}/market/market-tide", timeout=8)
-            if resp.status_code != 200:
-                return {}
-            rows = resp.json().get("data", [])
-            return rows[-1] if rows else {}
-        except requests.RequestException:
-            return {}
+    # NOTE: get_market_tide is defined ASYNC further down, alongside the other
+    # Tier 2 data methods — every caller awaits it. A sync duplicate briefly
+    # existed here and was silently shadowed by the later async definition.
 
     def get_economic_calendar(self) -> List[Dict[str, Any]]:
         """Scheduled macro events (verified: /api/market/economic-calendar)."""
@@ -174,54 +166,165 @@ class UnusualWhalesAPI:
         except requests.RequestException:
             return []
 
-    # CRITICAL FIX #2: Add async methods to match MockAPI interface
-    # TODO Week 2: Replace with real UW API endpoints for market data
-    # For Tuesday launch, these return placeholder data since Phase 1 filter
-    # uses only premium/ask_vol/tags which come from get_flow_alerts()
+    # ======================================================================
+    # TIER 2 EXIT DATA — real endpoints
+    #
+    # These were placeholders returning hardcoded values, and two of the four
+    # methods Tier2ExitMonitor actually calls (get_net_premium_ticks,
+    # get_symbol_flow_recent) did not exist at all. check_all_exits() therefore
+    # returned {} every time: the bot logged "Tier 2 exits: ACTIVE" while all
+    # four rules were incapable of firing. Verified against the live API on
+    # 2026-09-08; every endpoint below returns real data.
+    # ======================================================================
 
-    async def get_market_tide(self, symbol: str = "SPY") -> Dict[str, Any]:
-        """Fetch real-time Market Tide metrics (TODO: Connect to /api/market-tide endpoint)"""
-        async with httpx.AsyncClient() as client:
-            try:
+    async def _aget(self, path: str, params: Optional[Dict] = None) -> Any:
+        """Shared async GET returning the `data` payload, or None."""
+        if not self.api_key:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"{self.base_url}/market-tide",  # Endpoint may change - validate in Week 2
-                    params={"symbol": symbol},
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    timeout=5.0
+                    f"{self.base_url}{path}",
+                    params=params or {},
+                    headers={"Authorization": f"Bearer {self.api_key}",
+                             "Accept": "application/json"},
+                    timeout=8.0,
                 )
                 if resp.status_code == 200:
-                    data = resp.json().get("data", {})
-                    return {
-                        "net_direction": data.get("direction", "NEUTRAL"),
-                        "bullish_count": data.get("bullish_count", 0),
-                        "bearish_count": data.get("bearish_count", 0)
-                    }
-            except Exception as e:
-                logger.debug(f"Failed to fetch market tide (expected for Week 2): {e}")
-        # Placeholder for Tuesday - returns neutral
-        return {"net_direction": "NEUTRAL", "bullish_count": 0, "bearish_count": 0}
+                    return resp.json().get("data")
+                logger.debug(f"{path} -> {resp.status_code}")
+        except Exception as e:
+            logger.debug(f"{path} failed: {e}")
+        return None
 
-    async def get_net_ticker_premium(self, ticker: str, minutes: int = 60) -> Dict[str, Any]:
-        """Fetch Net Ticker Premium (TODO: Connect to real endpoint Week 2)"""
-        # TODO: Implement real endpoint call
-        # Placeholder for Tuesday - returns neutral
-        return {"net_direction": "NEUTRAL", "bullish_premium": 0, "bearish_premium": 0}
+    async def get_symbol_flow_recent(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Recent flow alerts for one ticker — feeds Rule #5 (flow exhaustion).
 
-    async def get_dark_pool_volume(self, ticker: str) -> Dict[str, Any]:
-        """Fetch Dark Pool Volume (TODO: Connect to real endpoint Week 2)"""
-        # TODO: Implement real endpoint call - may use /api/darkpool endpoint
-        # Placeholder for Tuesday - returns neutral
+        Normalises `created_at` into a unix `timestamp`, which is what the
+        exit monitor compares against its 45-minute cutoff.
+
+        Note this endpoint is an AGGREGATED alert feed lagging ~5 min. That is
+        acceptable for a 45-minute exhaustion window, but it is NOT the tape —
+        do not use it to answer "did contract X trade".
+        """
+        rows = await self._aget(f"/stock/{ticker}/flow-alerts", {"limit": limit})
+        out = []
+        for r in rows or []:
+            ts = r.get("created_at") or ""
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                r = {**r, "timestamp": dt.timestamp()}
+            except Exception:
+                continue
+            out.append(r)
+        return out
+
+    async def get_net_premium_ticks(self, ticker: str, minutes: int = 30) -> Dict[str, Any]:
+        """
+        Net call/put premium over the last `minutes` — feeds Rule #1 (put/call
+        flip). Backed by /stock/{ticker}/net-prem-ticks, a per-minute series.
+
+        Returns {net_calls, net_puts} as the monitor expects.
+        """
+        rows = await self._aget(f"/stock/{ticker}/net-prem-ticks")
+        if not rows:
+            return {}
+        recent = rows[-minutes:] if len(rows) > minutes else rows
+
+        def total(key):
+            s = 0.0
+            for r in recent:
+                try:
+                    s += float(r.get(key) or 0)
+                except (TypeError, ValueError):
+                    pass
+            return s
+
+        # Premium can be negative (net selling); the ratio downstream needs
+        # magnitudes, so clamp at zero.
         return {
-            "dark_pool_side": "NEUTRAL",
-            "suspicious": False,
-            "dark_pool_notional": 0,
+            "net_calls": max(total("net_call_premium"), 0.0),
+            "net_puts": max(total("net_put_premium"), 0.0),
+            "window_minutes": len(recent),
         }
 
-    async def get_vol_oi_ratio(self, ticker: str, days: int = 30) -> Dict[str, Any]:
-        """Fetch Vol/OI ratio (TODO: Connect to real endpoint Week 2)"""
-        # TODO: Implement real endpoint call
-        # Placeholder for Tuesday - returns neutral
-        return {"vol_oi_ratio": 1.0, "status": "opening"}
+    async def get_dark_pool_volume(self, ticker: str) -> Dict[str, Any]:
+        """
+        Largest recent dark-pool print — feeds Rule #2 (dark pool reversal).
+
+        Dark pool prints carry no explicit side, so side is inferred from where
+        the print landed relative to the NBBO: at/below the bid is
+        seller-initiated, at/above the ask is buyer-initiated. Prints inside
+        the spread are left unsided rather than guessed.
+        """
+        rows = await self._aget(f"/darkpool/{ticker}", {"limit": 50})
+        if not rows:
+            return {}
+
+        best = None
+        for r in rows:
+            try:
+                prem = float(r.get("premium") or 0)
+                price = float(r.get("price") or 0)
+                bid = float(r.get("nbbo_bid") or 0)
+                ask = float(r.get("nbbo_ask") or 0)
+            except (TypeError, ValueError):
+                continue
+            if prem <= 0 or price <= 0:
+                continue
+            if bid > 0 and price <= bid:
+                side = "SELL"
+            elif ask > 0 and price >= ask:
+                side = "BUY"
+            else:
+                side = "UNKNOWN"
+            if side != "UNKNOWN" and (best is None or prem > best["notional_value"]):
+                best = {"side": side, "notional_value": prem,
+                        "price": price, "executed_at": r.get("executed_at")}
+
+        return best or {}
+
+    async def get_market_tide(self, symbol: str = "SPY") -> Dict[str, Any]:
+        """
+        Market-wide options sentiment — feeds Rule #6 (market tide flip).
+
+        Returns `bullish_ratio` (0-1), the share of net premium on the call
+        side, which is the field the exit monitor reads.
+        """
+        rows = await self._aget("/market/market-tide")
+        if not rows:
+            return {}
+        recent = rows[-30:] if len(rows) > 30 else rows
+
+        calls = puts = 0.0
+        for r in recent:
+            try:
+                calls += max(float(r.get("net_call_premium") or 0), 0.0)
+                puts += max(float(r.get("net_put_premium") or 0), 0.0)
+            except (TypeError, ValueError):
+                pass
+
+        total = calls + puts
+        if total <= 0:
+            return {}
+        return {
+            "bullish_ratio": calls / total,
+            "net_call_premium": calls,
+            "net_put_premium": puts,
+        }
+
+    async def get_net_ticker_premium(self, ticker: str, minutes: int = 60) -> Dict[str, Any]:
+        """Compatibility shim over get_net_premium_ticks."""
+        d = await self.get_net_premium_ticks(ticker, minutes)
+        if not d:
+            return {"net_direction": "NEUTRAL", "bullish_premium": 0, "bearish_premium": 0}
+        c, p = d["net_calls"], d["net_puts"]
+        return {
+            "net_direction": "BULLISH" if c > p else ("BEARISH" if p > c else "NEUTRAL"),
+            "bullish_premium": c,
+            "bearish_premium": p,
+        }
 
     def log_stats(self):
         """Log API statistics"""

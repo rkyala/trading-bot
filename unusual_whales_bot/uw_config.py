@@ -70,7 +70,27 @@ DEBATE_ENGINE_CONFIG = {
 # ===========================================================================
 EXIT_RULES_CONFIG = {
     # Use Tier 2 exit monitor (4 options-based rules)
-    "tier2_enabled": True,  # ✅ TIER 2 ACTIVE (Paper Tuesday, Live Thursday)
+    "tier2_enabled": True,
+
+    # ---------------------------------------------------------------------
+    # SHADOW MODE — Tier 2 runs and LOGS what it would do, but does not close
+    # positions.
+    #
+    # Sep 8: Tier 2 had never actually run. Two of the four methods it calls
+    # did not exist on the API client and the rest were hardcoded placeholders,
+    # so check_all_exits() returned {} every cycle while the bot logged
+    # "Tier 2 exits: ACTIVE". Now wired to real endpoints.
+    #
+    # On its first live test it immediately signalled market_tide_flip at 71%
+    # confidence, because market-wide bullish_ratio was 29.3%. That rule is
+    # MARKET-WIDE, so acting on it would have closed EVERY long position at
+    # once, seconds after entry. Enabling an untested mass-liquidation path on
+    # the same day it first became capable of firing is not a good trade.
+    #
+    # Shadow for one session, compare its would-be exits against what actually
+    # happened, then decide. Flip to False to let it act.
+    # ---------------------------------------------------------------------
+    "tier2_shadow_mode": True,
 
     # Individual rule toggles
     "flow_exhaustion_enabled": True,  # #5: 45 min no sweeps
@@ -82,7 +102,15 @@ EXIT_RULES_CONFIG = {
     "flow_exhaustion_minutes": 45,    # No activity for X minutes = exit
     "put_call_flip_threshold": 0.55,  # >55% puts for bullish = flip
     "dark_pool_min_notional": 1_000_000,  # $1M threshold for dump
-    "market_tide_flip_threshold": 0.50,   # <50% bullish = bearish flip
+    # Market tide is a MARKET-WIDE reading, so this threshold decides whether
+    # every long exits at once. 0.50 is a coin flip — it fired at 29.3% on the
+    # first live test and would fire on any mildly soft tape. Requires a
+    # decisive flip, not a marginal one.
+    "market_tide_flip_threshold": 0.30,
+
+    # Tier 2 may not exit a position younger than this. Prevents an exit rule
+    # from closing a trade moments after the entry rules opened it.
+    "min_hold_minutes_before_exit": 20,
 
     # Fall back to ATR if no options trigger
     "fallback_to_atr": True,  # Use ATR target/stop if no other exit

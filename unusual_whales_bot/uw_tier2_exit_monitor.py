@@ -49,6 +49,8 @@ class Tier2ExitMonitor:
     """Monitor 4 options-based exit rules in parallel"""
 
     def __init__(self, api_client):
+        from uw_config import EXIT_RULES_CONFIG
+        self.cfg = EXIT_RULES_CONFIG
         self.api_client = api_client
         self.positions: Dict[str, PositionMonitor] = {}
         self.market_tide_cache: Dict = {}
@@ -73,6 +75,13 @@ class Tier2ExitMonitor:
                 )
 
             monitor = self.positions[symbol]
+
+            # An exit rule must not close a trade the entry rules just opened.
+            min_hold = self.cfg.get("min_hold_minutes_before_exit", 20)
+            age_min = (time.time() - monitor.entry_time) / 60.0
+            if age_min < min_hold:
+                logger.debug(f"{symbol}: {age_min:.0f}min old, below {min_hold}min Tier 2 floor")
+                continue
 
             # Check all 4 rules in parallel
             signals = await asyncio.gather(
@@ -121,18 +130,20 @@ class Tier2ExitMonitor:
                 if f.get("timestamp", 0) > cutoff_time
             ]
 
-            # Store flow history
+            # LOGIC FIX: the previous version assigned monitor.flow_history =
+            # recent_flows and THEN tested `len(recent_flows)==0 and
+            # len(monitor.flow_history)>0`. Both can never hold at once, so the
+            # rule could not fire even with working data. Capture the prior
+            # history before overwriting it.
+            had_flow_before = len(monitor.flow_history) > 0
             monitor.flow_history = recent_flows
 
-            # If no recent flows, signal is exhausted
-            if len(recent_flows) == 0 and len(monitor.flow_history) > 0:
+            # Exhaustion means we HAD flow and it has now stopped.
+            if len(recent_flows) == 0 and had_flow_before:
                 signal.triggered = True
                 signal.reason = "flow_exhaustion"
                 signal.confidence = 0.85  # High confidence
-                signal.details = {
-                    "last_flow_ago_min": (now - monitor.flow_history[-1].get("timestamp", 0)) / 60
-                    if monitor.flow_history else 45
-                }
+                signal.details = {"minutes_since_last_flow": 45}
                 logger.warning(f"⚠️ Flow Exhaustion on {symbol}: No activity for 45+ min")
 
         except Exception as e:
@@ -281,9 +292,11 @@ class Tier2ExitMonitor:
             bullish_ratio = tide_data.get("bullish_ratio", 0.5)
 
             # Check for flip
+            flip_threshold = self.cfg.get("market_tide_flip_threshold", 0.30)
+
             if monitor.entry_direction == "CALL":
-                # We're bullish, check if market flipped bearish
-                if bullish_ratio < 0.50:  # Market is now bearish
+                # We're bullish, check if market flipped decisively bearish
+                if bullish_ratio < flip_threshold:
                     signal.triggered = True
                     signal.reason = "market_tide_flip"
                     signal.confidence = min(0.9, 0.5 - bullish_ratio + 0.5)  # Higher for more extreme flips
@@ -294,8 +307,8 @@ class Tier2ExitMonitor:
                     logger.warning(f"⚠️ Market Tide Flip on {symbol}: {bullish_ratio:.1%} bullish (macro headwind)")
 
             elif monitor.entry_direction == "PUT":
-                # We're bearish, check if market flipped bullish
-                if bullish_ratio > 0.50:  # Market is now bullish
+                # We're bearish, check if market flipped decisively bullish
+                if bullish_ratio > (1.0 - flip_threshold):
                     signal.triggered = True
                     signal.reason = "market_tide_flip"
                     signal.confidence = min(0.9, bullish_ratio - 0.5 + 0.5)

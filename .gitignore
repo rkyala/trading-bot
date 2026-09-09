@@ -26,3 +26,7 @@ closed_trades*.jsonl
 open_positions.json
 uw_bot*.log
 uw_bot.pid
+unusual_whales_bot/excursions.jsonl
+unusual_whales_bot/tier2_shadow.jsonl
+excursions.jsonl
+tier2_shadow.jsonl

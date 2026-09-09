@@ -87,6 +87,9 @@ class UnusualWhalesBot:
         for problem in existing:
             logger.warning(f"🛡️  PRE-EXISTING EXPOSURE CONFLICT: {problem}")
 
+        # Per-position max favourable/adverse excursion, in ATR units
+        self._excursions: Dict[str, Dict] = {}
+
         # Rotations performed today (bounded to prevent churn)
         self._rotations_today = 0
 
@@ -420,6 +423,89 @@ class UnusualWhalesBot:
             logger.error(f"❌ Order placement error: {e}")
             return False
 
+    def _log_shadow_exit(self, pos, reason, confidence, mark, spot, ret_pct) -> None:
+        """Record a Tier 2 signal that was observed but not acted on."""
+        import json
+        try:
+            with open("tier2_shadow.jsonl", "a") as fh:
+                fh.write(json.dumps({
+                    "logged_at": datetime.now().isoformat(),
+                    "symbol": pos.symbol,
+                    "reason": reason,
+                    "confidence": round(float(confidence), 4),
+                    "entry_price": pos.entry_price,
+                    "mark_at_signal": mark,
+                    "return_at_signal_pct": round(ret_pct, 4),
+                    "entry_time": pos.entry_time,
+                    "candidate_id": getattr(pos, "candidate_id", ""),
+                }) + "\n")
+        except Exception as e:
+            logger.debug(f"shadow log failed: {e}")
+
+    async def _track_excursions(self) -> None:
+        """
+        Sample every open position and record how far it has travelled toward
+        its stop and target, in ATR units.
+
+        WHY: no stop or target fired on Sep 8 — every position closed on the
+        EOD bell — so the exit logic is unverified and waiting for a trigger
+        could take weeks. Excursion turns a rare event into a daily
+        measurement: if positions never travel beyond ~0.3 ATR while stops sit
+        at 1.5 ATR, the barriers are unreachable at this holding period and the
+        ATR multiples need recalibrating (or the hold lengthening).
+
+        MFE = max favourable excursion, MAE = max adverse excursion.
+        """
+        positions = self.position_manager.get_all_positions()
+        if not positions:
+            return
+
+        for pos_id, pos in positions.items():
+            spot = get_market_data().get_underlying_price(pos.symbol)
+            if not spot or not pos.entry_underlying:
+                continue
+
+            # ATR implied by the plan: stop sits 1.5 ATR from entry.
+            atr = abs(pos.entry_underlying - pos.underlying_stop) / 1.5
+            if atr <= 0:
+                continue
+
+            is_put = str(pos.direction).upper().startswith("P")
+            move = (pos.entry_underlying - spot) if is_put else (spot - pos.entry_underlying)
+            excursion_atr = move / atr
+
+            st = self._excursions.setdefault(pos_id, {"mfe_atr": 0.0, "mae_atr": 0.0, "samples": 0})
+            st["mfe_atr"] = max(st["mfe_atr"], excursion_atr)
+            st["mae_atr"] = min(st["mae_atr"], excursion_atr)
+            st["samples"] += 1
+            st["atr"] = atr
+            st["symbol"] = pos.symbol
+            st["stop_distance_atr"] = 1.5
+            st["target_distance_atr"] = 2.5
+            # How much of the way to each barrier the position actually got
+            st["pct_to_target"] = round(max(st["mfe_atr"], 0) / 2.5 * 100, 1)
+            st["pct_to_stop"] = round(abs(min(st["mae_atr"], 0)) / 1.5 * 100, 1)
+
+    def _flush_excursion(self, pos_id: str, pos) -> None:
+        """Persist a position's excursion record when it closes."""
+        import json
+        st = self._excursions.pop(pos_id, None)
+        if not st:
+            return
+        try:
+            with open("excursions.jsonl", "a") as fh:
+                fh.write(json.dumps({
+                    "closed_at": datetime.now().isoformat(),
+                    "position_id": pos_id,
+                    "symbol": pos.symbol,
+                    "direction": pos.direction,
+                    "exit_reason": pos.exit_reason,
+                    "candidate_id": getattr(pos, "candidate_id", ""),
+                    **st,
+                }) + "\n")
+        except Exception as e:
+            logger.debug(f"excursion log failed: {e}")
+
     async def _try_rotate_for(self, symbol: str, confidence: float) -> bool:
         """
         Free a slot by closing a clearly weaker holding.
@@ -564,6 +650,11 @@ class UnusualWhalesBot:
         if not closed_position or closed_position.exit_price is None:
             return
 
+        for pid, st in list(self._excursions.items()):
+            if st.get("symbol") == closed_position.symbol:
+                self._flush_excursion(pid, closed_position)
+                break
+
         # Emit the triple-barrier label for the training set. Joined back to
         # features.jsonl by candidate_id.
         try:
@@ -627,6 +718,13 @@ class UnusualWhalesBot:
 
         while True:
             try:
+                # Sample how far each position has travelled toward its
+                # barriers before evaluating any exit.
+                try:
+                    await self._track_excursions()
+                except Exception as e:
+                    logger.debug(f"excursion tracking error: {e}")
+
                 # Get all open positions
                 all_positions = self.position_manager.get_all_positions()
                 symbols_to_check = set(p.symbol for p in all_positions.values())
@@ -657,6 +755,23 @@ class UnusualWhalesBot:
                         (pos_id, pos) for pos_id, pos in all_positions.items()
                         if pos.symbol == symbol
                     ]
+                    # SHADOW MODE: record what Tier 2 would have done without
+                    # acting. Tier 2 became capable of firing only today, and
+                    # its first live signal was a market-wide rule that would
+                    # have closed every long at once.
+                    if EXIT_RULES_CONFIG.get("tier2_shadow_mode", True):
+                        for pos_id, pos in matching_positions:
+                            mark, spot = await self.position_manager.mark_position(
+                                pos, self.robinhood_mcp
+                            )
+                            ret = ((mark - pos.entry_price) / pos.entry_price * 100) if pos.entry_price else 0.0
+                            logger.warning(
+                                f"👻 TIER2 SHADOW: would exit {pos.symbol} via {exit_reason} "
+                                f"(conf {confidence:.0%}) at {ret:+.2f}% — NOT acted on"
+                            )
+                            self._log_shadow_exit(pos, exit_reason, confidence, mark, spot, ret)
+                        continue
+
                     for pos_id, pos in matching_positions:
                         # BLOCKER FIX #8: mark to the real underlying instead of
                         # booking exit_price = entry_price (always exactly $0 P&L,
