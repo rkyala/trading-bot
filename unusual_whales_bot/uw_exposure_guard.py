@@ -76,6 +76,31 @@ ETF_FAMILIES: Dict[str, Tuple[str, int, float]] = {
     "UVXY": ("VOL", +1, 1.5), "VXX": ("VOL", +1, 1), "SVXY": ("VOL", -1, 1),
 }
 
+# ---------------------------------------------------------------------------
+# CORRELATION CLUSTERS — families that are one bet wearing several names.
+#
+# Found Sep 8 from a live flow screenshot: SOXX, SPY and TQQQ all passed the
+# guard because they sit in different FAMILIES (SEMI, SPX, NDX). Nothing
+# conflicted, yet all three are long US equity beta — three positions, one bet,
+# and in a risk-off event they correlate to 1 precisely when it matters.
+#
+# Position COUNT also understates the risk: TQQQ is 3x leveraged, so one TQQQ
+# position carries three times the index exposure of one SPY position. The cap
+# is therefore LEVERAGE-WEIGHTED, not a headcount.
+# ---------------------------------------------------------------------------
+FAMILY_CLUSTER: Dict[str, str] = {
+    "NDX": "US_EQUITY", "SPX": "US_EQUITY", "DJI": "US_EQUITY",
+    "RUT": "US_EQUITY", "SEMI": "US_EQUITY", "FIN": "US_EQUITY",
+    "BIOTECH": "US_EQUITY",
+    "OIL": "ENERGY_CMDTY", "ENERGY": "ENERGY_CMDTY", "NATGAS": "ENERGY_CMDTY",
+    "GOLD": "METALS", "GOLDMINERS": "METALS", "JRGOLDMINERS": "METALS",
+    "LONGBOND": "RATES",
+    "CHINA": "INTL_EQUITY",
+    # VOL is deliberately its own cluster: long volatility HEDGES US_EQUITY
+    # rather than adding to it.
+    "VOL": "VOLATILITY",
+}
+
 
 class ExposureGuard:
     """Blocks self-cancelling and over-concentrated entries."""
@@ -85,15 +110,20 @@ class ExposureGuard:
         block_inverse: bool = True,
         max_per_family: int = 2,
         max_per_sector: int = 4,
+        max_cluster_leverage: float = 3.0,
     ):
         self.block_inverse = block_inverse
         self.max_per_family = max_per_family
         self.max_per_sector = max_per_sector
+        # Leverage-weighted cap per correlation cluster. 3.0 allows e.g.
+        # SPY(1x) + SOXX(1x) but blocks adding TQQQ(3x) on top.
+        self.max_cluster_leverage = max_cluster_leverage
         self.stats = {
             "checked": 0,
             "blocked_inverse": 0,
             "blocked_family": 0,
             "blocked_sector": 0,
+            "blocked_cluster": 0,
         }
 
     @staticmethod
@@ -148,7 +178,28 @@ class ExposureGuard:
                     f"position(s) (max {self.max_per_family})"
                 )
 
-        # ---- 3. Sector concentration ---------------------------------
+        # ---- 3. Correlation cluster (leverage-weighted) ---------------
+        if fam:
+            cluster = FAMILY_CLUSTER.get(fam[0])
+            if cluster:
+                held_lev = 0.0
+                held_names = []
+                for h in held:
+                    hf = self.family_of(h)
+                    if hf and FAMILY_CLUSTER.get(hf[0]) == cluster:
+                        held_lev += hf[2]
+                        held_names.append(f"{h}({hf[2]:g}x)")
+                incoming = fam[2]
+                if held_lev + incoming > self.max_cluster_leverage:
+                    self.stats["blocked_cluster"] += 1
+                    return False, (
+                        f"CORRELATION: {cluster} exposure would reach "
+                        f"{held_lev + incoming:g}x (cap {self.max_cluster_leverage:g}x) — "
+                        f"already hold {', '.join(held_names)}, adding {sym}({incoming:g}x). "
+                        f"These move together."
+                    )
+
+        # ---- 4. Sector concentration ---------------------------------
         if candidate_sector and held_sectors:
             n = sum(1 for s in held_sectors if s and s == candidate_sector)
             if n >= self.max_per_sector:
@@ -161,7 +212,7 @@ class ExposureGuard:
         return True, "ok"
 
     @staticmethod
-    def audit_book(held_symbols: List[str]) -> List[str]:
+    def audit_book(held_symbols: List[str], cap: float = 3.0) -> List[str]:
         """
         Report conflicts that already exist in the book (as opposed to
         screening a new entry). Used at startup so pre-existing conflicts
@@ -169,6 +220,8 @@ class ExposureGuard:
         """
         problems = []
         held = [str(s).upper() for s in held_symbols]
+
+        # opposing exposure
         for i, a in enumerate(held):
             fa = ExposureGuard.family_of(a)
             if not fa:
@@ -180,6 +233,26 @@ class ExposureGuard:
                         f"{a} ({fa[0]} {fa[1]:+d}) vs {b} ({fb[0]} {fb[1]:+d}) — "
                         f"opposing exposure to {fa[0]}"
                     )
+
+        # cluster over-exposure — a book restored from disk can already breach
+        # the cap even though every individual entry passed at the time
+        by_cluster: Dict[str, List[str]] = {}
+        lev: Dict[str, float] = {}
+        for h in held:
+            hf = ExposureGuard.family_of(h)
+            if not hf:
+                continue
+            c = FAMILY_CLUSTER.get(hf[0])
+            if not c:
+                continue
+            by_cluster.setdefault(c, []).append(f"{h}({hf[2]:g}x)")
+            lev[c] = lev.get(c, 0.0) + hf[2]
+        for c, total in lev.items():
+            if total > cap:
+                problems.append(
+                    f"{c} exposure {total:g}x exceeds {cap:g}x cap — "
+                    f"holding {', '.join(by_cluster[c])}; these move together"
+                )
         return problems
 
     def log_stats(self):
@@ -187,5 +260,5 @@ class ExposureGuard:
         logger.info(
             f"🛡️  Exposure guard: {s['checked']} checked | "
             f"{s['blocked_inverse']} inverse | {s['blocked_family']} family | "
-            f"{s['blocked_sector']} sector"
+            f"{s['blocked_cluster']} cluster | {s['blocked_sector']} sector"
         )
