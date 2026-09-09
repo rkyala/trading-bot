@@ -404,13 +404,48 @@ class UnusualWhalesBot:
 
         target_dollars = INSTRUMENT_CONFIG.get("position_dollars", 500.0) * conf_mult
         target_dollars = min(target_dollars, INSTRUMENT_CONFIG.get("max_dollars_per_symbol", 1500.0))
-        quantity = int(target_dollars // limit_price)
+        # ---------------------------------------------------------------
+        # SIZING: whole shares when the target affords one, otherwise
+        # fractional. int(target // price) alone returned ZERO for any stock
+        # priced above the dollar target, silently excluding every large-cap
+        # (MU at 90% conf / $1,025 and SNDK at 76% / $1,770 were both dropped
+        # this way). Rounding UP to one whole share would instead put 7% of a
+        # $25k account into a single SNDK position against a $500 target, so
+        # fractional is what actually preserves the intended dollar risk.
+        # ---------------------------------------------------------------
+        raw_qty = target_dollars / limit_price if limit_price > 0 else 0.0
 
-        if quantity < 1:
+        if raw_qty >= 1.0:
+            quantity = float(int(raw_qty))          # whole shares
+        elif (INSTRUMENT_CONFIG.get("allow_fractional_shares", True)
+              and INSTRUMENT_CONFIG.get("instrument", "equity") == "equity"):
+            # Options cannot be fractional, hence the instrument guard.
+            precision = int(INSTRUMENT_CONFIG.get("fractional_precision", 4))
+            quantity = round(raw_qty, precision)
+            floor_dollars = float(INSTRUMENT_CONFIG.get("min_position_dollars", 50.0))
+            if quantity * limit_price < floor_dollars:
+                self._last_reject_reason = "below_min_position_dollars"
+                logger.info(
+                    f"⏭️  {symbol}: ${target_dollars:.0f} would be "
+                    f"${quantity * limit_price:.2f} notional, below the "
+                    f"${floor_dollars:.0f} floor; skipping"
+                )
+                return False
+            logger.info(
+                f"🔢 {symbol}: ${target_dollars:.0f} at ${limit_price:.2f} → "
+                f"{quantity:g} fractional shares"
+            )
+        else:
             self._last_reject_reason = "size_rounds_to_zero"
             logger.info(
-                f"⏭️  {symbol}: ${target_dollars:.0f} buys 0 shares at ${limit_price:.2f}; skipping"
+                f"⏭️  {symbol}: ${target_dollars:.0f} buys 0 shares at "
+                f"${limit_price:.2f} and fractional is disabled; skipping"
             )
+            return False
+
+        if quantity <= 0:
+            self._last_reject_reason = "size_rounds_to_zero"
+            logger.info(f"⏭️  {symbol}: computed size 0; skipping")
             return False
 
         # ---------------------------------------------------------------

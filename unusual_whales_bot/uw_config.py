@@ -207,6 +207,27 @@ INSTRUMENT_CONFIG = {
     "position_dollars": 500.0,
     "max_dollars_per_symbol": 1500.0,
 
+    # ---------------------------------------------------------------------
+    # FRACTIONAL SHARES.
+    #
+    # Sizing used int(target_dollars // price), so any stock priced above the
+    # dollar target rounded to ZERO shares and was silently skipped. On
+    # 2026-09-09 that dropped MU at 90% and 93% confidence ($1,025) and SNDK
+    # at 76% ($1,770) — the strategy was structurally unable to trade any
+    # large-cap above ~$750 no matter how strong the signal.
+    #
+    # Buying 1 whole share instead would break risk sizing the other way:
+    # one SNDK share is $1,770, or 7% of a $25k account, against a $500
+    # target. Fractional keeps the dollar risk constant, which is the whole
+    # point of dollar-based sizing.
+    #
+    # Equities only — options cannot be fractional. min_position_dollars
+    # stops dust orders whose spread would swamp the position.
+    # ---------------------------------------------------------------------
+    "allow_fractional_shares": True,
+    "min_position_dollars": 50.0,
+    "fractional_precision": 4,
+
     # Long-only. Bearish flow on a symbol we HOLD is an exit signal; bearish
     # flow on a symbol we do not hold is skipped rather than shorted, since
     # shorting needs margin and is restricted on retail Robinhood accounts.

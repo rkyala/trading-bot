@@ -23,7 +23,7 @@ class OptionsPosition:
     symbol: str
     direction: str  # "CALL" or "PUT"
     entry_price: float  # What we paid for the option
-    quantity: int  # Number of contracts
+    quantity: float  # Shares (may be fractional) or option contracts
     entry_time: str  # ISO timestamp
 
     # Underlying stop/target levels (meaning depends on `direction`)
@@ -125,7 +125,7 @@ class PositionManager:
         symbol: str,
         direction: str,
         entry_price: float,
-        quantity: int,
+        quantity: float,
         underlying_stop: float,
         underlying_target: float,
         option_chain_id: str,
@@ -174,7 +174,7 @@ class PositionManager:
         is_put = str(direction).upper().startswith("P")
         logger.info(
             f"✅ Position opened: {pos_id}\n"
-            f"  Entry: {quantity}{unit} @ ${entry_price:.2f} ({direction})\n"
+            f"  Entry: {quantity:g}{unit} @ ${entry_price:.2f} ({direction})\n"
             f"  Stop:   {symbol} {'≥' if is_put else '≤'} ${underlying_stop:.2f}\n"
             f"  Target: {symbol} {'≤' if is_put else '≥'} ${underlying_target:.2f}"
         )
@@ -414,7 +414,7 @@ class PositionManager:
 
         for pos_id, pos in self.positions.items():
             logger.info(
-                f"{pos_id}: {pos.direction} {pos.quantity}× {pos.symbol} "
+                f"{pos_id}: {pos.direction} {pos.quantity:g}× {pos.symbol} "
                 f"@ ${pos.entry_price:.2f} "
                 f"| Stop: ${pos.underlying_stop:.0f} | Target: ${pos.underlying_target:.0f}"
             )
