@@ -81,50 +81,48 @@ def load_observations(path: str) -> List[Dict]:
 
 
 class PriceHistory:
-    """Cached daily+intraday bars, fetched once per symbol."""
+    """
+    Cached daily + hourly bars from Unusual Whales.
+
+    Deliberately the SAME source the bot trades on. Measuring outcomes against
+    a different vendor's bars would introduce a second clock into exactly the
+    study meant to settle whether the DTE cutoff is right — any disagreement
+    between vendors would be indistinguishable from signal.
+    """
 
     def __init__(self):
-        self._daily: Dict[str, object] = {}
-        self._intraday: Dict[str, object] = {}
+        self._bars: Dict[str, List[Dict]] = {}
 
-    def _fetch(self, symbol: str, intraday: bool):
-        cache = self._intraday if intraday else self._daily
-        if symbol in cache:
-            return cache[symbol]
+    def _fetch(self, symbol: str, intraday: bool) -> List[Dict]:
+        key = f"{symbol}:{'1h' if intraday else '1d'}"
+        if key in self._bars:
+            return self._bars[key]
         try:
-            import yfinance as yf
-            from uw_market_data import SYMBOL_MAP
-            ticker = SYMBOL_MAP.get(symbol.upper(), symbol.upper())
-            if intraday:
-                df = yf.Ticker(ticker).history(period="1mo", interval="60m")
-            else:
-                df = yf.Ticker(ticker).history(period="6mo", interval="1d")
-            cache[symbol] = df if df is not None and not df.empty else None
+            from uw_price_data import get_price_data
+            pd_src = get_price_data()
+            bars = pd_src.get_bars(symbol, "1h" if intraday else "1d",
+                                   limit=2000 if intraday else 400)
         except Exception:
-            cache[symbol] = None
-        return cache[symbol]
+            bars = []
+        self._bars[key] = bars or []
+        return self._bars[key]
 
     def price_at_or_after(self, symbol: str, when: datetime, intraday: bool) -> Optional[float]:
         """
-        First close at or after `when`. Returns None when the moment has not
-        happened yet, or no bar covers it.
+        Close of the first bar at or after `when`. None when that moment has
+        not happened yet, or no bar covers it.
         """
-        df = self._fetch(symbol, intraday)
-        if df is None or df.empty:
+        bars = self._fetch(symbol, intraday)
+        if not bars:
             return None
-        try:
-            import pandas as pd
-            idx = df.index
-            if idx.tz is None:
-                target = when.replace(tzinfo=None)
-            else:
-                target = when.astimezone(idx.tz)
-            after = df[idx >= target]
-            if after.empty:
-                return None
-            return float(after["Close"].iloc[0])
-        except Exception:
-            return None
+        target = when.astimezone(timezone.utc).isoformat()
+        for b in bars:  # _norm() guarantees oldest-first
+            if str(b.get("date") or "") >= target:
+                try:
+                    return float(b["close"])
+                except (KeyError, TypeError, ValueError):
+                    return None
+        return None
 
 
 def signed_return(raw_pct: float, bias: str) -> float:
