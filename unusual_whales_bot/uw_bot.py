@@ -794,6 +794,59 @@ class UnusualWhalesBot:
                        + ("PAPER" if EXECUTION_MODE.get("paper_trading", True) else "LIVE")},
         })
 
+    def _check_whale_distribution(self) -> None:
+        """
+        Alert when a CONFIRMED whale position is being sold into today.
+
+        Open interest settles overnight, so the watchlist state machine cannot
+        see an unwind until the next morning. Contract-level intraday aggressor
+        flow shows it the same day — which for a position we are following as
+        a thesis is the difference between reacting and reading history.
+
+        Deduped per contract per day: the condition persists all session, and
+        re-alerting every 300s would bury it.
+        """
+        if not getattr(self, "watchlist", None):
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, "_distribution_day", None) != today:
+            self._distribution_day = today
+            self._distribution_alerted = set()
+
+        for hit in self.watchlist.check_intraday_distribution():
+            pos, flow = hit["position"], hit["flow"]
+            cid = pos.option_chain_id
+            if cid in self._distribution_alerted:
+                continue
+            self._distribution_alerted.add(cid)
+            total = flow["ask_premium"] + flow["bid_premium"]
+            self._discord_post({
+                "title": f"⚠️ WHALE DISTRIBUTION — {pos.symbol} "
+                         f"${pos.strike:.0f}{pos.option_type[0]}",
+                "description": (
+                    f"A position we are tracking is being **sold into today**.\n"
+                    f"Open interest will not reflect this until tomorrow."
+                ),
+                "color": 16776960,
+                "timestamp": datetime.utcnow().isoformat(),
+                "fields": [
+                    {"name": "Hit the bid", "value": f"{flow['bid_share']:.0%} of "
+                     f"${total/1e3:,.0f}k", "inline": True},
+                    {"name": "Contract volume", "value": f"{flow['volume']:,.0f}", "inline": True},
+                    {"name": "Last", "value": f"${flow['last']:,.2f}", "inline": True},
+                    {"name": "Original block", "value": f"{pos.block_size:,.0f} @ "
+                     f"${pos.block_premium/1e6:.2f}M", "inline": True},
+                    {"name": "OI", "value": f"{pos.baseline_oi:,.0f} → {pos.current_oi:,.0f}", "inline": True},
+                    {"name": "Block share of OI", "value": f"{pos.oi_concentration:.0%}", "inline": True},
+                    {"name": "Caveat", "value":
+                     "Bid-side pressure means SOMEBODY is selling this contract, "
+                     "not provably the holder being tracked. The block's share of "
+                     "open interest above indicates how strong that inference is.",
+                     "inline": False},
+                ],
+                "footer": {"text": "Unusual Whales bot · whale watchlist · intraday"},
+            })
+
     def _alert_skipped_bearish(self, skipped: list) -> None:
         """
         One digest per cycle of bearish signals the long-only rule discarded.
@@ -1344,6 +1397,13 @@ class UnusualWhalesBot:
                 logger.debug(f"skip digest failed: {e}")
             finally:
                 self._skipped_bearish = []
+
+            # Whale positions being sold into TODAY, a day before open
+            # interest would reveal it. Alerted once per contract per day.
+            try:
+                self._check_whale_distribution()
+            except Exception as e:
+                logger.debug(f"distribution check failed: {e}")
 
             # GEX zone alerts. Event-driven: one snapshot at the first cycle
             # of the day, then only when an index CROSSES a gamma level.

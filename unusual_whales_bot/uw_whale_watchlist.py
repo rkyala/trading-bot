@@ -210,6 +210,113 @@ class WhaleWatchlist:
 
     # --------------------------------------------------------------- polling
 
+    # ------------------------------------------------------- intraday flow
+
+    def fetch_intraday_flow(self, chain_id: str) -> Optional[Dict]:
+        """
+        Today's aggressor split on ONE tracked contract.
+
+        WHY THIS EXISTS, AND WHAT IT IS NOT
+        Open interest settles overnight, so the OI state machine cannot see an
+        unwind until the following morning. /option-contract/{id}/intraday
+        gives per-bar ask/bid premium on the exact contract, so distribution
+        can be spotted the day it happens rather than a day late.
+
+        It does NOT carry open_interest — verified against the live schema
+        (avg_price, close/high/low/open, iv_high/low, premium_*_side,
+        volume_*_side, start_time). So it CANNOT replace _fetch_oi(); the
+        confirmation machinery still runs on OI. This is a leading indicator
+        layered on top, nothing more.
+
+        Same aggregate caveat as OI: bid-side pressure means SOMEBODY is
+        selling this contract, not provably the holder we are tracking.
+        oi_concentration says how strong that inference is.
+
+        Returns None when the contract has no prints today — an illiquid
+        contract legitimately returns an empty list (HYG did), which is
+        absence of evidence, not evidence of unwinding.
+        """
+        # NB: no `if not self.api: return None` guard here. The HTTP fallback
+        # needs only UW_API_KEY, so gating on the client would disable this
+        # entirely whenever the watchlist is built standalone — which is
+        # exactly how it silently reported "no prints today" for a contract
+        # that had 67 bars.
+        rows = None
+        fn = getattr(self.api, "get_option_contract_intraday", None) if self.api else None
+        if fn is not None:
+            try:
+                rows = fn(chain_id)
+            except Exception as e:
+                logger.debug(f"intraday fetch via client failed: {e}")
+        if not isinstance(rows, list):
+            rows = self._http_intraday(chain_id)
+        if not isinstance(rows, list) or not rows:
+            return None
+
+        ask = sum(self._f(r.get("premium_ask_side")) for r in rows)
+        bid = sum(self._f(r.get("premium_bid_side")) for r in rows)
+        vol = sum(self._f(r.get("volume_ask_side")) + self._f(r.get("volume_bid_side"))
+                  + self._f(r.get("volume_mid_side")) + self._f(r.get("volume_no_side"))
+                  for r in rows)
+        multi = sum(self._f(r.get("volume_multi")) for r in rows)
+        total = ask + bid
+        if total <= 0:
+            return None
+        return {
+            "ask_premium": ask,
+            "bid_premium": bid,
+            "bid_share": bid / total,
+            "volume": vol,
+            "multi_leg_share": (multi / vol) if vol > 0 else 0.0,
+            "last": self._f(rows[-1].get("close")),
+            "bars": len(rows),
+        }
+
+    def _http_intraday(self, chain_id: str):
+        """Direct call when the API client exposes no suitable method."""
+        import os
+        key = os.getenv("UW_API_KEY")
+        if not key:
+            return None
+        try:
+            import requests
+            r = requests.get(
+                f"https://api.unusualwhales.com/api/option-contract/{chain_id}/intraday",
+                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                timeout=10,
+            )
+            return r.json().get("data") if r.status_code == 200 else None
+        except Exception as e:
+            logger.debug(f"intraday HTTP fetch failed for {chain_id}: {e}")
+            return None
+
+    def check_intraday_distribution(self, bid_share_threshold: float = 0.65,
+                                    min_volume: float = 100) -> List[Dict]:
+        """
+        Flag CONFIRMED positions being sold into today, ahead of OI.
+
+        Only CONFIRMED positions are checked: a PENDING block has not been
+        shown to be a real position yet, so reading its flow is premature.
+        """
+        out = []
+        for chain, pos in self.positions.items():
+            if pos.state != CONFIRMED:
+                continue
+            flow = self.fetch_intraday_flow(chain)
+            if not flow or flow["volume"] < min_volume:
+                continue
+            if flow["multi_leg_share"] > 0.30:
+                continue        # spread activity is not directional
+            if flow["bid_share"] >= bid_share_threshold:
+                out.append({"position": pos, "flow": flow})
+                logger.warning(
+                    f"⚠️  INTRADAY DISTRIBUTION: {pos.symbol} "
+                    f"{pos.strike:.0f}{pos.option_type[0]} — "
+                    f"{flow['bid_share']:.0%} of ${(flow['ask_premium']+flow['bid_premium'])/1e3:.0f}k "
+                    f"premium hit the BID today (OI will not show this until tomorrow)"
+                )
+        return out
+
     def _fetch_oi(self, pos: WatchedPosition) -> Optional[float]:
         if not self.api:
             return None
