@@ -49,6 +49,7 @@ an external surface, so it is truncated and stripped of backticks/@ mentions
 rather than passed through raw.
 """
 
+import math
 import os
 import sys
 from datetime import datetime
@@ -381,6 +382,170 @@ def build_insider_embed(it: Dict) -> Dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# FDA CATALYST CALENDAR — once per session.
+#
+# Binary events: PDUFA dates, AdComm meetings, FDA decisions, trial readouts.
+# Unlike fundamentals (quarterly) or 13F (45-day lag), these are DATED and
+# short-horizon, which is the one shape that fits a bot holding days.
+#
+# The most defensible use is a VETO, not a signal: do not hold a name through
+# a binary readout. That needs no edge to justify — it avoids a coin flip.
+#
+# TWO API TRAPS, both hit while wiring this:
+#   1. The filter params are announced_date_min/max and target_date_min/max.
+#      Guessing `date=` or `min_date=` returns 2021 rows with a 200 — the
+#      endpoint ignores unknown params rather than erroring.
+#   2. target_date is often FUZZY: "2026-H2", "2027-Q1", "2026-MID". Only ISO
+#      dates are actionable; the rest are filtered out of the alert.
+# ---------------------------------------------------------------------------
+FDA_LOOKAHEAD_DAYS = 14
+
+# Publish once a day, at or after this LOCAL time. 09:00 puts it half an hour
+# after the open — past the opening noise, while there is still a session left
+# to act on a name that has a readout coming.
+#
+# The day key is the LOCAL date, not UTC. datetime.utcnow() rolls over at 19:00
+# CDT, so a UTC key would let the alert re-fire the same trading afternoon. It
+# happens to be masked right now by the market-hours guard ending at 15:05,
+# which is exactly the kind of latent bug that surfaces the day a schedule
+# changes.
+FDA_PUBLISH_AFTER_HOUR = 9
+
+
+def _iso_date(v) -> Optional[str]:
+    """Return YYYY-MM-DD only if the value really is one. Rejects 2026-H2 etc."""
+    t = str(v or "")[:10]
+    if len(t) != 10 or t[4] != "-" or t[7] != "-":
+        return None
+    try:
+        from datetime import date as _d
+        _d.fromisoformat(t)
+        return t
+    except Exception:
+        return None
+
+
+def fda_catalysts(held: List[str]) -> List[Dict]:
+    """Dated FDA catalysts inside the look-ahead window."""
+    import requests
+    from datetime import date as _d, timedelta as _td
+    key = os.getenv("UW_API_KEY")
+    if not key:
+        return []
+    today = _d.today()
+    hi = today + _td(days=FDA_LOOKAHEAD_DAYS)
+    try:
+        r = requests.get(f"{BASE}/market/fda-calendar",
+                         params={"target_date_min": today.isoformat(),
+                                 "target_date_max": hi.isoformat(), "limit": 100},
+                         headers={"Authorization": f"Bearer {key}",
+                                  "Accept": "application/json"}, timeout=20)
+        rows = r.json().get("data") or [] if r.status_code == 200 else []
+    except Exception:
+        return []
+
+    heldset = {h.upper() for h in held}
+    out = []
+    for x in rows:
+        d = _iso_date(x.get("target_date"))
+        if not d or not (today.isoformat() <= d <= hi.isoformat()):
+            continue
+        tk = str(x.get("ticker") or "").upper()
+        out.append({
+            "ticker": tk, "date": d,
+            "days": (_d.fromisoformat(d) - today).days,
+            "event": _clean(x.get("event_type"))[:40],
+            "drug": _clean(x.get("drug"))[:28],
+            "held": tk in heldset,
+            "has_options": bool(x.get("has_options")),
+        })
+    # Held names first, then soonest.
+    out.sort(key=lambda z: (not z["held"], z["days"]))
+    out = out[:15]
+    # Attach the market's expected move to the event (one call per ticker,
+    # deduplicated — several catalysts can share a ticker).
+    cache: Dict[str, Optional[float]] = {}
+    for it in out:
+        t = it["ticker"]
+        if t not in cache:
+            cache[t] = expected_move(t, max(it["days"], 1))
+        it["exp_move"] = cache[t]
+    return out
+
+
+def expected_move(ticker: str, horizon_days: int) -> Optional[float]:
+    """
+    The market's own expected move to the event, as a fraction.
+
+    WHY NOT FinBERT FOR THIS
+    FinBERT scores SENTIMENT of text. A scheduled PDUFA date has no sentiment —
+    the event has not happened, and "PDUFA Date for zidesamtinib" is neutral by
+    construction. FinBERT also has no clinical knowledge: it cannot tell a
+    pivotal Phase 3 readout from a label expansion. Asking it for "significance"
+    would produce a confident number with nothing behind it.
+
+    Implied move is the opposite: thousands of participants pricing a KNOWN
+    binary date with real money. It is already a significance score, and it is
+    the best magnitude estimator on this data — the vol-forecast test gave a
+    ridge model the most favourable possible target and implied still won
+    (test rho 0.522 vs 0.512 model vs 0.466 trailing RV).
+
+    /interpolated-iv is used rather than the screener because it is per-ticker
+    (small caps like NUVL fall outside the screener's top rows) and returns IV
+    at FIXED day horizons, so the node nearest the event can be picked.
+    """
+    import requests
+    key = os.getenv("UW_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.get(f"{BASE}/stock/{ticker}/interpolated-iv",
+                         headers={"Authorization": f"Bearer {key}",
+                                  "Accept": "application/json"}, timeout=15)
+        rows = r.json().get("data") or [] if r.status_code == 200 else []
+    except Exception:
+        return None
+    best, gap = None, None
+    for row in rows:
+        d = _f(row.get("days"))
+        im = _f(row.get("implied_move_perc"))
+        if d is None or im is None or d <= 0 or im <= 0:
+            continue
+        g = abs(d - horizon_days)
+        if gap is None or g < gap:
+            best, gap = (d, im), g
+    if not best:
+        return None
+    d, im = best
+    # sqrt-time rescale when no node lands on the event horizon
+    return im * math.sqrt(horizon_days / d) if d != horizon_days else im
+
+
+def build_fda_embed(items: List[Dict]) -> Dict:
+    held_n = sum(1 for i in items if i["held"])
+    lines = []
+    for i in items:
+        mark = " ⚠️HELD" if i["held"] else ""
+        em = i.get("exp_move")
+        move = f" · **±{em*100:.1f}%** priced" if em else ""
+        lines.append(f"`{i['ticker']:<6}` {i['date']} (+{i['days']}d){mark} · "
+                     f"{i['event']} · {i['drug']}{move}")
+    # Ranked by what the market thinks is at stake, not by our guess.
+    lines.append("")
+    lines.append("_±% is the options market's expected move to the event date —"
+                 " its own significance score._")
+    return {
+        "title": f"🧪 FDA Catalysts — next {FDA_LOOKAHEAD_DAYS}d ({len(items)}"
+                 f"{', ' + str(held_n) + ' HELD' if held_n else ''})",
+        "description": "\n".join(lines)[:3900],
+        "color": 15105570 if held_n else 3447003,
+        "timestamp": datetime.utcnow().isoformat(),
+        "footer": {"text": "binary events — best used as a VETO (do not hold "
+                           "through a readout), not as a signal"},
+    }
+
+
 def _load_state() -> Dict:
     import json
     try:
@@ -492,6 +657,20 @@ def main() -> int:
             state.setdefault("insider_sent", []).append(key)
             sent_any = True
             print(f"  insider buy sent: {it['symbol']} ${it['disc']:,.0f}")
+
+    # 1c. FDA CATALYSTS — once per LOCAL day, at or after FDA_PUBLISH_AFTER_HOUR.
+    now_local = datetime.now()
+    today_str = now_local.strftime("%Y-%m-%d")
+    if state.get("fda_day") != today_str and now_local.hour >= FDA_PUBLISH_AFTER_HOUR:
+        cats = fda_catalysts(held)
+        if cats and post_embed(build_fda_embed(cats)):
+            state["fda_day"] = today_str
+            sent_any = True
+            print(f"  fda catalysts sent: {len(cats)} "
+                  f"({sum(1 for c in cats if c['held'])} held)")
+        elif not cats:
+            state["fda_day"] = today_str      # nothing dated; do not retry all day
+            print("  fda: no dated catalysts in window")
 
     # 2. CONSOLIDATED — only every DIGEST_EVERY_MIN.
     mins = _minutes_since(state.get("last_digest"))
