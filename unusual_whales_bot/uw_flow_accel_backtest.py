@@ -48,6 +48,38 @@ THE BAR, DECLARED BEFORE THE RUN
   2. majority of tickers show a positive interaction
   3. at least one regime individually reaches |t| >= 2
 All three, or it is a null.
+
+RESULT — FAILS ALL THREE. 12 tickers, 456 ticker-days, 3,251 events.
+
+    regime           n     mean %       t    hit%
+    ALL           3251    -0.0001   -0.02   49.5%
+    short gamma    737    -0.0035   -0.37   49.0%
+    long gamma    2514    +0.0017   +0.29   49.6%
+
+    INTERACTION (short - long): -0.0052%   t -0.46
+    (1) FAIL (t=-0.46)   (2) FAIL (3/7)   (3) FAIL
+
+Not an underpowered "cannot tell" - 3,251 non-overlapping events is enough
+to say this is flat. Three details worth keeping:
+
+  the interaction has the WRONG SIGN. The mechanism predicts short-gamma
+    extension minus long-gamma absorption should be POSITIVE; it is negative.
+    Noise, but not noise leaning the predicted way.
+  hit rates are 49.0 / 49.6 / 49.5% - coin flips in BOTH regimes.
+  effect sizes are ~0.5 basis points, an order of magnitude inside the spread
+    on these names. Untradeable even if real.
+
+WHAT THIS CLOSES
+The conditional framing was the strongest surviving explanation for why the
+original flow test nulled - that flow works in both directions and an
+unconditional test averages them to zero. That explanation is now tested and
+does not hold. Flow -> direction is dead at the LEVEL and at the
+ACCELERATION, CONDITIONED and UNCONDITIONED.
+
+INCIDENTAL, worth knowing before designing anything else on this split
+Long gamma dominates 77% of ticker-days (2,514 vs 737), so the short-gamma
+arm is always the sample-starved half. Five of twelve tickers came back too
+thin to compute both arms at all.
 """
 
 import argparse
