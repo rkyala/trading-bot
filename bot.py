@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-MEAN-REVERSION TRADING BOT with Autonomous Learning
+SHORT-TERM CONTINUATION TRADING BOT with Autonomous Learning
+(was labelled MEAN-REVERSION; the label contradicted the trade — see stage-2 prompt)
 Opus 4.8 + Adaptive Thinking + Multi-layer Caching + Real-time RL
 
 Mean-reversion strategy:
@@ -69,7 +70,9 @@ finrl_enabled = False  # Force disable to unblock BB+Fibonacci strategy
 TOTAL_BUDGET = 10000
 MAX_POSITION = 600  # Optimized: increased from 500 (backtest +8.66% ROI)
 DAILY_LOSS_LIMIT_PCT = 5.0
-CONFIDENCE_THRESHOLD = 55  # Mean-reversion setup confidence (60% → 55% for more frequent trades)
+CONFIDENCE_THRESHOLD = 55  # Spike-continuation setup. Kept at 55 so the weak
+# +5-6% band can still trade at low size; the >8% veto now does the filtering that
+# a higher threshold used to approximate.
 
 # Mean-reversion dip-buy parameters (backtested +8.66% ROI over 3 months)
 SPIKE_MIN_PCT = 5.0  # Detect spikes 5-8%
@@ -962,49 +965,68 @@ def stage2_sonnet_analysis(client, state, candidates, cache=None):
             max_tokens=1500,
             system=[{
                 "type": "text",
-                "text": """MEAN-REVERSION analyzer: Score overbought movers (spiked +5-8% today) for pullback reversal probability.
+                "text": """SHORT-TERM CONTINUATION analyzer: score movers that spiked +6-8% today for
+follow-through over the next 1-3 sessions.
 
-SETUP: Buy spike-day pullbacks, exit at +0.75% (50%) and +2% (50%). Stop at -1.5%. Hold 1-3 days.
+This is a LONG continuation trade, not mean reversion. The previous framing asked you to
+judge whether an overbought move would "revert to the mean" and then BUY it targeting a
+further +2% — reverting from overbought means the price FALLS, so the reasoning
+contradicted the trade. Measured on 115 sessions x 500 names, day-neutral and market-
+adjusted, the trade the bot actually places is continuation and it is the reasoning that
+was wrong.
 
-SCORING:
-- +6-8% spike: 70-80
-- +5-6% spike: 60-70
-- +5% + RSI>70/VWAP extended: 60-65
-- +5% alone: 55-60
+WHAT THE DATA SAYS (non-overlapping windows, excess return over SPY):
+  +6 to 8% spike : 1d +0.52% (t+3.8), 3d +1.63% (t+4.3)   <- the setup
+  +5 to 6% spike : 1d +0.10% (t+0.7), 3d +0.61% (t+1.4)   <- weak, size down
+  above +8%      : 5d -2.89% (t-4.2)                       <- REVERSES HARD, do not buy
 
-SKIP: <+2% moves, low volume, earnings risk, continued strength.
+Caveat carried deliberately: split in half by time, the effect decayed from +0.76% (t+4.0)
+to +0.24% (t+1.2) at 1d. It replicates in sign but not in strength, so treat confidence as
+modest and do not size aggressively on it.
+
+SETUP: buy on the spike day, exit +0.75% (50%) and +2% (50%), stop -1.5%, hold 1-3 days.
+Holding past day 3 gives back the edge; the 5-day column is negative for every spike bucket.
+
+SCORING (bands follow the measured effect, strongest setup scores highest):
+- +6-8% spike: 70-80   <- the only bucket with a significant measured edge
+- +5-6% spike: 55-65   <- weak (t+0.7 at 1d); tradeable but size down
+- above +8%:   VETO    <- reverses hard by day 5 (-2.89%, t-4.2). Never buy.
+- RSI>70 / VWAP extended: treat as CONTEXT, not confirmation. These describe how far
+  the move already went; they do not add measured predictive value on their own, and
+  the old prompt used them to RAISE confidence on the theory that more overbought
+  meant more reversal — which is backwards for a long.
+
+SKIP: moves above +8%, moves under +5%, low volume, earnings risk.
 
 OUTPUT: Top 3 candidates, score ≥60 minimum. Include regime (bull/bear/choppy/rotation). Return JSON only.""",
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
-                "content": f"""Analyze these daily movers for MEAN-REVERSION dip-buying opportunities:
+                "content": f"""Analyze these daily movers for SHORT-TERM CONTINUATION (1-3 day long trades):
 
 {candidates_text}{candidates_text_note}{learning_context}
 
-Your analysis should assess each stock for mean-reversion probability using:
-1. Market Regime: Bull/bear/choppy/rotation? (extreme moves in choppy markets revert faster)
-2. Spike Magnitude: How far up did it go? (+5% = moderate, +6-8% = strong overbought)
-   - Larger spikes = higher reversal probability
-3. Technical Overbought Assessment (if available):
-   - RSI > 70 = overbought, increases confidence
-   - Price > 2% above VWAP = extended, increases confidence
-   - These are CONFIRMING signals, not required
-4. Reversal Probability: Will this overbought move revert to mean within 3-5 days?
-   - +6-8% spike = 70-80 confidence (very likely to revert)
-   - +5-6% spike = 60-70 confidence (likely to revert)
-   - +5% spike = 55-65 confidence (moderate reversion probability)
-5. Historical Pattern: Does this symbol mean-revert normally? (Tech/growth tends to revert faster)
+Assess each stock for 1-3 day CONTINUATION after today's up-move:
+1. Market Regime: bull/bear/choppy/rotation. Continuation is weaker in choppy tape.
+2. Spike Magnitude — this is the primary variable and it is NOT monotonic:
+   - +6 to 8%  = the setup. Measured +0.52% (1d) and +1.63% (3d) excess over SPY.
+   - +5 to 6%  = weak. +0.10% (1d), t+0.7. Tradeable but score low and size down.
+   - above +8% = VETO. Measured -2.89% by day 5 (t-4.2). Bigger is NOT better here;
+     the effect inverts. Do not score these, do not buy them.
+3. Technical context (RSI, VWAP extension) — report it, but do NOT let it raise
+   confidence. It tells you how far the move already ran, not whether it continues.
+4. Liquidity and earnings: skip thin names and anything reporting inside the hold.
 
-Score all candidates >= 55. BUY candidates TODAY (spike day). Exit on +0.75% partial, +2% full.
+Score only +5-8% candidates, >= 55. BUY TODAY (spike day). Exit +0.75% partial, +2% full,
+stop -1.5%, and be out by day 3 — the 5-day return is negative for every spike bucket.
 
 CRITICAL - MANDATORY OUTPUT:
 After your analysis, you MUST output valid JSON. Do not just analyze - output the JSON response.
 This JSON is required for trade execution. Always include at least an empty decisions array.
 
 Return JSON (REQUIRED):
-{{"regime": "bull/bear/choppy/rotation", "strategy": "mean_reversion_spike_day", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% (overbought today), high reversal probability within 1-3 days to +2%", "action": "BUY", "hold_days": "1-3", "target_pct": 2}}], "next_interval_seconds": 1800}}"""
+{{"regime": "bull/bear/choppy/rotation", "strategy": "spike_continuation_1_3d", "decisions": [{{"symbol": "XYZ", "confidence": 72, "reason": "up +7% today, in the +6-8% continuation band, targeting follow-through within 1-3 days", "action": "BUY", "hold_days": "1-3", "target_pct": 2}}], "next_interval_seconds": 1800}}"""
             }],
         )
         
