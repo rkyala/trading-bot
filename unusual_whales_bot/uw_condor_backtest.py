@@ -110,6 +110,7 @@ class CondorBacktest:
         self.max_skew = max_skew
         self.min_dte, self.max_dte = min_dte, max_dte
         self._barcache: Dict[str, Optional[Dict]] = {}
+        self._sigma_width = 0.5   # wing width as a fraction of one expected-move sigma
         self.t = ticker.upper()
         self.s = requests.Session()
         key = os.getenv("UW_API_KEY")
@@ -211,7 +212,10 @@ class CondorBacktest:
             if not k or op is None or op <= 0 or typ not in ("call", "put"):
                 continue
             out.append({"strike": k, "type": typ, "open": op, "expiry": exp,
-                        "close": _f(x.get("close")), "delta": _f(x.get("delta"))})
+                        "close": _f(x.get("close")), "delta": _f(x.get("delta")),
+                        # PREVIOUS session's IV — knowable at entry. prev_iv +
+                        # iv_change would be the EOD value and is look-ahead.
+                        "prev_iv": _f(x.get("prev_iv"))})
         return out
 
     def collect(self, days_back: int) -> Dict:
@@ -311,7 +315,43 @@ class CondorBacktest:
         """
         ch, w = rec["chain"], rec["walls"]
         spot = rec["bar"]["open"]
-        if mode == "walls":
+        sigma = 0.0
+        if mode == "sigma":
+            # VOLATILITY-NORMALISED STRIKES.
+            #
+            # A fixed 1% OTM is NOT the same trade across instruments. Measured
+            # on the fixed-percentage version, credit/width came out at SPY
+            # 28.4%, QQQ 41.2%, IWM 43.7% — i.e. 1% sits much closer to the
+            # money on the more volatile names, so they breach more and collect
+            # more. SPY only looked profitable because 1% happened to sit
+            # further out in vol-adjusted terms over that window. That is a
+            # strike-selection accident, not an edge, and it is why the result
+            # died out-of-sample.
+            #
+            # Placing shorts a fixed number of expected-move sigmas away makes
+            # the structure genuinely identical across instruments.
+            # .get() rather than [] — panels cached before prev_iv was captured
+            # would otherwise KeyError instead of degrading cleanly.
+            # VOLATILITY SOURCE: the PREVIOUS session's iv30d, attached to the
+            # panel record. Two sources were tried first and rejected:
+            #   prev_iv on the chain — populated ONLY on the most recent
+            #     session; null on every historical date, so it does not exist
+            #     for a backtest.
+            #   iv30d for day D itself — that is the day's CLOSING implied vol,
+            #     so using it to pick strikes at the open is look-ahead.
+            iv = rec.get("prev_iv30")
+            if not iv or iv <= 0:
+                self.stats["no_iv"] += 1
+                return None
+            try:
+                hold = max((date.fromisoformat(rec["expiry"])
+                            - date.fromisoformat(day)).days, 1)
+            except Exception:
+                hold = 5
+            sigma = iv * math.sqrt(hold / 365.0) * spot     # expected move, $
+            sc = self._nearest(ch, "call", spot + otm_pct * sigma, above=True)
+            sp = self._nearest(ch, "put", spot - otm_pct * sigma, above=False)
+        elif mode == "walls":
             # Clamp to the OTM side of spot so the result is a real condor.
             sc = self._nearest(ch, "call", max(w["call_wall"], spot), above=True)
             sp = self._nearest(ch, "put", min(w["put_wall"], spot), above=False)
@@ -338,8 +378,12 @@ class CondorBacktest:
         if max(up, dn) > self.max_skew * max(min(up, dn), 1e-9):
             self.stats["too_asymmetric"] += 1
             return None
-        lc = self._nearest(ch, "call", sc["strike"] + width, above=True)
-        lp = self._nearest(ch, "put", sp["strike"] - width, above=False)
+        # Wings scale with sigma too in sigma mode. A fixed $5 wing is 0.65%
+        # of SPY but 2.1% of IWM, so leaving it fixed would reintroduce exactly
+        # the cross-instrument mismatch the sigma strikes are there to remove.
+        eff_width = (self._sigma_width * sigma) if mode == "sigma" else width
+        lc = self._nearest(ch, "call", sc["strike"] + eff_width, above=True)
+        lp = self._nearest(ch, "put", sp["strike"] - eff_width, above=False)
         if not lc or not lp:
             return None
         if lc["strike"] <= sc["strike"] or lp["strike"] >= sp["strike"]:
@@ -352,8 +396,9 @@ class CondorBacktest:
         # structure whose realised width misses the target by more than half.
         cw = lc["strike"] - sc["strike"]
         pw = sp["strike"] - lp["strike"]
-        if not (0.5 * width <= cw <= 1.5 * width) or \
-           not (0.5 * width <= pw <= 1.5 * width):
+        tw = eff_width
+        if not (0.5 * tw <= cw <= 1.5 * tw) or \
+           not (0.5 * tw <= pw <= 1.5 * tw):
             self.stats["bad_wing_width"] += 1
             return None
         return {"sc": sc, "lc": lc, "sp": sp, "lp": lp}
