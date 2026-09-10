@@ -22,12 +22,12 @@ set -e
 # Same reason sentiment_worker.py is a sidecar.
 BACKEND="${SENTIMENT_BACKEND:-lexicon}"
 if [ "$BACKEND" = "finbert" ]; then
-    PYTHON="/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/venv_sentiment/bin/python"
+    PYTHON="/Users/ramayalala/trading_bot_uw/venv_sentiment/bin/python"
 else
     PYTHON="/Library/Frameworks/Python.framework/Versions/3.9/bin/python3"
 fi
 
-cd "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot"
+cd "/Users/ramayalala/trading_bot_uw"
 
 # ---------------------------------------------------------------------------
 # MARKET-HOURS GUARD.

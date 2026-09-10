@@ -16,7 +16,7 @@ set -e
 # ---------------------------------------------------------------------------
 PYTHON="/Library/Frameworks/Python.framework/Versions/3.9/bin/python3"
 
-cd "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot"
+cd "/Users/ramayalala/trading_bot_uw"
 
 if [ ! -x "$PYTHON" ]; then
     echo "[$(date)] ERROR: interpreter not found at $PYTHON — refusing to start" >&2

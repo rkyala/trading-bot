@@ -19,7 +19,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/start_uw_bot.sh</string>
+        <string>/Users/ramayalala/trading_bot_uw/start_uw_bot.sh</string>
     </array>
 
     <!-- 08:30 local time, Monday(1) through Friday(5). -->
@@ -78,13 +78,13 @@
     -->
 
     <key>WorkingDirectory</key>
-    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot</string>
+    <string>/Users/ramayalala/trading_bot_uw</string>
 
     <!-- Launcher output only. The bot's own output goes to logs/uw_bot_<ts>.log. -->
     <key>StandardOutPath</key>
-    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/launchd_uw_bot.log</string>
+    <string>/Users/ramayalala/trading_bot_uw/logs/launchd_uw_bot.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/launchd_uw_bot.log</string>
+    <string>/Users/ramayalala/trading_bot_uw/logs/launchd_uw_bot.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

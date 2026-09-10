@@ -18,7 +18,7 @@
     -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/run_news_digest.sh</string>
+        <string>/Users/ramayalala/trading_bot_uw/run_news_digest.sh</string>
     </array>
 
     <!--
@@ -44,12 +44,12 @@
     <false/>
 
     <key>WorkingDirectory</key>
-    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot</string>
+    <string>/Users/ramayalala/trading_bot_uw</string>
 
     <key>StandardOutPath</key>
-    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/news_digest.log</string>
+    <string>/Users/ramayalala/trading_bot_uw/logs/news_digest.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/news_digest.log</string>
+    <string>/Users/ramayalala/trading_bot_uw/logs/news_digest.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
