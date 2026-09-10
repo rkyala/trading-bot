@@ -53,3 +53,5 @@ uw_confirmation_ab.jsonl
 !archive/*/data/*.json
 archive/*/data/screened_alerts.jsonl
 archive/*/logs/
+venv_sentiment/
+.news_digest_state.json

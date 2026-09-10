@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.trading.newsdigest</string>
+
+    <!--
+      News digest sidecar. Runs OUTSIDE the bot's 300s loop so model latency can
+      never sit between a signal and an order, and a crash here cannot take the
+      trading loop down.
+
+      /news/headlines caps at 100 rows, has no pagination, and silently ignores
+      `date` - so the feed is today-only and anything that falls off the buffer
+      is gone. Measured 2026-09-10: 100 headlines spanned 84 minutes (1.2/min).
+      Polling every 5 min keeps a wide margin against news bursts at the open,
+      on FOMC days and into the close.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/run_news_digest.sh</string>
+    </array>
+
+    <!--
+      Every 5 minutes. The market-hours guard lives in run_news_digest.sh, which
+      exits immediately outside Mon-Fri 08:25-15:05 CDT. StartInterval replaces
+      what was 70 StartCalendarInterval entries.
+
+      POLLING is 5 min; POSTING is not. The consolidated digest goes out every
+      30 min (DIGEST_EVERY_MIN); only an URGENT headline - high score on a HELD
+      name, or is_major above a higher bar - posts immediately. A channel that
+      fires every five minutes gets ignored, which defeats the purpose.
+    -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!--
+      This job runs to completion rather than daemonising, so it does NOT need
+      AbandonProcessGroup the way com.trading.uwbot does (that one spawns the
+      bot with `nohup &` and exits, and without the key launchd SIGKILLs the
+      bot about a second later).
+    -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/news_digest.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/news_digest.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!--
+          finbert | lexicon. FinBERT runs from venv_sentiment (Python 3.10,
+          torch 2.14) - run_news_digest.sh selects that interpreter when this is
+          "finbert". It is a SEPARATE venv from the trading interpreter on
+          purpose: installing torch beside the bot risked pip downgrading numpy
+          under pandas while the bot held live positions.
+        -->
+        <key>SENTIMENT_BACKEND</key>
+        <string>finbert</string>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>
