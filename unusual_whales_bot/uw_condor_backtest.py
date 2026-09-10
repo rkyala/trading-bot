@@ -344,6 +344,18 @@ class CondorBacktest:
             return None
         if lc["strike"] <= sc["strike"] or lp["strike"] >= sp["strike"]:
             return None
+        # WING WIDTH GUARD. _nearest() takes the closest listed strike beyond
+        # the target, which on a sparse chain can sit far past it — silently
+        # building a much wider, much riskier spread than requested. QQQ showed
+        # a -$1,078 loss on a nominally $5-wide condor, where max loss is
+        # capped at $500 minus credit; the wings were not $5 apart. Reject any
+        # structure whose realised width misses the target by more than half.
+        cw = lc["strike"] - sc["strike"]
+        pw = sp["strike"] - lp["strike"]
+        if not (0.5 * width <= cw <= 1.5 * width) or \
+           not (0.5 * width <= pw <= 1.5 * width):
+            self.stats["bad_wing_width"] += 1
+            return None
         return {"sc": sc, "lc": lc, "sp": sp, "lp": lp}
 
     def settle(self, legs: Dict, close: float, friction: float) -> Dict:
