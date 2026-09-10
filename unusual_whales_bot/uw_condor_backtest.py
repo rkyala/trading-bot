@@ -109,6 +109,7 @@ class CondorBacktest:
         import requests
         self.max_skew = max_skew
         self.min_dte, self.max_dte = min_dte, max_dte
+        self._barcache: Dict[str, Optional[Dict]] = {}
         self.t = ticker.upper()
         self.s = requests.Session()
         key = os.getenv("UW_API_KEY")
@@ -119,22 +120,35 @@ class CondorBacktest:
 
     # ------------------------------------------------------------------ data
 
-    def bars(self) -> Dict[str, Dict]:
-        """Underlying daily OHLC, regular session only."""
+    def bar(self, day: str) -> Optional[Dict]:
+        """
+        One session's OHLC, fetched per-day and cached.
+
+        The bulk /ohlc/1d fetch is capped at 756 rows = 252 REGULAR sessions =
+        exactly one year, which silently limited the sample. /ohlc/1d?date=
+        returns that specific session and works at least 730 days back, so the
+        window is bounded by the option chain (~2 years) rather than by bars.
+        """
+        if day in self._barcache:
+            return self._barcache[day]
+        out = None
         try:
             d = self.s.get(f"{BASE}/stock/{self.t}/ohlc/1d",
-                           params={"limit": 800}, timeout=30).json().get("data", [])
+                           params={"date": day, "limit": 10}, timeout=25
+                           ).json().get("data", [])
         except Exception:
-            return {}
-        out = {}
+            d = []
         for b in d or []:
             if b.get("market_time") not in (None, "r"):
                 continue
-            day = str(b.get("date") or b.get("start_time"))[:10]
+            if str(b.get("date") or b.get("start_time"))[:10] != day:
+                continue          # the endpoint can return adjacent sessions
             o, c = _f(b.get("open")), _f(b.get("close"))
             if o and c and o > 0:
-                out[day] = {"open": o, "high": _f(b.get("high"), c),
-                            "low": _f(b.get("low"), c), "close": c}
+                out = {"open": o, "high": _f(b.get("high"), c),
+                       "low": _f(b.get("low"), c), "close": c}
+                break
+        self._barcache[day] = out
         return out
 
     def walls(self, day: str) -> Optional[Dict]:
@@ -201,15 +215,11 @@ class CondorBacktest:
         return out
 
     def collect(self, days_back: int) -> Dict:
-        bars = self.bars()
-        if not bars:
-            print("no underlying bars")
-            return {}
         today = date.today()
         days, i = [], 1
-        while len(days) < days_back and i < days_back * 2 + 40:
+        while len(days) < days_back and i < days_back * 2 + 60:
             d = today - timedelta(days=i)
-            if d.weekday() < 5 and d.isoformat() in bars:
+            if d.weekday() < 5:
                 days.append(d.isoformat())
             i += 1
         days.sort()
@@ -223,6 +233,9 @@ class CondorBacktest:
             # previous position has expired makes each trade independent.
             if skip_until and day <= skip_until:
                 continue
+            bar = self.bar(day)
+            if not bar:
+                continue                      # holiday or missing session
             ch = self.chain_dte(day, self.min_dte, self.max_dte)
             if len(ch) < 8:
                 self.stats["no_0dte_chain"] += 1
@@ -232,12 +245,13 @@ class CondorBacktest:
                 self.stats["no_walls"] += 1
                 continue
             exp = min(c["expiry"] for c in ch)
-            if exp not in bars:
+            ebar = self.bar(exp)
+            if not ebar:
                 self.stats["no_expiry_bar"] += 1
                 continue
-            panel[day] = {"bar": bars[day], "chain": [c for c in ch if c["expiry"] == exp],
+            panel[day] = {"bar": bar, "chain": [c for c in ch if c["expiry"] == exp],
                           "walls": w, "gamma": self.gamma(day),
-                          "expiry": exp, "expiry_bar": bars[exp]}
+                          "expiry": exp, "expiry_bar": ebar}
             skip_until = exp
             self.stats["days_ok"] += 1
             if n % 20 == 0:
@@ -472,8 +486,13 @@ def render(bt: CondorBacktest, panel: Dict, args) -> None:
               f"{(w['total'] if w else 0):>+14.0f}{(d['total'] if d else 0):>+14.0f}")
 
     # ---- tail ----------------------------------------------------------
-    wt = keep.get("walls, all days") or []
+    # Report the tail of the SYMMETRIC variant, not walls. Hardcoding "walls"
+    # printed a median of -$24 next to a 73.5% win rate, because those numbers
+    # came from two different strategies.
+    otm_key = next((k for k in keep if "OTM, all days" in k), None)
+    wt = (keep.get(otm_key) if otm_key else None) or keep.get("walls, all days") or []
     if wt:
+        print(f"  (tail below is for: {otm_key or 'walls, all days'})")
         p = sorted(t["pnl"] * MULT for t in wt)
         n = len(p)
         avg_credit = st.mean([t["credit"] for t in wt]) * MULT
