@@ -319,6 +319,68 @@ def append_log(rows: List[Dict]) -> int:
     return n
 
 
+# ---------------------------------------------------------------------------
+# INSIDER BUY ALERTS
+#
+# NOT a trading signal. The 21-day backtest on a 500-ticker screener universe
+# came back NULL (buys +1.67%, t+1.25, drop-one-ticker worst t+0.98), and an
+# earlier t+2.92 collapsed once the universe was not hand-picked. So this is
+# the same category as the news digest: a human should see a CEO putting $10M
+# of their own money into their own stock, whether or not it predicts a return.
+#
+# Only DISCRETIONARY buys count. UW pre-computes the split, and most insider
+# activity is pre-scheduled 10b5-1 — a plan set six months ago carries no
+# information about today, so premium_10b5 is subtracted out.
+# ---------------------------------------------------------------------------
+INSIDER_MIN_BUY = 1_000_000     # discretionary dollars; below this is noise
+
+
+def insider_buys(symbols: List[str]) -> List[Dict]:
+    """Today's large discretionary insider BUYS on the given tickers."""
+    import requests
+    from datetime import date as _date
+    key = os.getenv("UW_API_KEY")
+    if not key or not symbols:
+        return []
+    today = _date.today().isoformat()
+    out = []
+    for sym in symbols[:25]:                 # bound the work per run
+        try:
+            r = requests.get(f"{BASE}/insider/{sym}/ticker-flow",
+                             params={"limit": 5},
+                             headers={"Authorization": f"Bearer {key}",
+                                      "Accept": "application/json"},
+                             timeout=15)
+            if r.status_code != 200:
+                continue
+            for row in (r.json().get("data") or []):
+                if str(row.get("date") or "")[:10] != today:
+                    continue
+                prem = _f(row.get("premium"), 0.0)
+                p10 = _f(row.get("premium_10b5"), 0.0)
+                disc = prem - p10            # the informative portion
+                if disc >= INSIDER_MIN_BUY:
+                    out.append({"symbol": sym, "disc": disc,
+                                "insiders": int(_f(row.get("uniq_insiders"), 0) or 0),
+                                "price": _f(row.get("avg_price"), 0.0)})
+        except Exception:
+            continue
+    return sorted(out, key=lambda x: -x["disc"])
+
+
+def build_insider_embed(it: Dict) -> Dict:
+    return {
+        "title": f"💰 INSIDER BUY — {it['symbol']}  ${it['disc']:,.0f}",
+        "description": (f"{it['insiders']} insider(s) bought "
+                        f"~${it['disc']:,.0f} discretionary "
+                        f"(10b5-1 excluded) around ${it['price']:,.2f}"),
+        "color": 3066993,
+        "timestamp": datetime.utcnow().isoformat(),
+        "footer": {"text": "open-market, non-10b5-1 · context only — the "
+                           "21-day backtest on this was null"},
+    }
+
+
 def _load_state() -> Dict:
     import json
     try:
@@ -333,6 +395,7 @@ def _save_state(st: Dict) -> None:
     try:
         # Cap the urgent history so the file cannot grow without bound.
         st["urgent_sent"] = st.get("urgent_sent", [])[-400:]
+        st["insider_sent"] = st.get("insider_sent", [])[-200:]
         with open(STATE_PATH, "w") as fh:
             json.dump(st, fh)
     except Exception as e:
@@ -418,6 +481,17 @@ def main() -> int:
             state.setdefault("urgent_sent", []).append(u["headline"])
             sent_any = True
             print(f"  urgent sent: {u['sent']:+.2f} {u['headline'][:60]}")
+
+    # 1b. INSIDER BUYS on held names — same urgency class as position news.
+    seen_ins = set(state.get("insider_sent", []))
+    for it in insider_buys(held):
+        key = f"{it['symbol']}:{it['disc']:.0f}"
+        if key in seen_ins:
+            continue
+        if post_embed(build_insider_embed(it)):
+            state.setdefault("insider_sent", []).append(key)
+            sent_any = True
+            print(f"  insider buy sent: {it['symbol']} ${it['disc']:,.0f}")
 
     # 2. CONSOLIDATED — only every DIGEST_EVERY_MIN.
     mins = _minutes_since(state.get("last_digest"))

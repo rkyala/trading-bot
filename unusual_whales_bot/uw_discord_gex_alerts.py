@@ -111,14 +111,35 @@ class GEXDiscordAlerts:
 🟢 **CALL WALL**: ${call_wall:.2f}
 """
 
-        # Add distance info
+        # SIGN FIX (2026-09-10). This read ((gamma_flip - price) / price), i.e.
+        # where the FLIP sits relative to PRICE — so it printed NEGATIVE exactly
+        # when price was ABOVE the flip, contradicting the zone label directly
+        # above it. A live alert read "below flip -> above flip" next to
+        # "Distance to Flip: -0.38%" while SPY was +0.38% above its flip.
         if price > 0:
-            distance_to_flip = ((gamma_flip - price) / price * 100) if price else 0
+            distance_to_flip = ((price - gamma_flip) / gamma_flip * 100) if gamma_flip else 0
             distance_to_call = ((call_wall - price) / price * 100) if price else 0
 
+            # WHAT THE REGIME MEANS, since the zone name alone is not actionable.
+            # Measured on this project, dealer gamma predicts move MAGNITUDE, not
+            # direction: SPY realised 0.53% at high gamma vs 0.87% at low (t+2.9),
+            # surviving a trailing-vol control. Direction from gamma has NEVER
+            # measured here — GEX-timed vol was null (all |t|<1) and gamma walls
+            # as barriers failed (t+1.98 pooled, then AMD alone was 70% of it).
+            # So this line describes EXPECTED MOVE SIZE and nothing more.
+            if distance_to_flip >= 0:
+                regime = ("long gamma — dealer hedging DAMPENS moves; expect "
+                          "smaller ranges and mean reversion toward the magnet")
+            else:
+                regime = ("short gamma — dealer hedging AMPLIFIES moves; expect "
+                          "larger ranges and trend extension")
+
             description += f"""
-**Distance to Flip**: {distance_to_flip:+.2f}%
+**Distance to Flip**: {distance_to_flip:+.2f}% (price vs flip)
 **Distance to Call Wall**: {distance_to_call:+.2f}%
+
+**Regime**: {regime}
+_Magnitude only — gamma has never predicted DIRECTION on this data._
 """
 
         embed = {
@@ -200,21 +221,46 @@ class GEXDiscordAlerts:
     # ------------------------------------------------------------------
     _zone_state: Dict[str, str] = {}
     _snapshot_day: Optional[str] = None
+    _crossings_today: Dict[str, int] = {}
+
+    # A price sitting ON a level oscillates across it. Without a deadband every
+    # tick across the boundary is a "zone change": QQQ alerted at 0.02% from its
+    # flip (13 cents on $709), which will re-fire indefinitely. A crossing only
+    # counts once price is DEADBAND past the level, so re-entry must be decisive.
+    ZONE_DEADBAND_PCT = 0.15
+
+    # GEX is a STATE description, not an event: it says what the weather is, not
+    # that something happened. Broadcasting state repeatedly is how a channel
+    # becomes noise. So each ticker gets ONE opening snapshot per session, plus
+    # genuine decisive crossings, capped — on 2026-09-10 SPY and QQQ crossed
+    # their flips in OPPOSITE directions within minutes, which is mostly both
+    # sitting on their boundaries rather than two real regime changes.
+    MAX_CROSSINGS_PER_SESSION = 2
 
     @staticmethod
-    def _zone(price: float, levels: Dict) -> str:
-        """Which gamma zone the price occupies."""
+    def _zone(price: float, levels: Dict, prev: Optional[str] = None) -> str:
+        """
+        Which gamma zone the price occupies, with hysteresis.
+
+        `prev` is the last reported zone. While price is within ZONE_DEADBAND_PCT
+        of a boundary, the PREVIOUS zone is held rather than flipping.
+        """
         f = GEXDiscordAlerts.safe_float
         pw, gf, cw = f(levels.get("put_wall")), f(levels.get("gamma_flip")), f(levels.get("call_wall"))
         if not price:
             return "unknown"
-        if pw and price < pw:
-            return "below_put_wall"
-        if cw and price > cw:
-            return "above_call_wall"
-        if gf and price < gf:
-            return "below_flip"
-        return "above_flip"
+
+        def near(level):
+            return level and abs(price / level - 1.0) * 100 < GEXDiscordAlerts.ZONE_DEADBAND_PCT
+
+        raw = ("below_put_wall" if (pw and price < pw) else
+               "above_call_wall" if (cw and price > cw) else
+               "below_flip" if (gf and price < gf) else "above_flip")
+
+        # Inside the deadband of the boundary we would be crossing: hold.
+        if prev and prev != raw and (near(gf) or near(pw) or near(cw)):
+            return prev
+        return raw
 
     async def check_crossings(self, tickers: List[str] = None) -> List[str]:
         """
@@ -240,12 +286,24 @@ class GEXDiscordAlerts:
                     logger.warning(f"GEX {t}: no price, skipping (would post $0.00)")
                     continue
 
-                zone = self._zone(price, levels)
                 prev = self._zone_state.get(t)
+                zone = self._zone(price, levels, prev)
                 self._zone_state[t] = zone
 
                 if not first_of_day and (prev is None or prev == zone):
                     continue    # nothing changed — stay quiet
+
+                # Budget genuine crossings. Beyond the cap the ticker is still
+                # TRACKED (zone state updates above) but stops posting, so a
+                # name oscillating on its flip cannot dominate the channel.
+                if not first_of_day:
+                    used = self._crossings_today.get(t, 0)
+                    if used >= self.MAX_CROSSINGS_PER_SESSION:
+                        logger.info(
+                            f"GEX {t}: crossing {used + 1} suppressed "
+                            f"(cap {self.MAX_CROSSINGS_PER_SESSION}/session)")
+                        continue
+                    self._crossings_today[t] = used + 1
 
                 embed = self.format_gex_embed(t, price, levels)
                 if prev and prev != zone:
@@ -261,6 +319,7 @@ class GEXDiscordAlerts:
 
         if first_of_day:
             self._snapshot_day = today
+            self._crossings_today = {}
         return alerted
 
 
