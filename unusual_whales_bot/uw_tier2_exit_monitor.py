@@ -119,14 +119,34 @@ class Tier2ExitMonitor:
                 logger.debug(f"{symbol}: {age_min:.0f}min old, below {min_hold}min Tier 2 floor")
                 continue
 
-            # Check all 4 rules in parallel
-            signals = await asyncio.gather(
-                self._check_flow_exhaustion(symbol, monitor),
-                self._check_put_call_flip(symbol, monitor),
-                self._check_dark_pool_reversal(symbol, monitor),
-                self._check_market_tide_flip(symbol, monitor),
-                return_exceptions=True
-            )
+            # Run the ENABLED rules in parallel.
+            #
+            # Sep 10: these four toggles existed in uw_config.py but were read
+            # in exactly one place - get_exit_summary(), a reporting function.
+            # Every rule ran unconditionally regardless of its flag, so
+            # `market_tide_enabled: False` would have disabled nothing while
+            # the summary reported "market_tide": False. Same failure shape as
+            # the "Tier 2 exits: ACTIVE" banner: a control that reports its own
+            # state instead of having one.
+            #
+            # Order matters below. The loop takes the FIRST triggered signal
+            # and breaks, and asyncio.gather preserves argument order, so a
+            # rule earlier in this list supplies the exit reason when several
+            # fire at once.
+            checks = []
+            if self.cfg.get("flow_exhaustion_enabled", True):
+                checks.append(self._check_flow_exhaustion(symbol, monitor))
+            if self.cfg.get("put_call_flip_enabled", True):
+                checks.append(self._check_put_call_flip(symbol, monitor))
+            if self.cfg.get("dark_pool_enabled", True):
+                checks.append(self._check_dark_pool_reversal(symbol, monitor))
+            if self.cfg.get("market_tide_enabled", True):
+                checks.append(self._check_market_tide_flip(symbol, monitor))
+
+            if not checks:
+                continue
+
+            signals = await asyncio.gather(*checks, return_exceptions=True)
 
             # Find first triggered signal
             for signal in signals:

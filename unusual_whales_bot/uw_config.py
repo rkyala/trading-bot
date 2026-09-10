@@ -96,7 +96,29 @@ EXIT_RULES_CONFIG = {
     "flow_exhaustion_enabled": True,  # #5: 45 min no sweeps
     "put_call_flip_enabled": True,   # #1: Conviction reversal
     "dark_pool_enabled": True,        # #2: Institutional dump
-    "market_tide_enabled": True,      # #6: Macro sentiment flip
+
+    # ---------------------------------------------------------------------
+    # DISABLED Sep 10 2026 on the shadow session's own evidence.
+    #
+    # market_tide reads a MARKET-WIDE bullish ratio, so its output is the same
+    # number for every open position. It cannot discriminate between them - by
+    # construction it either exits nothing or exits the entire book.
+    #
+    # Sep 10 shadow log, 212 signals over 9 positions in 37 batches:
+    #   market_tide_flip     147  (69% of all signals)
+    #   put_call_flip         35
+    #   dark_pool_reversal    30
+    # 17 of the 37 batches signalled 8 or 9 positions AT ONCE. At 09:33:51 and
+    # again at 09:34:56, one cycle apart, it called exit on every open long.
+    # Live, that is a full liquidation of the book twice in two minutes.
+    #
+    # Raising the threshold does not fix this. The defect is that a market-wide
+    # reading is being used as a PER-POSITION exit. If this signal is worth
+    # anything it belongs upstream - as a position-size input or a market-wide
+    # entry halt - not as an exit rule. Re-enabling it as an exit without that
+    # redesign just reinstates the mass-liquidation path.
+    # ---------------------------------------------------------------------
+    "market_tide_enabled": False,     # #6: Macro sentiment flip
 
     # Thresholds
     "flow_exhaustion_minutes": 45,    # No activity for X minutes = exit
