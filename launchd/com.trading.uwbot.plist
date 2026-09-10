@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.trading.uwbot</string>
+
+    <!--
+      WHY LAUNCHD AND NOT CRON
+      Sep 10 2026: the 08:30 cron job did not fire. The Mac was asleep from
+      08:14:45 and woke at 08:31:14 on lid-open, 74 seconds after the trigger
+      minute. macOS cron does not replay a job missed during sleep - it is
+      dropped with no log line and no mail, so the skipped session was silent.
+
+      launchd's StartCalendarInterval runs a missed job as soon as the machine
+      wakes (or at next boot if it was powered off). That is the property cron
+      lacks and the entire reason for this file.
+    -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/start_uw_bot.sh</string>
+    </array>
+
+    <!-- 08:30 local time, Monday(1) through Friday(5). -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+    </array>
+
+    <!--
+      CRITICAL. start_uw_bot.sh is a launcher: it starts the bot with
+      `nohup ... &` and exits immediately. Without this key launchd treats the
+      script's exit as the job ending and SIGKILLs everything left in the
+      process group - which is the bot itself. It would die about a second
+      after starting, and the launcher log would still read
+      "UW Bot started with PID ..." because that line is printed before the
+      kill lands. Do not remove this.
+    -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <!--
+      Must stay false/absent. RunAtLoad would start a bot on every login and
+      reboot, at any hour. The duplicate guard in start_uw_bot.sh would catch
+      a same-day double, but not an off-hours start.
+    -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!--
+      No KeepAlive. The launcher is expected to exit after spawning the bot;
+      KeepAlive would read that clean exit as a crash and relaunch in a loop.
+    -->
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot</string>
+
+    <!-- Launcher output only. The bot's own output goes to logs/uw_bot_<ts>.log. -->
+    <key>StandardOutPath</key>
+    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/launchd_uw_bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/logs/launchd_uw_bot.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!--
+          launchd gives a job a minimal PATH, the same trap cron had. The
+          interpreter is pinned by absolute path inside start_uw_bot.sh; this
+          PATH is for date/mkdir/pgrep/tee/nohup.
+        -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

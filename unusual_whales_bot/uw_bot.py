@@ -1575,7 +1575,29 @@ def main():
     bot = UnusualWhalesBot(api_client=api_client)
 
     logger.info(f"▶️  Execution mode: {get_execution_mode_name()}")
-    logger.info(f"▶️  Tier 2 exits: {'ACTIVE' if bot.tier2_integration else 'INACTIVE'}")
+
+    # Report the EFFECTIVE state, not whether the object was constructed.
+    #
+    # This banner read `'ACTIVE' if bot.tier2_integration else 'INACTIVE'`,
+    # which is true whenever the object exists — so it has now announced
+    # ACTIVE through two separate periods in which Tier 2 could not close a
+    # single position:
+    #   Sep 8  two of the four API methods did not exist, so check_all_exits()
+    #          returned {} every cycle.
+    #   Sep 10 tier2_shadow_mode=True, so every signal is logged and dropped
+    #          ("would exit TSLA ... NOT acted on").
+    # Both times the startup line said ACTIVE. A banner that cannot distinguish
+    # "running" from "constructed" is worse than no banner, because it is read
+    # as confirmation.
+    if not bot.tier2_integration:
+        _t2 = "INACTIVE (not initialised)"
+    elif EXIT_RULES_CONFIG.get("tier2_shadow_mode", True):
+        _t2 = "SHADOW (signals logged to tier2_shadow.jsonl, positions NOT closed)"
+    else:
+        _t2 = "ACTIVE (closing positions)"
+    logger.info(f"▶️  Tier 2 exits: {_t2}")
+
+    # Gates have no shadow flag - they act whenever constructed.
     logger.info(f"▶️  Technical gates: {'ACTIVE' if bot.technical_gates else 'INACTIVE'}")
 
     asyncio.run(bot.main_loop(poll_interval=300))
