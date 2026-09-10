@@ -120,6 +120,26 @@ EXIT_RULES_CONFIG = {
     # ---------------------------------------------------------------------
     "market_tide_enabled": False,     # #6: Macro sentiment flip
 
+    # ---------------------------------------------------------------------
+    # MINIMUM CONFIDENCE TO ACT ON A TIER 2 EXIT
+    #
+    # Sep 10: nothing consulted signal.confidence. The dispatcher acted on
+    # signal.triggered alone, so a 31%-confidence dark_pool_reversal on INTC
+    # would have closed the position exactly like a 95% one. Confidence was
+    # computed, logged to tier2_shadow.jsonl, printed in every alert - and
+    # consumed by nothing. Same shape as the rule toggles and the startup
+    # banner: a number that describes instead of controls.
+    #
+    # 0.0 preserves the current behaviour exactly (act on every trigger), so
+    # enabling the gate is a separate, deliberate decision from wiring it.
+    # Today's distribution over 327 signals: min 0.31, p25 0.84, median 0.84,
+    # max 0.95 - only 2 below 0.50. So a gate anywhere under ~0.80 is close to
+    # a no-op on this data, and there is not yet evidence for where to put it:
+    # the confidence-vs-outcome backtest has n=18 closed signalled positions,
+    # which is far too few to site a threshold.
+    # ---------------------------------------------------------------------
+    "tier2_min_exit_confidence": 0.0,
+
     # Thresholds
     "flow_exhaustion_minutes": 45,    # No activity for X minutes = exit
     "put_call_flip_threshold": 0.55,  # >55% puts for bullish = flip

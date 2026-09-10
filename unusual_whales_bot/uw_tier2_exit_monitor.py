@@ -148,9 +148,24 @@ class Tier2ExitMonitor:
 
             signals = await asyncio.gather(*checks, return_exceptions=True)
 
-            # Find first triggered signal
+            # Find first triggered signal that clears the confidence floor.
+            #
+            # Until Sep 10 nothing read signal.confidence - a 31% trigger acted
+            # identically to a 95% one. Default floor is 0.0, which reproduces
+            # that behaviour exactly, so turning the gate ON is a separate
+            # decision from having one.
+            min_conf = self.cfg.get("tier2_min_exit_confidence", 0.0)
             for signal in signals:
                 if isinstance(signal, ExitSignal) and signal.triggered:
+                    if signal.confidence < min_conf:
+                        # Log it - a silently dropped signal is invisible in the
+                        # shadow log, which would make the gate impossible to
+                        # evaluate after the fact.
+                        logger.info(
+                            f"🚧 EXIT SUPPRESSED: {symbol} - {signal.reason} "
+                            f"(confidence {signal.confidence:.0%} < floor {min_conf:.0%})"
+                        )
+                        continue
                     exit_signals[symbol] = signal
                     monitor.exit_signal = signal
                     logger.info(f"✅ EXIT SIGNAL: {symbol} - {signal.reason} (confidence: {signal.confidence:.0%})")
