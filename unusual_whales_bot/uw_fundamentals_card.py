@@ -503,6 +503,167 @@ def long_levels(dd: Dict, val: Dict) -> Dict:
     }
 
 
+# ── DCA LADDER ───────────────────────────────────────────────────────────────
+# For a long-term account: instead of one entry, a set of GTC limit orders
+# stepping down from spot, so a name that keeps falling is accumulated rather
+# than avoided.
+#
+# THE STOP HAS TO BE REINTERPRETED, not reused. long_levels() returns a stop —
+# a level at which you SELL. A ladder that BUYS on the way down to it is the
+# opposite instruction, and shipping both in one card would be incoherent. So
+# in this mode that level is the ACCUMULATION FLOOR: the point at which you
+# stop adding and re-read the thesis. You do not sell into it. The clamp that
+# made it comparable across names ([10%, 30%] below spot) is exactly what makes
+# it usable as a floor — it bounds how far the ladder can run.
+#
+# Rungs stop at 3/4 of the way down, never at the floor itself. Buying AT the
+# level that says "thesis needs re-reading" spends the last of the allocation
+# at the worst moment; leaving that quarter unbought is what keeps the decision
+# open.
+#
+# Weights lean down-ladder. That is the whole point of the ladder — if the
+# tranches were equal, the average cost would sit near the middle and the
+# structure would add nothing over one order at spot.
+DCA_WEIGHTS = (0.15, 0.20, 0.30, 0.35)
+DCA_STEPS = (0.00, 0.25, 0.50, 0.75)   # fraction of the way from spot to floor
+DEFAULT_DCA_BUDGET = 2000.0            # per name
+
+# The stop's near bound CANNOT be reused as the accumulation floor, and the
+# first version of this that did was broken for half the list: NFLX came out
+# with a ladder spanning 8.9%, HD 7.5%, AS 7.5%, rungs 2.5% apart. Every rung
+# in those fills inside one ordinary week, so the "ladder" was one order at
+# spot wearing four labels, and the average cost sat 4.6% below spot — nothing.
+#
+# The two numbers answer different questions. A STOP asks "how far down before
+# the thesis is wrong", and 10% can honestly be that. A DCA FLOOR asks "how far
+# down am I still willing to add", which is a property of the PLAN, not of
+# where the 52-week low happened to land. Below ~20% the structure stops doing
+# anything.
+#
+# So the floor is the DEEPER of the clamped stop and a fixed minimum span. The
+# 30% cap still binds at the far end, and the 52-week low still shows up — as a
+# marker on the ladder rather than as the thing that sets its length.
+DCA_MIN_DEPTH_PCT = 20.0
+
+
+def dca_ladder(lv: Dict, lo52: Optional[float] = None,
+               budget: float = DEFAULT_DCA_BUDGET) -> Dict:
+    """
+    Turn entry/stop/target into a descending ladder of limit orders.
+
+    Rung 1 sits at spot — a marketable limit, filling roughly now. Without it
+    you own nothing in any name that simply goes up from here, which over a
+    20-name list is most of the ones that worked.
+
+    The number worth reading is AVERAGE COST, not spot: it is what the R:R is
+    actually measured from, and it is the only thing the ladder buys you.
+    """
+    if not lv:
+        return {}
+    entry, target = lv["entry"], lv["target"]
+    floor_ = min(lv["stop"], entry * (1 - DCA_MIN_DEPTH_PCT / 100.0))
+    widened = floor_ < lv["stop"] - 1e-9
+    depth = entry - floor_
+    if depth <= 0:
+        return {}
+    rungs = []
+    for i, (w, s) in enumerate(zip(DCA_WEIGHTS, DCA_STEPS), 1):
+        p = entry - depth * s
+        cash = budget * w
+        sh = int(cash // p)
+        rungs.append({"n": i, "limit": p, "off_pct": (p / entry - 1) * 100,
+                      "w": w, "cash": cash, "shares": sh, "spent": sh * p})
+    avg = sum(r["w"] * r["limit"] for r in rungs) / sum(DCA_WEIGHTS)
+    risk = avg - floor_
+    return {
+        "rungs": rungs, "avg": avg, "avg_off_pct": (avg / entry - 1) * 100,
+        "floor": floor_, "floor_pct": (floor_ / entry - 1) * 100,
+        "target": target, "full_at": rungs[-1]["limit"],
+        "full_at_pct": rungs[-1]["off_pct"], "widened": widened,
+        "lo52": lo52,
+        # Where the 52-week low sits relative to the ladder. Inside it means
+        # the market has already traded through rungs you are about to place.
+        "lo52_inside": (lo52 is not None and floor_ < lo52 < entry),
+        "lo52_pct": ((lo52 / entry - 1) * 100) if lo52 else None,
+        "reward_pct": (target / avg - 1) * 100,
+        "rr": ((target - avg) / risk) if risk > 0 else None,
+        "underfunded": [r["n"] for r in rungs if r["shares"] == 0],
+        "min_budget": entry / min(DCA_WEIGHTS),
+    }
+
+
+def render_dca(tickers: List[str], c: Card, budget: float = DEFAULT_DCA_BUDGET) -> str:
+    L = [f"═══ DCA LADDER — GTC limit orders · ${budget:,.0f} per name ═══", ""]
+    shown = 0
+    for t in tickers:
+        t = t.upper()
+        try:
+            dd = c.drawdown(t)
+            lv = long_levels(dd, c.valuation(t, dd.get("price")))
+            lad = dca_ladder(lv, dd.get("lo52"), budget)
+            if not lad:
+                continue
+            q = qualifies(t, c)
+        except Exception as e:
+            L.append(f"{t}  — error: {e}")
+            continue
+        shown += 1
+        mark = "✅" if q["alert"] else "  "
+        L.append(f"{t:<6} {mark} spot ${dd['price']:,.2f}   drawdown {dd['dd']:+.1f}%"
+                 f"   {q['met']}/{q['total']} conditions")
+        for r in lad["rungs"]:
+            off = "at spot" if r["n"] == 1 else f"{r['off_pct']:+.1f}%"
+            sh = f"{r['shares']:>3} sh" if r["shares"] else "  0 sh ⚠️"
+            L.append(f"     #{r['n']}  limit ${r['limit']:>10,.2f}  {off:>9}"
+                     f"   {r['w']:>4.0%}  ${r['cash']:>7,.0f}   {sh}")
+        rr = f"1:{lad['rr']:.1f}" if lad["rr"] else "—"
+        L.append(f"     avg cost if all fill ${lad['avg']:,.2f} ({lad['avg_off_pct']:+.1f}%)"
+                 f"   target ${lad['target']:,.2f} (+{lad['reward_pct']:.0f}%)   R:R {rr}")
+        L.append(f"     fully allocated only at ${lad['full_at']:,.2f} "
+                 f"({lad['full_at_pct']:+.1f}%)   ·   floor ${lad['floor']:,.2f} "
+                 f"({lad['floor_pct']:+.1f}%) — stop ADDING, not a sell")
+        if lad.get("lo52"):
+            where = ("inside the ladder — already traded through"
+                     if lad["lo52_inside"] else
+                     "below the floor — ladder stays above it"
+                     if lad["lo52"] <= lad["floor"] else
+                     "above spot — the low is not recent support")
+            L.append(f"     52w low ${lad['lo52']:,.2f} "
+                     f"({lad['lo52_pct']:+.1f}%) · {where}")
+        if lad.get("widened"):
+            L.append(f"     ladder widened to the {DCA_MIN_DEPTH_PCT:.0f}% minimum span — "
+                     f"the chart-based floor was too shallow to accumulate into")
+        if lad["underfunded"]:
+            L.append(f"     ⚠️ rung(s) {lad['underfunded']} round to 0 shares — "
+                     f"needs ~${lad['min_budget']:,.0f}/name at this price")
+        L.append("")
+
+    L += [f"{shown} name(s).", "",
+          "HOW TO READ THIS",
+          "  · The floor is where you STOP ADDING and re-read the thesis. It is not",
+          "    a sell level — a ladder that buys down cannot also stop out.",
+          "  · Rungs end a quarter of the way above the floor on purpose, so the",
+          "    last of the allocation is not spent at the worst moment.",
+          "  · R:R is measured from AVERAGE COST, which is the only thing the",
+          "    ladder actually buys you.",
+          "",
+          "WHAT THIS STRUCTURE DOES TO YOU, stated plainly",
+          "  · Adverse selection is built in. You end up FULLY allocated only in the",
+          "    names that kept falling, and holding one small tranche of the ones",
+          "    that recovered. That is the arithmetic of the ladder, not a flaw in",
+          "    it — but the resulting book is tilted toward the worst performers.",
+          "  · Deep rungs may sit unfilled for a year. That is the intended",
+          "    behaviour and it means the capital is committed but idle.",
+          "  · The screen is BACKWARD-looking (last reported quarter); the drawdown",
+          "    is the market's view TODAY. Sorting quality names by deepest",
+          "    drawdown selects for disagreement between the two. Sometimes that is",
+          "    the opportunity; sometimes the market is simply early.",
+          "",
+          "Nothing here is backtested at a multi-year horizon. These are limit",
+          "prices for you to place — no order is placed by this tool."]
+    return "\n".join(L)
+
+
 def render_qualify(t: str, c: Card) -> str:
     q = qualifies(t, c)
     head = "✅ QUALIFIES" if q["alert"] else "— does not qualify"
@@ -777,8 +938,15 @@ def main():
                     help="show which long-horizon alert conditions are met")
     ap.add_argument("--long", action="store_true",
                     help="long-horizon view: 5y trend, valuation, 13F trajectory")
+    ap.add_argument("--dca", action="store_true",
+                    help="descending GTC limit ladder for a long-term account")
+    ap.add_argument("--budget", type=float, default=DEFAULT_DCA_BUDGET,
+                    help=f"total allocation per name for --dca (default ${DEFAULT_DCA_BUDGET:,.0f})")
     a = ap.parse_args()
     c = Card()
+    if a.dca:
+        print(render_dca(a.tickers, c, a.budget))
+        return 0
     if a.rank:
         print(render_ranked(a.tickers, c))
         return 0
