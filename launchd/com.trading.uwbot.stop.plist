@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.trading.uwbot.stop</string>
+
+    <!--
+      Counterpart to com.trading.uwbot. That agent starts the bot at 08:30 on
+      weekdays; nothing ever stopped it, because uw_bot.py has no exit path.
+
+      The consequence was not a crash, it was a SILENT SKIP: the start script's
+      duplicate guard finds yesterday's process still alive, logs "already
+      running", and exits 0. launchd records success. The bot is then running
+      yesterday's code with yesterday's config for the whole session.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ramayalala/trading_bot_uw/stop_uw_bot.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ramayalala/trading_bot_uw</string>
+
+    <!--
+      16:30 local, weekdays. The bot's EOD force-close is at 15:45 local
+      (uw_bot.py uses datetime.now()), and the market closed at 15:00 local, so
+      there is 45 minutes of margin and nothing left to interrupt.
+
+      StartCalendarInterval, not cron: if the Mac is asleep at 16:30 launchd
+      replays the job on wake. cron drops it silently, which is how the 08:30
+      start was missed every day before this project moved to launchd.
+    -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <!--
+      This job runs to completion and does not daemonise, so unlike
+      com.trading.uwbot it does NOT need AbandonProcessGroup.
+    -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ramayalala/trading_bot_uw/logs/uwbot_stop.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ramayalala/trading_bot_uw/logs/uwbot_stop.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
