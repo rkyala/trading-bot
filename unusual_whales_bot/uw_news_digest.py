@@ -673,12 +673,105 @@ def build_longview_embed(rows: List[Dict]) -> Dict:
         "description": "\n".join(lines)[:3900],
         "color": 3447003,
         "timestamp": datetime.utcnow().isoformat(),
-        "footer": {"text": "Quality FILTER, discount SORT. Stop = 52w low (review "
-                           "trigger, not a tight stop); target = 52w high. NOTE "
-                           "fundamentals are backward-looking and drawdown is "
-                           "forward-looking — the deepest names are where the market "
-                           "disagrees with the last quarter. Not backtested at this "
-                           "horizon; the judgment is yours."},
+        "footer": {"text": "Quality FILTER (7/10), discount SORT — a 9/10 name can "
+                           "sit below a 7/10 one. Stop = 52w low clamped −10%…−30% "
+                           "(review trigger, not a tight stop); target = 52w high. "
+                           "Drawdown is 52-WEEK only, so names that fell over a year "
+                           "ago look shallow and sort to the bottom. Fundamentals are "
+                           "backward-looking, drawdown forward-looking — the deepest "
+                           "names are where the market disagrees with the last "
+                           "quarter. See the pinned 📐 methodology post for all "
+                           "factors. Not backtested at this horizon; judgment is "
+                           "yours."},
+    }
+
+
+def build_longview_method_embed() -> Dict:
+    """
+    How the watchlist is built — posted once, meant to be PINNED.
+
+    The recurring post cannot carry this: Discord caps a footer at 2048 chars
+    and a list republished three times a day cannot re-explain itself without
+    becoming the noise it is trying to avoid. So the method lives in one pinned
+    message and the list carries a pointer.
+
+    The limits section is not a disclaimer. Every one of those points changes
+    which names appear, and a reader who does not know them will misread the
+    ordering — particularly the 52-week cap, which makes names that crashed
+    over a year ago look SHALLOW and sorts them to the bottom.
+    """
+    conds = (
+        "`1` market cap ≥ $10B\n"
+        "`2` free cash flow positive\n"
+        "`3` revenue CAGR ≥ 3%/yr\n"
+        "`4` net debt / EBITDA ≤ 3.0\n"
+        "`5` dilution ≤ 2% share growth\n"
+        "`6` EV / EBITDA ≤ 25\n"
+        "`7` FCF yield ≥ 2%\n"
+        "`8` FCF trend not declining\n"
+        "`9` operating margin not compressing\n"
+        "`10` insiders net buyers (10b5-1 stripped)\n"
+        "*Trends 3, 5, 8, 9 measured over a 5-year window, first year vs last.*"
+    )
+    limits = (
+        "**Drawdown is 52-WEEK only.** The data source hard-caps at 252 "
+        "sessions. A name that fell 18 months ago and stayed down shows a "
+        "*shallow* drawdown, because its 52w high already reset to the "
+        "post-fall level — so it sorts to the BOTTOM. This list is biased "
+        "toward recent declines, not the deepest ones.\n\n"
+        "**Backward vs forward.** Conditions read the last reported quarter; "
+        "drawdown is the market's view today. Sorting quality names by deepest "
+        "discount selects precisely for where those two disagree. Sometimes "
+        "that is the opportunity; sometimes the market is early.\n\n"
+        "**The effective bar is ~6, not 7.** Condition 1 (≥$10B) almost never "
+        "fails, because the universe is already the 150 largest — it is close "
+        "to a free point. Being fixed.\n\n"
+        "**Insider signal is weak.** Condition 10 was measured and "
+        "discriminates in neither direction. It still counts as one of the ten."
+    )
+    return {
+        "title": "📐 How the Long-Horizon Watchlist is built",
+        "description": (
+            "Read this before acting on the list. Every factor below changes "
+            "which names appear and in what order.\n\n"
+            "**Nothing here is backtested at a multi-year horizon.** It is a "
+            "screen — an attention queue — not trade logic, and not advice."
+        ),
+        "color": 10181046,
+        "fields": [
+            {"name": "1 · Universe",
+             "value": f"Top **{LONGVIEW_UNIVERSE}** by market cap from the UW "
+                      "screener, index products excluded. Nothing outside that "
+                      "set is ever considered, however good it is.",
+             "inline": False},
+            {"name": "2 · Gate — mandatory, not a vote",
+             "value": "Drawdown from the 52-week high must be between "
+                      "**−50% and −12%**. The floor excludes distress (the "
+                      "question stops being *is this cheap* and becomes *is "
+                      "this solvent*); the ceiling excludes names near highs. "
+                      "Fail it and the name is dropped regardless of quality.",
+             "inline": False},
+            {"name": f"3 · Quality filter — {LONGVIEW_MIN_CONDITIONS} of 10 required",
+             "value": conds, "inline": False},
+            {"name": "4 · Sort — discount depth ONLY",
+             "value": "Quality is pass/fail, not a rank. Among the names that "
+                      "clear the bar, the list is ordered purely by how far the "
+                      "market has marked them down. A name meeting 9/10 can sit "
+                      "below one meeting 7/10.",
+             "inline": False},
+            {"name": "5 · Levels shown",
+             "value": "entry = spot · target = **52w high** (the drawdown "
+                      "simply closing — no multiple expansion, no growth "
+                      "extrapolated) · stop = **52w low, clamped to −10%…−30%**. "
+                      "The clamp exists so R:R is comparable between names; "
+                      "unclamped it ranged 0.4 to 19.5 and meant nothing. "
+                      "The stop is a REVIEW TRIGGER, not a tight stop.",
+             "inline": False},
+            {"name": "⚠️ 6 · Known limits — these change the list",
+             "value": limits, "inline": False},
+        ],
+        "timestamp": datetime.utcnow().isoformat(),
+        "footer": {"text": "Posted once. Pin this — the recurring list points here."},
     }
 
 
