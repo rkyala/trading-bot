@@ -42,6 +42,10 @@ from uw_robinhood_mcp import RobinhoodMCPClient
 from uw_position_manager import PositionManager
 from uw_tier2_integration import Tier2ExitIntegration
 from uw_market_data import get_market_data
+# Single source of truth for "has no tradeable share" — the same set
+# is_tradeable() consults. Imported rather than duplicated so a new index
+# ticker only has to be added in one place.
+from uw_price_data import INDEX_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +255,36 @@ class UnusualWhalesBot:
         if not symbol:
             self._last_reject_reason = "no_symbol"
             logger.error("❌ Alert has no underlying symbol; skipping")
+            return False
+
+        # ---------------------------------------------------------------
+        # INDEX GUARD. An index has no tradeable share.
+        #
+        # uw_price_data has had INDEX_SYMBOLS and is_tradeable() since it was
+        # written, with an accurate comment ("these appear in flow and have no
+        # tradeable share") — and the ONLY reference to is_tradeable anywhere
+        # in the codebase was a mention inside a docstring. Nothing called it.
+        #
+        # Sep 10: the bot bought 28 "shares" of VIX at $17.43 and carried the
+        # position all day. It marked, it drew Tier 2 exit signals, it showed a
+        # P&L — every subsystem treated it as real, because in PAPER mode a
+        # quote is all that is needed. Live, a broker rejects the order.
+        #
+        # 1,256 index alerts reached the entry logic that day (SPXW 709,
+        # SPX 428, RUT 62, VIX 57). Only VIX converted, and only because the
+        # rest happened to arrive as bearish flow in a long-only bot. That is
+        # luck, not protection.
+        #
+        # Checked HERE because execute_trade is the single chokepoint every
+        # entry passes through, and immediately after the symbol resolves —
+        # before sizing, barriers, or any order construction.
+        # ---------------------------------------------------------------
+        if str(symbol).upper() in INDEX_SYMBOLS:
+            self._last_reject_reason = "index_not_tradeable"
+            logger.warning(
+                f"🚫 {symbol}: index has no tradeable share — rejecting entry "
+                f"(would be rejected by the broker live)"
+            )
             return False
 
         direction = classification.get("direction", "CALL")  # "CALL" | "PUT"
