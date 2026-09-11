@@ -73,7 +73,32 @@ class PositionManager:
     def __init__(self, positions_file: str = "open_positions.json"):
         self.positions_file = positions_file
         self.positions: Dict[str, OptionsPosition] = {}
+        # symbol -> (unix_ts_of_close, exit_reason). See close_position.
+        # In-memory only: cooldowns are intraday and the bot restarts each
+        # session, so there is nothing worth persisting. A mid-session restart
+        # clears them, which is the safe direction to fail.
+        self.cooldowns: Dict[str, tuple] = {}
         self._load_positions()
+
+    def cooldown_remaining(self, symbol: str, minutes_by_reason: Dict[str, int]) -> float:
+        """
+        Minutes left before `symbol` may be re-entered. 0.0 if free.
+
+        Keyed on the EXIT REASON, not on the fact of an exit. A stop means the
+        thesis was tested and lost; bearish flow or a rotation is an ordinary
+        exit and must NOT block a genuine later signal — on Sep 10 TSLA was
+        legitimately re-entered 57 minutes after a bearish-flow exit.
+        """
+        import time as _t
+        rec = self.cooldowns.get(str(symbol).upper())
+        if not rec:
+            return 0.0
+        closed_at, reason = rec
+        mins = minutes_by_reason.get(reason, 0)
+        if mins <= 0:
+            return 0.0
+        elapsed = (_t.time() - closed_at) / 60.0
+        return max(0.0, mins - elapsed)
 
     def _load_positions(self):
         """Load positions from file"""
@@ -219,6 +244,22 @@ class PositionManager:
             f"  Exit: ${exit_price:.2f} ({exit_reason})\n"
             f"  P&L: ${pnl:.0f} ({pnl_pct:+.2f}%)"
         )
+
+        # ------------------------------------------------------------------
+        # COOLDOWN. Record WHEN and WHY, so the entry path can refuse to
+        # immediately re-buy a name whose thesis just failed.
+        #
+        # Sep 10: SPCX was stopped out at 09:18:22 @ 149.07 and re-bought at
+        # 09:23:54 @ 149.89 — 5.5 minutes later, ABOVE the stop-out price, with
+        # the new stop set $4 lower. Both entries cleared the technical gates
+        # (RSI 70.9, then 69.6). Nothing in the loop registered that the same
+        # thesis had been tested and lost twelve minutes earlier.
+        #
+        # The Aug 7 dedup guard blocks re-buying a symbol currently HELD. It
+        # does not block re-buying one just stopped out of — a different case.
+        # ------------------------------------------------------------------
+        import time as _t
+        self.cooldowns[str(position.symbol).upper()] = (_t.time(), exit_reason)
 
         # Remove from active positions
         del self.positions[pos_id]

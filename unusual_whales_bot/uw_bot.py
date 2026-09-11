@@ -30,6 +30,7 @@ from uw_config import (
     SENTIMENT_CONFIG,
     DISCORD_CONFIG,
     EXIT_RULES_CONFIG,
+    COOLDOWN_CONFIG,
     TECHNICAL_GATES_CONFIG,
     EXECUTION_SAFEGUARDS_CONFIG,
     INSTRUMENT_CONFIG,
@@ -284,6 +285,24 @@ class UnusualWhalesBot:
             logger.warning(
                 f"🚫 {symbol}: index has no tradeable share — rejecting entry "
                 f"(would be rejected by the broker live)"
+            )
+            return False
+
+        # ---------------------------------------------------------------
+        # RE-ENTRY COOLDOWN. Keyed on the reason the last position closed —
+        # a stop means the thesis was tested and lost, an ordinary flow exit
+        # does not. See COOLDOWN_CONFIG for why the distinction matters.
+        # Logged rather than silent so the rule's COST is measurable: if the
+        # suppressed names go on to run, that shows up here.
+        # ---------------------------------------------------------------
+        _cool = self.position_manager.cooldown_remaining(
+            symbol, COOLDOWN_CONFIG.get("minutes_by_reason", {})
+        )
+        if _cool > 0:
+            self._last_reject_reason = "cooldown"
+            logger.info(
+                f"🧊 {symbol}: re-entry suppressed, {_cool:.0f} min of cooldown "
+                f"left after the last exit"
             )
             return False
 

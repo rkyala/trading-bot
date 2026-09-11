@@ -161,6 +161,35 @@ EXIT_RULES_CONFIG = {
 # ===========================================================================
 # TECHNICAL GATES (Gates 9-11: Price Confirmation for Tier 2)
 # ===========================================================================
+# ---------------------------------------------------------------------------
+# RE-ENTRY COOLDOWN, keyed on the EXIT REASON.
+#
+# Sep 10: SPCX was stopped out at 09:18:22 @ 149.07 and re-bought at 09:23:54
+# @ 149.89 — 5.5 minutes later, ABOVE the stop-out price, with the new stop set
+# $4 lower. Both entries cleared the technical gates (RSI 70.9, then 69.6).
+# Nothing registered that the same thesis had been tested and lost minutes
+# earlier. Left alone that is a churn loop: stop out, re-buy, stop out, paying
+# the round-trip spread each time while ratcheting the stop down.
+#
+# The reason matters more than the fact of an exit:
+#   STOP_HIT    the thesis was TESTED AND LOST. Earn a real timeout.
+#   TARGET_HIT  the thesis WORKED and completed. A fresh signal is legitimate,
+#               but not within the same few minutes.
+#   bearish_flow / rotated_for_better_signal / EOD_FORCE_CLOSE
+#               ordinary exits. NO cooldown — on Sep 10 TSLA was legitimately
+#               re-entered 57 minutes after a bearish-flow exit, and blocking
+#               that would discard a genuine later signal.
+#
+# 0 or absent means no cooldown. Suppressed re-entries are LOGGED so the cost
+# of this rule is measurable rather than assumed.
+# ---------------------------------------------------------------------------
+COOLDOWN_CONFIG = {
+    "minutes_by_reason": {
+        "STOP_HIT": 90,
+        "TARGET_HIT": 30,
+    },
+}
+
 TECHNICAL_GATES_CONFIG = {
     # Enable technical confirmation gates
     "enabled": True,  # gates still COMPUTE (feature log needs them)
