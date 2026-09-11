@@ -468,11 +468,30 @@ class UnusualWhalesBot:
         # ---------------------------------------------------------------
         raw_qty = target_dollars / limit_price if limit_price > 0 else 0.0
 
-        if raw_qty >= 1.0:
-            quantity = float(int(raw_qty))          # whole shares
-        elif (INSTRUMENT_CONFIG.get("allow_fractional_shares", True)
-              and INSTRUMENT_CONFIG.get("instrument", "equity") == "equity"):
-            # Options cannot be fractional, hence the instrument guard.
+        # ---------------------------------------------------------------
+        # FRACTIONAL IS THE PRIMARY PATH, NOT A RESCUE.
+        #
+        # This previously read `if raw_qty >= 1.0: quantity = int(raw_qty)`,
+        # falling back to fractional only when the whole-share count was ZERO.
+        # So fractional fixed the "large-cap silently skipped" bug but left a
+        # second one untouched: any price just under the dollar target got
+        # truncated, and the closer the price sat to the target the worse it
+        # was.
+        #
+        # Sep 11 book, target $500:
+        #   AMZN $256.32 -> raw 1.951 -> int 1 -> $256   49% UNDER target
+        #   TSLA $368.35 -> raw 1.357 -> int 1 -> $368   26% under
+        #   MU   $980.36 -> raw 0.510 -> frac   -> $500   exact (rescue path)
+        # Only MU, the one stock too expensive for a whole share, was sized
+        # correctly. Dollar-based sizing exists precisely so a $19 stock and a
+        # $1,700 stock carry the same risk; truncation quietly reintroduces the
+        # price dependence it was meant to remove.
+        # ---------------------------------------------------------------
+        can_fraction = (INSTRUMENT_CONFIG.get("allow_fractional_shares", True)
+                        and INSTRUMENT_CONFIG.get("instrument", "equity") == "equity")
+
+        if can_fraction:
+            # Options cannot be fractional, hence the instrument guard above.
             precision = int(INSTRUMENT_CONFIG.get("fractional_precision", 4))
             quantity = round(raw_qty, precision)
             floor_dollars = float(INSTRUMENT_CONFIG.get("min_position_dollars", 50.0))
@@ -486,8 +505,10 @@ class UnusualWhalesBot:
                 return False
             logger.info(
                 f"🔢 {symbol}: ${target_dollars:.0f} at ${limit_price:.2f} → "
-                f"{quantity:g} fractional shares"
+                f"{quantity:g} shares (${quantity * limit_price:.0f} notional)"
             )
+        elif raw_qty >= 1.0:
+            quantity = float(int(raw_qty))          # whole shares only
         else:
             self._last_reject_reason = "size_rounds_to_zero"
             logger.info(
