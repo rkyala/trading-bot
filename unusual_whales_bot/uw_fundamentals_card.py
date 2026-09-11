@@ -68,6 +68,15 @@ class Card:
             self.s.headers.update({"Authorization": f"Bearer {key}",
                                    "Accept": "application/json"})
 
+    # PER-TICKER CACHE.
+    #
+    # qualifies() calls annual_trend, then valuation — and valuation calls
+    # annual_trend AGAIN and re-fetches /financials on top. So the same 431KB
+    # payload was pulled THREE times per ticker. Across a 200-name universe
+    # that is 400 wasted calls and the scan took minutes, which matters when it
+    # runs three times a session.
+    _cache: Dict[str, object] = {}
+
     def get(self, path: str, params: Optional[Dict] = None):
         try:
             r = self.s.get(f"{BASE}{path}", params=params or {}, timeout=25)
@@ -77,8 +86,18 @@ class Card:
 
     # ------------------------------------------------------------ sections
 
+    def _financials_raw(self, t: str) -> Dict:
+        """Cached /financials — the payload is large and wanted three times."""
+        k = f"fin:{t}"
+        if k not in self._cache:
+            d = self.get(f"/stock/{t}/financials") or {}
+            if isinstance(d, list):
+                d = d[0] if d else {}
+            self._cache[k] = d
+        return self._cache[k] or {}
+
     def financials(self, t: str) -> Dict:
-        d = self.get(f"/stock/{t}/financials") or {}
+        d = self._financials_raw(t)
         if isinstance(d, list):
             d = d[0] if d else {}
 
@@ -97,6 +116,9 @@ class Card:
                 "cash": cfs, "earnings": ern[:4]}
 
     def drawdown(self, t: str) -> Dict:
+        k = f"dd:{t}"
+        if k in self._cache:
+            return self._cache[k]
         rows = self.get(f"/stock/{t}/ohlc/1d", {"limit": 750}) or []
         # ORDER MATTERS. The bulk OHLC fetch returns OLDEST-FIRST — verified:
         # first row 2025-09-11, last row 2026-09-11. Reading closes[0] as the
@@ -108,13 +130,16 @@ class Card:
                  if str(r.get("market_time") or "") == "r" and _f(r.get("close"))]
         pairs = [p for p in pairs if p[0]]
         if not pairs:
+            self._cache[k] = {}
             return {}
         pairs.sort()                      # ascending by date
         pairs = pairs[-252:]              # trailing year of regular sessions
         closes = [c for _, c in pairs]
         cur, hi, lo = closes[-1], max(closes), min(closes)
-        return {"price": cur, "hi52": hi, "lo52": lo,
-                "dd": (cur / hi - 1.0) * 100 if hi else None}
+        out = {"price": cur, "hi52": hi, "lo52": lo,
+               "dd": (cur / hi - 1.0) * 100 if hi else None}
+        self._cache[k] = out
+        return out
 
     def insider(self, t: str, window_days: int = 365) -> Dict:
         """
@@ -196,9 +221,7 @@ class Card:
 
     def annual_trend(self, t: str, years: int = 5) -> List[Dict]:
         """Annual revenue / margins / FCF, oldest to newest."""
-        d = self.get(f"/stock/{t}/financials") or {}
-        if isinstance(d, list):
-            d = d[0] if d else {}
+        d = self._financials_raw(t)
         inc = [r for r in (d.get("income_statements") or [])
                if str(r.get("report_type")) == "annual"]
         cfs = {str(r.get("fiscal_date_ending")): r
@@ -232,9 +255,7 @@ class Card:
         cur = tr[-1]
         sh = cur.get("shares")
         mcap = (price * sh) if (sh and price) else None
-        d = self.get(f"/stock/{t}/financials") or {}
-        if isinstance(d, list):
-            d = d[0] if d else {}
+        d = self._financials_raw(t)
         bal = [r for r in (d.get("balance_sheets") or [])
                if str(r.get("report_type")) == "annual"]
         bal.sort(key=lambda r: str(r.get("fiscal_date_ending")), reverse=True)
@@ -323,10 +344,26 @@ MIN_CONDITIONS = 5          # of the eight non-gate conditions
 # card displays that divergence and the screen ignored it. A business whose
 # cash generation is rolling over is a different proposition from one whose is
 # compounding, and "FCF positive" cannot tell them apart.
+# The stop is CLAMPED AT BOTH ENDS.
+#
+# Capping only the far side fixed SNDK (-95% -> -30%) and left the near side
+# broken: AS came out at -3%, HD -4%, PDD -6%, giving R:R of 1:19.5, 1:9.8 and
+# 1:12.9. Those look like exceptional setups and are nothing of the kind — the
+# 52-week low simply happened to sit near spot. A 3% stop on a multi-year
+# thesis is noise; it is hit in a week by ordinary movement.
+#
+# So: never nearer than MIN, never further than MAX. Risk is then always
+# 10-30% of entry, which is the range where "thesis broken" is a fair reading
+# and where R:R can be compared across names.
+MIN_STOP_PCT = 10.0          # never a noise-width stop on a multi-year hold
+MAX_STOP_PCT = 30.0          # never an unbounded one either
 MAX_EV_EBITDA = 25.0
 MIN_FCF_YIELD = 2.0          # %
 
-DRAWDOWN_BAND = (-45.0, -12.0)   # marked down, but not in freefall
+# The band is the GATE. The floor excludes genuine distress — below it the
+# question stops being "is this cheap" and becomes "is this solvent", which
+# trailing financials answer too slowly to be useful.
+DRAWDOWN_BAND = (-50.0, -12.0)   # marked down, but not in freefall
 MAX_NET_DEBT_EBITDA = 3.0
 MIN_REV_CAGR = 3.0               # %/yr
 MAX_DILUTION = 2.0               # % share growth tolerated over the window
@@ -417,6 +454,55 @@ def qualifies(t: str, c: Card) -> Dict:
             "alert": gate and met >= MIN_CONDITIONS}
 
 
+def long_levels(dd: Dict, val: Dict) -> Dict:
+    """
+    Entry / stop / target for a MULTI-YEAR hold.
+
+    NOT ATR. The trading side uses 0.75-1.5 ATR, which is right for a 3-day
+    hold and absurd for a 3-year one — a 1.5 ATR stop on a multi-year thesis is
+    hit by ordinary noise inside a fortnight. Levels for a long hold have to be
+    wide enough that only a broken thesis reaches them.
+
+    STOP   the CLOSER of the 52-week low and MAX_STOP_PCT below entry.
+
+           The 52-week low alone was the first attempt and it failed: for a
+           name that has travelled a long way in a year the low is ancient
+           history, not support. SNDK priced $1,643 with a 52w low of $84 gave
+           a stop 95% below entry; AS gave one 3% below. Risk ranged from 3% to
+           95% across the same list, so the R:R column was meaningless —
+           AS showed 1:18.7 purely because its low happened to sit near spot,
+           which a reader would misread as a great setup.
+
+           Bounding it keeps the "market already tested this" logic where the
+           low is recent and relevant, and falls back to a fixed review trigger
+           where it is not. Risk is then comparable across names, which is what
+           makes R:R mean anything at all.
+
+           Still a REVIEW TRIGGER, not a tight stop.
+    TARGET the 52-week high: the drawdown simply closing. Deliberately the most
+           conservative marker available — no multiple expansion assumed, no
+           growth extrapolated, nothing that requires the future to cooperate.
+
+    Both are markers for judgment, not orders. Nothing here is backtested at
+    this horizon.
+    """
+    price, hi, lo = dd.get("price"), dd.get("hi52"), dd.get("lo52")
+    if not price or not hi or not lo:
+        return {}
+    far = price * (1 - MAX_STOP_PCT / 100.0)
+    near = price * (1 - MIN_STOP_PCT / 100.0)
+    stop = min(max(lo, far), near)        # clamp the 52w low into [far, near]
+    bounded = abs(stop - lo) > 0.005 * price
+    risk = price - stop
+    reward = hi - price
+    return {
+        "entry": price, "stop": stop, "target": hi, "bounded": bounded,
+        "risk_pct": (stop / price - 1) * 100,
+        "reward_pct": (hi / price - 1) * 100,
+        "rr": (reward / risk) if risk > 0 else None,
+    }
+
+
 def render_qualify(t: str, c: Card) -> str:
     q = qualifies(t, c)
     head = "✅ QUALIFIES" if q["alert"] else "— does not qualify"
@@ -428,6 +514,17 @@ def render_qualify(t: str, c: Card) -> str:
          f"{'':<10}{q['gate_detail']}", ""]
     for name, ok, detail in q["conds"]:
         L.append(f"  {'✓' if ok else '✗'} {name:<38} {detail}")
+    lv = long_levels(c.drawdown(t), c.valuation(t, c.drawdown(t).get("price")))
+    if lv:
+        L += ["",
+              "LEVELS  (multi-year markers, NOT day-trade stops)",
+              f"  entry   ${lv['entry']:,.2f}",
+              f"  stop    ${lv['stop']:,.2f}  ({lv['risk_pct']:+.1f}%)  "
+              f"{'clamped' if lv.get('bounded') else '52w low'} — review trigger",
+              f"  target  ${lv['target']:,.2f}  ({lv['reward_pct']:+.1f}%)  "
+              f"52w high — the drawdown simply closing"]
+        if lv.get("rr"):
+            L.append(f"  R:R     1 : {lv['rr']:.2f}")
     L += ["",
           "Conditions are FACTS about the business, not predictions. No score,",
           "no weighting, deliberately. Qualifying means 'worth a look' — the",

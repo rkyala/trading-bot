@@ -101,14 +101,36 @@ class GEXDiscordAlerts:
             status = "🟢 IN TARGET ZONE"
             color = 0x1abc9c  # Teal
 
-        description = f"""
-**Current: ${price:.2f}** {status}
+        # A LADDER, NOT A LIST.
+        #
+        # Four levels printed in a fixed order made the reader do the
+        # arithmetic: which are above price, which below, how far. Sorting by
+        # price and inserting the current level in position answers all three
+        # at a glance, and the % column is distance FROM price (positive =
+        # above), so the signs agree with the ladder rather than needing to be
+        # reconciled against it.
+        levels = [
+            (put_wall, "🔴 PUT WALL"),
+            (gamma_flip, "🟡 GAMMA FLIP"),
+            (gamma_magnet, "⚪ GAMMA MAGNET"),
+            (call_wall, "🟢 CALL WALL"),
+        ]
+        rungs = [(lv, lbl) for lv, lbl in levels if lv]
+        rungs.append((price, "➤ **PRICE**"))
+        rungs.sort(key=lambda x: -x[0])          # highest first
 
-**Support/Resistance:**
-🔴 **PUT WALL**: ${put_wall:.2f}
-🟡 **GAMMA FLIP**: ${gamma_flip:.2f}
-⚪ **GAMMA MAGNET**: ${gamma_magnet:.2f}
-🟢 **CALL WALL**: ${call_wall:.2f}
+        ladder = []
+        for lv, lbl in rungs:
+            if lbl.startswith("➤"):
+                ladder.append(f"`{lv:>9,.2f}`  {lbl}")
+            else:
+                pct = (lv / price - 1) * 100 if price else 0
+                ladder.append(f"`{lv:>9,.2f}`  {lbl}  ({pct:+.2f}%)")
+
+        description = f"""
+**${price:.2f}** — {status}
+
+{chr(10).join(ladder)}
 """
 
         # SIGN FIX (2026-09-10). This read ((gamma_flip - price) / price), i.e.
@@ -127,19 +149,29 @@ class GEXDiscordAlerts:
             # measured here — GEX-timed vol was null (all |t|<1) and gamma walls
             # as barriers failed (t+1.98 pooled, then AMD alone was 70% of it).
             # So this line describes EXPECTED MOVE SIZE and nothing more.
+            # Say what to DO differently, not just what the regime is called.
+            # The only defensible use is SIZING and STOP WIDTH — gamma predicts
+            # how far, never which way. "Below flip so sell" is precisely the
+            # rule fifteen nulls refuse to support, and using the call wall as a
+            # target is the barrier test that failed (t+1.98 pooled, then AMD
+            # alone was 70% of it).
             if distance_to_flip >= 0:
-                regime = ("long gamma — dealer hedging DAMPENS moves; expect "
-                          "smaller ranges and mean reversion toward the magnet")
+                regime = ("**long gamma** — dealers DAMPEN moves\n"
+                          "→ expect compressed ranges, drift toward the magnet\n"
+                          "→ tighter stops survive; breakouts tend to fail")
             else:
-                regime = ("short gamma — dealer hedging AMPLIFIES moves; expect "
-                          "larger ranges and trend extension")
+                regime = ("**short gamma** — dealers AMPLIFY moves\n"
+                          "→ expect wider ranges and trend extension\n"
+                          "→ widen stops or cut size; a normal stop gets hit by noise")
 
             description += f"""
 **Distance to Flip**: {distance_to_flip:+.2f}% (price vs flip)
 **Distance to Call Wall**: {distance_to_call:+.2f}%
 
-**Regime**: {regime}
-_Magnitude only — gamma has never predicted DIRECTION on this data._
+{regime}
+
+_Sizing input, not a signal. Gamma predicts HOW FAR, never WHICH WAY —_
+_measured here: magnitude t+2.9, direction null across 15 tests._
 """
 
         embed = {

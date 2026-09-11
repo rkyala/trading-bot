@@ -579,8 +579,26 @@ def build_fda_embed(items: List[Dict]) -> Dict:
 # per local day and is recorded individually, so a missed slot (machine asleep,
 # a crash) does not cascade into the next one firing twice.
 LONGVIEW_SLOTS = (9, 12, 14)     # local hours: after the open, midday, power hour
-LONGVIEW_UNIVERSE = 60          # top N by market cap from the screener
-LONGVIEW_SHOW = 10
+LONGVIEW_UNIVERSE = 150         # top N by market cap from the screener
+LONGVIEW_SHOW = 20
+
+# RANK BY DISCOUNT DEPTH, NOT BY CONDITION COUNT.
+#
+# Ranking on conditions-met produced 71 qualifiers out of 150 — 47% of the
+# universe, which is not a watchlist. The distribution showed why: 9/10 had 8
+# names, 8/10 had 18, but the threshold sat at 5/10 so everything above it
+# passed. A display cap of 10 was hiding a loose threshold.
+#
+# Quality is now a FILTER and drawdown depth is the SORT: of the names that
+# clear the bar, show the ones the market has marked down furthest. That ranks
+# on the thing actually being looked for.
+#
+# CAVEAT, stated because the screen cannot: fundamentals are BACKWARD-looking
+# (last reported quarter) and drawdown is FORWARD-looking (the market's current
+# view). Sorting quality names by deepest drawdown selects exactly for cases
+# where the market disagrees with the trailing financials. Sometimes that is
+# the opportunity; sometimes the market is simply early.
+LONGVIEW_MIN_CONDITIONS = 7      # of 10 — quality filter, raised from 5
 
 
 def longview_universe(n: int) -> List[str]:
@@ -614,38 +632,52 @@ def longview_universe(n: int) -> List[str]:
 def longview_rank() -> List[Dict]:
     """Rank the universe; gate-passers first."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from uw_fundamentals_card import Card, qualifies
+    from uw_fundamentals_card import Card, qualifies, long_levels
     c = Card()
     rows = []
     for t in longview_universe(LONGVIEW_UNIVERSE):
         try:
             q = qualifies(t, c)
             if not q["gate"]:
-                continue                 # gate is mandatory
+                continue                      # drawdown band is mandatory
+            if q["met"] < LONGVIEW_MIN_CONDITIONS:
+                continue                      # quality filter
+            dd = c.drawdown(t)
+            lv = long_levels(dd, {})
             fails = [n for n, ok, _ in q["conds"] if not ok]
             rows.append({"t": t, "met": q["met"], "total": q["total"],
-                         "dd": q["gate_detail"], "alert": q["alert"],
+                         "dd_val": dd.get("dd"), "dd": q["gate_detail"],
+                         "entry": lv.get("entry"), "stop": lv.get("stop"),
+                         "target": lv.get("target"), "rr": lv.get("rr"),
                          "fails": ", ".join(fails) or "none"})
         except Exception:
             continue
-    rows.sort(key=lambda r: -r["met"])
+    # Deepest discount first.
+    rows.sort(key=lambda r: r["dd_val"] if r["dd_val"] is not None else 0)
     return rows[:LONGVIEW_SHOW]
 
 
 def build_longview_embed(rows: List[Dict]) -> Dict:
     lines = []
     for i, r in enumerate(rows, 1):
-        mark = "✅" if r["alert"] else "  "
-        lines.append(f"`{i:>2}` {mark} **{r['t']}** {r['met']}/{r['total']} · "
-                     f"{r['dd']} off high · _{r['fails'][:46]}_")
+        lvl = ""
+        if r.get("entry") and r.get("stop") and r.get("target"):
+            lvl = (f" · ${r['entry']:,.0f} → stop ${r['stop']:,.0f} / "
+                   f"tgt ${r['target']:,.0f}"
+                   + (f" (1:{r['rr']:.1f})" if r.get("rr") else ""))
+        lines.append(f"`{i:>2}` **{r['t']}** {r['dd']} off high · "
+                     f"{r['met']}/{r['total']}{lvl}")
     return {
-        "title": f"🏛️ Long-Horizon Watchlist — {len(rows)} passed the drawdown gate",
+        "title": f"🏛️ Long-Horizon Watchlist — {len(rows)} deepest discounts "
+                 f"(>= {LONGVIEW_MIN_CONDITIONS}/10 quality)",
         "description": "\n".join(lines)[:3900],
         "color": 3447003,
         "timestamp": datetime.utcnow().isoformat(),
-        "footer": {"text": "quality-at-a-discount: >=$10B cap, positive FCF, growing, "
-                           "low debt, no dilution, insider buying — and marked down. "
-                           "Ranked for ATTENTION, not sizing. Not backtested at this "
+        "footer": {"text": "Quality FILTER, discount SORT. Stop = 52w low (review "
+                           "trigger, not a tight stop); target = 52w high. NOTE "
+                           "fundamentals are backward-looking and drawdown is "
+                           "forward-looking — the deepest names are where the market "
+                           "disagrees with the last quarter. Not backtested at this "
                            "horizon; the judgment is yours."},
     }
 
