@@ -1435,7 +1435,22 @@ class UnusualWhalesBot:
                                 gate_detail = await self.technical_gates.evaluate_detailed(
                                     symbol, direction, spot
                                 )
-                                confidence = gate_detail.get("confidence", confidence)
+                                gate_conf = gate_detail.get("confidence", confidence)
+                                if TECHNICAL_GATES_CONFIG.get("shadow", False):
+                                    # SHADOW: compute and record, do not act.
+                                    # The gates measured WORSE than useless -
+                                    # approved trades returned -0.03% vs +0.01%
+                                    # for rejected ones over 104,924 obs - so
+                                    # the score no longer moves confidence,
+                                    # sizing, or the trade/no-trade decision.
+                                    if gate_conf < TECHNICAL_GATES_CONFIG.get(
+                                            "min_confidence_to_trade", 0.55):
+                                        logger.info(
+                                            f"👻 GATES SHADOW: {symbol} would have been "
+                                            f"REJECTED (gate conf {gate_conf:.0%}) — trading anyway")
+                                    gate_detail["shadow_confidence"] = gate_conf
+                                else:
+                                    confidence = gate_conf
                         except Exception as e:
                             logger.warning(f"Technical gates failed for {symbol}: {e}; using baseline")
 
@@ -1597,8 +1612,20 @@ def main():
         _t2 = "ACTIVE (closing positions)"
     logger.info(f"▶️  Tier 2 exits: {_t2}")
 
-    # Gates have no shadow flag - they act whenever constructed.
-    logger.info(f"▶️  Technical gates: {'ACTIVE' if bot.technical_gates else 'INACTIVE'}")
+    # Gates gained a shadow flag on Sep 10, so this banner must report the
+    # EFFECTIVE state too. The comment here used to read "gates have no shadow
+    # flag - they act whenever constructed": true when the Tier 2 banner was
+    # fixed that morning, false by that afternoon. A banner describing
+    # CONSTRUCTION rather than BEHAVIOUR is the exact defect that let
+    # "Tier 2 exits: ACTIVE" stand through two separate periods in which Tier 2
+    # could not close a single position.
+    if not bot.technical_gates:
+        _tg = "INACTIVE (not initialised)"
+    elif TECHNICAL_GATES_CONFIG.get("shadow", False):
+        _tg = "SHADOW (computed and logged, does NOT affect trades or sizing)"
+    else:
+        _tg = "ACTIVE (filtering and sizing trades)"
+    logger.info(f"▶️  Technical gates: {_tg}")
 
     asyncio.run(bot.main_loop(poll_interval=300))
 

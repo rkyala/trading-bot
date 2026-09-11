@@ -163,7 +163,30 @@ EXIT_RULES_CONFIG = {
 # ===========================================================================
 TECHNICAL_GATES_CONFIG = {
     # Enable technical confirmation gates
-    "enabled": True,  # ✅ GATES 9-11 ACTIVE
+    "enabled": True,  # gates still COMPUTE (feature log needs them)
+
+    # -----------------------------------------------------------------------
+    # SHADOW MODE — Sep 10 2026. Gates compute and log, but no longer affect
+    # confidence, sizing, or whether a trade happens.
+    #
+    # TWO INDEPENDENT MEASUREMENTS say they filter on noise:
+    #
+    #   1. Sep 9 audit, 104,924 observations over 191 days: the gate-score
+    #      ladder was FLAT, and the set the gates APPROVED returned -0.03%
+    #      against +0.01% for the set they REJECTED. Worse than useless on
+    #      that sample - the approved trades did worse than the rejected ones.
+    #
+    #   2. Sep 10 panel, 27 features over 72,000 ticker-days: the exact
+    #      indicators these gates use rank near the BOTTOM of the panel -
+    #      dist_ma20 t+0.23, rsi_14 t+0.43, against a bar of |t|>=3. The
+    #      combined ridge over all 27 was NEGATIVE on held-out data
+    #      (IC -0.0131), so this is not a "wrong three indicators" problem.
+    #
+    # Gates still run because the feature logger needs the vector for future
+    # classifier work, and because a shadow record lets the decision be
+    # checked rather than assumed. Set False to restore the old behaviour.
+    # -----------------------------------------------------------------------
+    "shadow": True,
 
     # Individual gates
     "gate_9_ma_enabled": True,      # #9: Moving average alignment
