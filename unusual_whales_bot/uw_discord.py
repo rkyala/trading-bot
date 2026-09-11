@@ -29,7 +29,10 @@ from typing import Optional
 
 # Checked against the payload immediately before every send.
 _SECRET_VARS = (
-    "UW_API_KEY", "DISCORD_WEBHOOK_URL", "ANTHROPIC_API_KEY",
+    # A new credential env var MUST be added here or the outbound scrub cannot
+    # redact it — the scrubber checks a fixed list of names, not a pattern.
+    "UW_API_KEY", "DISCORD_WEBHOOK_URL", "DISCORD_NEWS_WEBHOOK_URL",
+    "ANTHROPIC_API_KEY",
     "RH_CLIENT_ID", "RH_REFRESH_TOKEN", "RH_ACCESS_TOKEN",
     "SCHWAB_CLIENT_ID", "SCHWAB_CLIENT_SECRET", "HF_TOKEN",
 )

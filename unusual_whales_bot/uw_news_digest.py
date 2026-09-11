@@ -59,6 +59,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BASE = "https://api.unusualwhales.com/api"
 SENTIMENT_BACKEND = os.getenv("SENTIMENT_BACKEND", "lexicon")  # lexicon | finbert | uw(dead)
+
+# ---------------------------------------------------------------------------
+# DESTINATION. News, FDA catalysts and insider buys go to their OWN channel,
+# NOT the UW trade-alert channel.
+#
+# Trade alerts are things the bot DID — a fill, a stop, an exit. News is
+# context a human reads. Mixing them means the entries and stops get buried
+# under headlines, and the signal-to-noise of the channel you actually act on
+# collapses.
+#
+# Falls back to DISCORD_WEBHOOK_URL so a missing news webhook degrades to the
+# old behaviour rather than silently posting nothing.
+# ---------------------------------------------------------------------------
+def news_webhook() -> Optional[str]:
+    return os.getenv("DISCORD_NEWS_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
 MAX_ITEMS = 10
 HEADLINE_CHARS = 180
 
@@ -642,7 +657,7 @@ def main() -> int:
     # 1. URGENT — bypasses the 30-minute consolidation.
     urgent = find_urgent(items, state)
     for u in urgent[:3]:                       # cap: never flood on a news burst
-        if post_embed(build_urgent_embed(u)):
+        if post_embed(build_urgent_embed(u), news_webhook()):
             state.setdefault("urgent_sent", []).append(u["headline"])
             sent_any = True
             print(f"  urgent sent: {u['sent']:+.2f} {u['headline'][:60]}")
@@ -653,7 +668,7 @@ def main() -> int:
         key = f"{it['symbol']}:{it['disc']:.0f}"
         if key in seen_ins:
             continue
-        if post_embed(build_insider_embed(it)):
+        if post_embed(build_insider_embed(it), news_webhook()):
             state.setdefault("insider_sent", []).append(key)
             sent_any = True
             print(f"  insider buy sent: {it['symbol']} ${it['disc']:,.0f}")
@@ -663,7 +678,7 @@ def main() -> int:
     today_str = now_local.strftime("%Y-%m-%d")
     if state.get("fda_day") != today_str and now_local.hour >= FDA_PUBLISH_AFTER_HOUR:
         cats = fda_catalysts(held)
-        if cats and post_embed(build_fda_embed(cats)):
+        if cats and post_embed(build_fda_embed(cats), news_webhook()):
             state["fda_day"] = today_str
             sent_any = True
             print(f"  fda catalysts sent: {len(cats)} "
@@ -694,7 +709,7 @@ def main() -> int:
     # uw_bot here instead would pull pandas/yfinance into the sentiment venv,
     # which deliberately does not have them - the venv is isolated so that
     # installing torch can never disturb the interpreter holding positions.
-    ok = post_embed(embed)
+    ok = post_embed(embed, news_webhook())
     if ok:
         state["last_digest"] = datetime.utcnow().isoformat()
     _save_state(state)
