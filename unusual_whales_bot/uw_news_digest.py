@@ -561,6 +561,95 @@ def build_fda_embed(items: List[Dict]) -> Dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# LONG-HORIZON RANKING — once daily.
+#
+# Different horizon from everything else in this file. The news digest, FDA
+# catalysts and insider alerts are same-day context; this is a multi-year
+# watchlist. It posts once, ranked, with the failing condition visible so the
+# order can be argued with.
+#
+# Deliberately NOT a score fed into anything. Ranking names for a human to
+# read is an attention queue; feeding a number into sizing is what moves money
+# on an unmeasured relationship. Nothing here has been backtested at a
+# multi-year horizon and the footer says so.
+# ---------------------------------------------------------------------------
+# Three times during open hours, no more. The digest polls every 5 minutes;
+# without explicit slots this would fire on every poll. Each slot fires once
+# per local day and is recorded individually, so a missed slot (machine asleep,
+# a crash) does not cascade into the next one firing twice.
+LONGVIEW_SLOTS = (9, 12, 14)     # local hours: after the open, midday, power hour
+LONGVIEW_UNIVERSE = 60          # top N by market cap from the screener
+LONGVIEW_SHOW = 10
+
+
+def longview_universe(n: int) -> List[str]:
+    """Largest liquid names from the screener, index products excluded."""
+    import requests
+    key = os.getenv("UW_API_KEY")
+    if not key:
+        return []
+    try:
+        r = requests.get(f"{BASE}/screener/stocks", params={"limit": 300},
+                         headers={"Authorization": f"Bearer {key}",
+                                  "Accept": "application/json"}, timeout=25)
+        rows = r.json().get("data") or [] if r.status_code == 200 else []
+    except Exception:
+        return []
+    out = []
+    for x in rows:
+        t = str(x.get("ticker") or "").upper()
+        mc = _f(x.get("marketcap"), 0.0) or 0.0
+        if not t or x.get("is_index") or not t.isalpha() or len(t) > 5:
+            continue
+        if str(x.get("issue_type") or "").lower() == "etf":
+            continue
+        if mc < 10_000_000_000:          # the quality floor
+            continue
+        out.append((mc, t))
+    out.sort(reverse=True)
+    return [t for _, t in out[:n]]
+
+
+def longview_rank() -> List[Dict]:
+    """Rank the universe; gate-passers first."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from uw_fundamentals_card import Card, qualifies
+    c = Card()
+    rows = []
+    for t in longview_universe(LONGVIEW_UNIVERSE):
+        try:
+            q = qualifies(t, c)
+            if not q["gate"]:
+                continue                 # gate is mandatory
+            fails = [n for n, ok, _ in q["conds"] if not ok]
+            rows.append({"t": t, "met": q["met"], "total": q["total"],
+                         "dd": q["gate_detail"], "alert": q["alert"],
+                         "fails": ", ".join(fails) or "none"})
+        except Exception:
+            continue
+    rows.sort(key=lambda r: -r["met"])
+    return rows[:LONGVIEW_SHOW]
+
+
+def build_longview_embed(rows: List[Dict]) -> Dict:
+    lines = []
+    for i, r in enumerate(rows, 1):
+        mark = "✅" if r["alert"] else "  "
+        lines.append(f"`{i:>2}` {mark} **{r['t']}** {r['met']}/{r['total']} · "
+                     f"{r['dd']} off high · _{r['fails'][:46]}_")
+    return {
+        "title": f"🏛️ Long-Horizon Watchlist — {len(rows)} passed the drawdown gate",
+        "description": "\n".join(lines)[:3900],
+        "color": 3447003,
+        "timestamp": datetime.utcnow().isoformat(),
+        "footer": {"text": "quality-at-a-discount: >=$10B cap, positive FCF, growing, "
+                           "low debt, no dilution, insider buying — and marked down. "
+                           "Ranked for ATTENTION, not sizing. Not backtested at this "
+                           "horizon; the judgment is yours."},
+    }
+
+
 def _load_state() -> Dict:
     import json
     try:
@@ -576,6 +665,10 @@ def _save_state(st: Dict) -> None:
         # Cap the urgent history so the file cannot grow without bound.
         st["urgent_sent"] = st.get("urgent_sent", [])[-400:]
         st["insider_sent"] = st.get("insider_sent", [])[-200:]
+        # Keep only the last few days of slot markers.
+        sl = st.get("longview_slots") or {}
+        if len(sl) > 30:
+            st["longview_slots"] = dict(sorted(sl.items())[-30:])
         with open(STATE_PATH, "w") as fh:
             json.dump(st, fh)
     except Exception as e:
@@ -686,6 +779,37 @@ def main() -> int:
         elif not cats:
             state["fda_day"] = today_str      # nothing dated; do not retry all day
             print("  fda: no dated catalysts in window")
+
+    # 1d. LONG-HORIZON WATCHLIST — exactly 3 slots during open hours.
+    due_slot = None
+    for h in LONGVIEW_SLOTS:
+        if now_local.hour >= h and state.get("longview_slots", {}).get(f"{today_str}:{h}") is None:
+            due_slot = h                     # most recent slot not yet fired
+    if due_slot is not None:
+        try:
+            lv = longview_rank()
+        except Exception as e:
+            lv = []
+            print(f"  longview failed: {e}")
+        fired = False
+        # UW channel, NOT the news channel. The news split exists because
+        # headlines are ambient context that buries actionable posts. This
+        # watchlist is the opposite: a short, ranked list meant to be read and
+        # acted on deliberately, so it belongs with the trade alerts.
+        if lv and post_embed(build_longview_embed(lv), os.getenv("DISCORD_WEBHOOK_URL")):
+            fired = True
+            sent_any = True
+            print(f"  longview sent ({due_slot}:00 slot): {len(lv)} names past the gate")
+        elif not lv:
+            fired = True
+            print(f"  longview ({due_slot}:00 slot): nothing past the drawdown gate")
+        if fired:
+            # Mark THIS slot and every earlier one today, so a late first run
+            # does not then fire the remaining slots back to back.
+            slots = state.setdefault("longview_slots", {})
+            for h in LONGVIEW_SLOTS:
+                if h <= due_slot:
+                    slots[f"{today_str}:{h}"] = True
 
     # 2. CONSOLIDATED — only every DIGEST_EVERY_MIN.
     mins = _minutes_since(state.get("last_digest"))
