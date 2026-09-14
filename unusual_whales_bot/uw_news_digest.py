@@ -74,6 +74,23 @@ SENTIMENT_BACKEND = os.getenv("SENTIMENT_BACKEND", "lexicon")  # lexicon | finbe
 # ---------------------------------------------------------------------------
 def news_webhook() -> Optional[str]:
     return os.getenv("DISCORD_NEWS_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
+
+
+def longview_webhook() -> Optional[str]:
+    """
+    Channel for the long-horizon / fundamentals watchlist.
+
+    Third stream, third channel (2026-09-14). The watchlist used to ride with
+    the trade alerts on the reasoning that both were "meant to be acted on
+    deliberately" — but they are read on completely different clocks. Trade
+    alerts are intraday and perishable; this list is a multi-year screen
+    republished three times a day, and the two buried each other.
+
+    Falls back to the UW channel so a missing variable degrades to the previous
+    behaviour rather than silently posting nowhere — a webhook that resolves to
+    None makes post_embed a no-op, which looks exactly like a quiet market.
+    """
+    return os.getenv("DISCORD_LONGVIEW_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
 MAX_ITEMS = 10
 HEADLINE_CHARS = 180
 
@@ -917,11 +934,12 @@ def main() -> int:
             lv = []
             print(f"  longview failed: {e}")
         fired = False
-        # UW channel, NOT the news channel. The news split exists because
-        # headlines are ambient context that buries actionable posts. This
-        # watchlist is the opposite: a short, ranked list meant to be read and
-        # acted on deliberately, so it belongs with the trade alerts.
-        if lv and post_embed(build_longview_embed(lv), os.getenv("DISCORD_WEBHOOK_URL")):
+        # Its OWN channel as of 2026-09-14 — no longer the UW trade-alert one.
+        # The earlier reasoning ("both are meant to be acted on deliberately")
+        # was wrong about the clock: trade alerts are intraday and perishable,
+        # this is a multi-year screen republished three times a day. Sharing a
+        # channel meant each buried the other.
+        if lv and post_embed(build_longview_embed(lv), longview_webhook()):
             fired = True
             sent_any = True
             print(f"  longview sent ({due_slot}:00 slot): {len(lv)} names past the gate")
