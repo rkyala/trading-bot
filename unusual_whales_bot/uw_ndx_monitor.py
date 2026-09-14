@@ -271,6 +271,8 @@ def build_embed(snap: Dict, why: List[str]) -> Dict:
             {"name": "Volume (QQQ proxy)", "value": volline, "inline": False},
             {"name": "Dealer positioning", "value": regime, "inline": False},
             *( [snap["tech_field"]] if snap.get("tech_field") else [] ),
+            *( [snap["sig_field"]] if snap.get("sig_field") else [] ),
+            *( [snap["trend_field"]] if snap.get("trend_field") else [] ),
             {"name": "Read this before trading it", "value":
              "Trend and volume here are DESCRIPTIVE — what has happened, not what "
              "comes next. Dealer gamma predicts move SIZE on this data (t+2.9), "
@@ -308,6 +310,17 @@ def run_once(state: Dict) -> Optional[Dict]:
         if tech:
             _t.log(tech)
             snap["tech_field"] = _t.field(tech)
+    except Exception:
+        pass
+
+    # TTM squeeze / RSI / ATR levels, and the contracts seeing real single-leg
+    # flow. Same standing: descriptive, gating nothing.
+    try:
+        import uw_ndx_signals as _s
+        sig = _s.compute(snap["price"])
+        if sig:
+            snap["sig_field"] = _s.field_signals(sig)
+        snap["trend_field"] = _s.field_trending(_s.trending_options())
     except Exception:
         pass
 
