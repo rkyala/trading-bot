@@ -27,8 +27,18 @@ EXECUTION_MODE = {
     # Log what would happen without actually executing
     "log_orders_only": False,  # Orders actually placed (in paper account)
 
-    # Notional account equity used to evaluate the daily-loss circuit breaker
-    "session_equity": 25000.0,
+    # Account equity the daily-loss circuit breaker is evaluated against.
+    #
+    # THIS MUST MATCH THE REAL ACCOUNT OR THE BREAKER IS A LIE.
+    # It sat at 25000.0 while account ...1949 held $10,065.80 — 2.5x reality.
+    # MAX_DAILY_LOSS_PCT of -5% therefore tripped at -$1,250, which is -12.4%
+    # of the actual account: an eighth of the balance gone before the breaker
+    # fired. A safety limit calibrated to the wrong denominator is worse than
+    # no limit, because it is trusted.
+    #
+    # Checked against Robinhood on 2026-09-14. RE-CHECK BEFORE GOING LIVE and
+    # whenever the balance changes materially — nothing here reads the broker.
+    "session_equity": 10000.0,
 
     # Used by uw_robinhood_mcp.py to determine behavior
 }
@@ -298,8 +308,22 @@ INSTRUMENT_CONFIG = {
     "instrument": "equity",          # "equity" | "option"
 
     # Dollar notional per entry; share count derived from the live price.
-    "position_dollars": 500.0,
-    "max_dollars_per_symbol": 1500.0,
+    # SMOKE-TEST SIZE for the first live sessions (2026-09-14).
+    #
+    # The live order path has NEVER executed — not one real order in the
+    # project's history. The Sep 8 audit found ten defects in exactly that
+    # code (every order defaulting to SPX, price hardcoded 4500, PUT stops
+    # inverted, the live branch a stub) while the monitoring script reported
+    # green throughout. So the first live order is also the first test of it.
+    #
+    # These numbers exist to make that test cheap, not to express a view. The
+    # previous $500/$1500 were chosen against a $25,000 account and the real
+    # one holds $10,066, so they were 2.5x looser than designed on top of that.
+    #
+    # RAISE THEM once the path is proven: a real fill, a real stop, and a real
+    # EOD flatten observed end to end.
+    "position_dollars": 100.0,
+    "max_dollars_per_symbol": 300.0,
 
     # ---------------------------------------------------------------------
     # FRACTIONAL SHARES.
@@ -496,7 +520,8 @@ FEATURES = {
 # DEFAULTS & CONSTANTS
 # ===========================================================================
 DEFAULT_POSITION_SIZE = 1  # contracts
-MAX_OPEN_POSITIONS = 10
+# 3 while the live path is unproven — see INSTRUMENT_CONFIG. ~$300 deployed.
+MAX_OPEN_POSITIONS = 3
 MAX_DAILY_LOSS_PCT = -5.0  # Circuit breaker: stop if down 5%
 MAX_POSITION_LOSS_PCT = -2.0  # Exit position if down 2%
 
