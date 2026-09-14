@@ -47,6 +47,18 @@ BASE = "https://api.unusualwhales.com/api"
 
 # Fire only on a real change. A channel that posts every poll gets muted, and a
 # muted channel is worth less than no channel.
+# A guaranteed pulse, so a quiet stretch still tells you where NDX is. The bot
+# cycles every 300s, so 10 minutes is every second cycle — frequent enough to
+# day-trade against, rare enough that the channel stays readable.
+HEARTBEAT_MIN = 10.0
+
+# Session window in ET. WITHOUT THIS THE CHANNEL POSTS OVERNIGHT: the monitor
+# runs on the bot cycle, the bot does not stop at the close, and spot-exposures
+# keeps returning rows well outside the session. A heartbeat with no gate would
+# have posted through the night on stale prices.
+SESSION_OPEN_ET = (9, 25)
+SESSION_CLOSE_ET = (16, 5)
+
 VOL_SURGE_MULT = 2.0      # 1m volume vs the session's own average
 MIN_MOVE_PCT = 0.25       # re-alert only after price moves this much again
 EXTREME_EPS_PCT = 0.05    # within this of session high/low counts as a test
@@ -74,6 +86,25 @@ def _et(iso: str) -> str:
         return dt.astimezone(ZoneInfo("America/New_York")).strftime("%H:%M")
     except Exception:
         return str(iso)[11:16]
+
+
+def in_session() -> bool:
+    """True inside the regular session, in ET — never the machine's local zone.
+
+    uw_bot.py uses datetime.now() for log timestamps; reusing that here would
+    put the window on CDT and shift it an hour. Anchored explicitly, the same
+    way uw_execution_safeguards anchors the EOD check.
+    """
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo
+        now = _dt.now(ZoneInfo("America/New_York"))
+        if now.weekday() >= 5:
+            return False
+        hm = (now.hour, now.minute)
+        return SESSION_OPEN_ET <= hm <= SESSION_CLOSE_ET
+    except Exception:
+        return True          # fail open: a clock problem must not mute alerts
 
 
 def _key() -> Optional[str]:
@@ -182,6 +213,11 @@ def triggers(snap: Dict, state: Dict) -> List[str]:
 
     if state.get("last_price") is None:
         out.append("first read of the session")
+    elif state.get("last_post_ts") is not None:
+        import time as _time
+        mins = (_time.time() - state["last_post_ts"]) / 60.0
+        if mins >= HEARTBEAT_MIN:
+            out.append(f"{HEARTBEAT_MIN:.0f}-minute update")
     else:
         moved = abs(px / state["last_price"] - 1) * 100
         if moved >= MIN_MOVE_PCT:
@@ -295,6 +331,8 @@ def webhook() -> Optional[str]:
 def run_once(state: Dict) -> Optional[Dict]:
     """Poll, decide, post. Returns the snapshot when it alerted, else None."""
     from uw_discord import post_embed
+    if not in_session():
+        return None
     snap = snapshot()
     if not snap:
         return None
@@ -328,8 +366,10 @@ def run_once(state: Dict) -> Optional[Dict]:
     if not why:
         return None
     if post_embed(build_embed(snap, why), webhook()):
+        import time as _time
         state["last_price"] = snap["price"]
         state["last_gamma"] = snap.get("gamma")
+        state["last_post_ts"] = _time.time()
         return snap
     return None
 
