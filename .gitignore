@@ -55,3 +55,4 @@ archive/*/data/screened_alerts.jsonl
 archive/*/logs/
 venv_sentiment/
 .news_digest_state.json
+unusual_whales_bot/ndx_technicals.jsonl

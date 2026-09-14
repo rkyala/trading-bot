@@ -4,8 +4,10 @@ NDX intraday monitor — trend, volume, dealer flow.
 
 WHAT NDX ACTUALLY GIVES YOU ON THIS PLAN, measured 2026-09-14:
 
-    /stock/NDX/spot-exposures   103 rows, 10:30-15:03 ET, ~2.5 min apart.
-                                Carries price AND gamma/vanna/charm per 1% move.
+    /stock/NDX/spot-exposures   ~103 rows/day, ~2.5 min apart, carrying price
+                                AND gamma/vanna/charm per 1% move. Timestamps
+                                are UTC: the series runs roughly 06:30-16:00 ET,
+                                so it INCLUDES pre-market.
     /stock/NDX/gex-levels       put wall / gamma flip / magnet / call wall.
     /stock/NDX/greek-exposure   251 daily rows.
     /stock/NDX/ohlc/*           422. NO price series, NO volume.
@@ -14,9 +16,9 @@ WHAT NDX ACTUALLY GIVES YOU ON THIS PLAN, measured 2026-09-14:
 Two consequences shape this module:
 
 1. TREND is built from the spot-exposures price series, because it is the only
-   NDX price series that exists here. It starts at 10:30 ET, so the first hour
-   of the session is invisible — "from open" means from 10:30, not 09:30, and
-   the card says so rather than implying a full-session number.
+   NDX price series that exists here. It begins in PRE-MARKET, so "since open"
+   is not the 09:30 open — the card names the actual start time in ET rather
+   than implying a regular-session number.
 
 2. VOLUME cannot be NDX's own — an index has no share volume. QQQ 1-minute
    volume stands in, and is LABELLED as a proxy everywhere it appears. QQQ
@@ -48,6 +50,30 @@ BASE = "https://api.unusualwhales.com/api"
 VOL_SURGE_MULT = 2.0      # 1m volume vs the session's own average
 MIN_MOVE_PCT = 0.25       # re-alert only after price moves this much again
 EXTREME_EPS_PCT = 0.05    # within this of session high/low counts as a test
+
+
+
+# TIMESTAMPS FROM THIS API ARE UTC, NOT ET.
+#
+# The `time` field ends in Z ("2026-09-14T15:29:36.000000Z"). Slicing [11:16]
+# and labelling it ET printed "since 10:30 ET" on a card meant for trading,
+# when 10:30Z is 06:30 ET — PRE-MARKET. The card then carried a caveat saying
+# the series misses the first hour of the session, which was the opposite of
+# true: it starts two hours BEFORE the open and includes pre-market.
+#
+# Wrong by four hours in the label and wrong in the caveat drawn from it.
+def _et(iso: str) -> str:
+    """'HH:MM' in US/Eastern from a UTC ISO string."""
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        t = str(iso).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(t)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo("America/New_York")).strftime("%H:%M")
+    except Exception:
+        return str(iso)[11:16]
 
 
 def _key() -> Optional[str]:
@@ -103,13 +129,13 @@ def qqq_volume() -> Dict:
     closed = rows[:-1]
     if not closed:
         return {"total": total, "bars": len(rows), "rel": None,
-                "at": str(rows[-1].get("start_time"))[11:16]}
+                "at": _et(rows[-1].get("start_time"))}
     vols = [_f(r.get("volume")) or 0.0 for r in closed]
     avg = sum(vols) / len(vols)
     last = vols[-1]
     return {"last": last, "avg": avg, "total": total, "bars": len(closed),
             "rel": (last / avg) if avg > 0 else None,
-            "at": str(closed[-1].get("start_time"))[11:16]}
+            "at": _et(closed[-1].get("start_time"))}
 
 
 def snapshot() -> Dict:
@@ -138,8 +164,8 @@ def snapshot() -> Dict:
         "range_pct": (hi / lo - 1) * 100 if lo else 0.0,
         # Where in the day's range price sits: 0 = at the low, 100 = at the high.
         "range_pos": ((last - lo) / (hi - lo) * 100) if hi > lo else 50.0,
-        "since": str(s[0].get("time"))[11:16],
-        "at": str(s[-1].get("time"))[11:16],
+        "since": _et(s[0].get("time")),
+        "at": _et(s[-1].get("time")),
         "gamma": g, "vanna": v, "charm": c,
         "put_wall": _f(lv.get("put_wall")), "call_wall": _f(lv.get("call_wall")),
         "gamma_flip": _f(lv.get("gamma_flip")), "magnet": _f(lv.get("gamma_magnet")),
@@ -244,13 +270,15 @@ def build_embed(snap: Dict, why: List[str]) -> Dict:
              f"{snap['range_pct']:.2f}% wide", "inline": True},
             {"name": "Volume (QQQ proxy)", "value": volline, "inline": False},
             {"name": "Dealer positioning", "value": regime, "inline": False},
+            *( [snap["tech_field"]] if snap.get("tech_field") else [] ),
             {"name": "Read this before trading it", "value":
              "Trend and volume here are DESCRIPTIVE — what has happened, not what "
              "comes next. Dealer gamma predicts move SIZE on this data (t+2.9), "
              "never DIRECTION: gamma-timed direction nulled every way it was "
              "tested. Use the regime for SIZING and STOP WIDTH.\n"
-             "NDX has no share volume — the figure above is QQQ. Price starts at "
-             f"{snap['since']} ET, so it is not a full session.", "inline": False},
+             "NDX has no share volume — the figure above is QQQ. The NDX series "
+             f"begins {snap['since']} ET, which includes PRE-MARKET, so "
+             "\"since open\" is not the 09:30 open.", "inline": False},
         ],
         "timestamp": datetime.utcnow().isoformat(),
         "footer": {"text": "Unusual Whales bot · NDX monitor · not trade logic"},
@@ -268,6 +296,21 @@ def run_once(state: Dict) -> Optional[Dict]:
     snap = snapshot()
     if not snap:
         return None
+
+    # Technicals are DESCRIPTIVE and LOGGED — they never gate an alert. See
+    # uw_ndx_technicals for why: the closest thing measured on this project
+    # (technical gates over 104,924 obs) had the traded set UNDERPERFORM the
+    # skipped set, and there is not enough 1-minute history to test the
+    # intraday version. Logging forward is how it becomes evidence.
+    try:
+        import uw_ndx_technicals as _t
+        tech = _t.compute(snap["price"])
+        if tech:
+            _t.log(tech)
+            snap["tech_field"] = _t.field(tech)
+    except Exception:
+        pass
+
     why = triggers(snap, state)
     if not why:
         return None
