@@ -55,7 +55,30 @@ set -a
 . ./.env.local
 set +a
 
-for v in UW_API_KEY RH_CLIENT_ID RH_REFRESH_TOKEN; do
+# PAPER MODE MUST NOT REQUIRE LIVE BROKERAGE CREDENTIALS.
+#
+# This guard demanded RH_CLIENT_ID and RH_REFRESH_TOKEN unconditionally, so a
+# paper bot that never places a real order still refused to start without live
+# Robinhood credentials present. That coupling blocked the one action that
+# actually closes a credential leak: revoking the token. You could not revoke
+# without breaking the next morning's start, so the leaked token stayed live.
+#
+# Required vars are now chosen by the mode the bot will actually run in, read
+# from uw_config.py rather than assumed. In paper mode only UW_API_KEY is
+# needed. Going live re-imposes the full set, which is the right moment for it.
+REQUIRED_VARS="UW_API_KEY"
+if python3 -c "
+import sys; sys.path.insert(0, 'unusual_whales_bot')
+from uw_config import EXECUTION_MODE
+sys.exit(0 if EXECUTION_MODE.get('paper_trading', True) else 1)
+" 2>/dev/null; then
+    echo "[$(date)] paper mode — Robinhood credentials not required" | tee -a "$LOG_FILE"
+else
+    REQUIRED_VARS="UW_API_KEY RH_CLIENT_ID RH_REFRESH_TOKEN"
+    echo "[$(date)] LIVE mode — Robinhood credentials required" | tee -a "$LOG_FILE"
+fi
+
+for v in $REQUIRED_VARS; do
     if [ -z "${!v}" ]; then
         echo "[$(date)] ERROR: $v not set in .env.local — refusing to start" | tee -a "$LOG_FILE"
         exit 1
