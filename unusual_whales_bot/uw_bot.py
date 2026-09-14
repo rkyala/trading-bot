@@ -1640,34 +1640,60 @@ class UnusualWhalesBot:
             # GEX zone alerts. Event-driven: one snapshot at the first cycle
             # of the day, then only when an index CROSSES a gamma level.
             # Posting all four every 300s would be ~48 messages an hour.
-            try:
-                if self._gex_alerts is None:
-                    from uw_discord_gex_alerts import GEXDiscordAlerts
-                    self._gex_alerts = GEXDiscordAlerts()
-                fired = await self._gex_alerts.check_crossings()
-                if fired:
-                    logger.info(f"⚡ GEX alerts posted: {', '.join(fired)}")
-            except Exception as e:
-                logger.debug(f"GEX alert check failed: {e}")
-
-            # NDX intraday monitor — trend, volume, dealer flow. Separate from
-            # the GEX crossing alert: that one fires on zone changes, this one
-            # on movement, range extremes, volume surges and gamma sign flips.
-            # Posts to the NDX channel. Never raises into the trading path.
-            try:
-                import uw_ndx_monitor as _ndx
-                if not hasattr(self, "_ndx_state"):
-                    self._ndx_state = {}
-                snap = await asyncio.to_thread(_ndx.run_once, self._ndx_state)
-                if snap:
-                    logger.info(f"📈 NDX alert posted: {snap['price']:,.0f} "
-                                f"({snap['recent_pct']:+.2f}% recent)")
-            except Exception as e:
-                logger.debug(f"NDX monitor failed: {e}")
 
         except Exception as e:
             logger.error(f"Cycle error: {e}")
             logger.info("✅ Cycle complete")
+
+
+    async def run_market_monitors(self):
+        """
+        GEX crossings and the NDX card — independent of whether the cycle found
+        anything to trade.
+
+        THEY USED TO LIVE AT THE END OF run_cycle AND MOSTLY DID NOT RUN.
+        run_cycle has five early returns on entirely ordinary conditions:
+
+            "No alerts in this cycle"                    -> return
+            "Phase 1 rejected all alerts"                -> return
+            "No tradeable contracts (all LEAPs/spreads)" -> return
+            "Consolidation rejected all alerts"          -> return
+            "No buyer-initiated (ask_side) signals"      -> return
+
+        Every one of those fires BEFORE the monitors, so on a quiet cycle they
+        were skipped entirely — and a quiet cycle is exactly when a market
+        monitor matters. The NDX 10-minute heartbeat would have gone silent
+        precisely when there was no flow to talk about, which reads as "nothing
+        happening" rather than "not running". GEX crossings have had this since
+        they were added.
+
+        These describe the MARKET. Nothing about them depends on the bot having
+        found a trade, so they belong on the loop, not inside the trade path.
+        Each is wrapped so a monitor failure can never disturb trading.
+        """
+        try:
+            if self._gex_alerts is None:
+                from uw_discord_gex_alerts import GEXDiscordAlerts
+                self._gex_alerts = GEXDiscordAlerts()
+            fired = await self._gex_alerts.check_crossings()
+            if fired:
+                logger.info(f"⚡ GEX alerts posted: {', '.join(fired)}")
+        except Exception as e:
+            logger.debug(f"GEX alert check failed: {e}")
+
+        # NDX intraday monitor — trend, volume, dealer flow, technicals.
+        # Posts to the NDX channel on movement, range extremes, volume surges,
+        # gamma sign flips, and at least every 10 minutes during the session.
+        try:
+            import uw_ndx_monitor as _ndx
+            if not hasattr(self, "_ndx_state"):
+                self._ndx_state = {}
+            snap = await asyncio.to_thread(_ndx.run_once, self._ndx_state)
+            if snap:
+                logger.info(f"📈 NDX alert posted: {snap['price']:,.0f} "
+                            f"({snap['recent_pct']:+.2f}% recent)")
+        except Exception as e:
+            logger.debug(f"NDX monitor failed: {e}")
 
     async def main_loop(self, poll_interval: int = 300):
         """
@@ -1683,6 +1709,8 @@ class UnusualWhalesBot:
         try:
             while True:
                 await self.run_cycle()
+                # Outside run_cycle on purpose — see run_market_monitors.
+                await self.run_market_monitors()
                 await asyncio.sleep(poll_interval)
 
         except KeyboardInterrupt:
