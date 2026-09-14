@@ -89,6 +89,47 @@ class WatchedPosition:
         return (self.block_size / self.peak_oi) if self.peak_oi > 0 else 0.0
 
     @property
+    def extrinsic_pct(self) -> Optional[float]:
+        """
+        Share of the premium that is TIME value rather than intrinsic.
+
+        WHY THIS DECIDES WHETHER AN ALERT IS WORTH SENDING
+        A deep in-the-money option trading at intrinsic is not a directional
+        bet. Paying $1.07M for something already worth $1.07M buys no
+        convexity — delta is ~1 and the position is economically stock. Those
+        prints are conversions, reversals, boxes and synthetic longs: financing
+        and margin structures, carrying no view on direction.
+
+        Two QQQ blocks on 2026-09-14 are the worked example, both alerted as
+        "bullish", both ~$1.05M, one minute apart, with QQQ at $707.40:
+
+            $820 PUT   paid $103.88/sh   intrinsic $112.60   extrinsic -$8.72
+            $540 CALL  paid $174.58/sh   intrinsic $167.40   extrinsic +$7.18
+
+        Long deep-ITM call bought on the ask, deep-ITM put sold on the bid,
+        same name, same minute: that is ONE synthetic long, not two bullish
+        whales. The offsetting extrinsic is the financing spread. Reported as
+        two independent confirmations it is actively misleading.
+
+        This is the LEAP defect again (2026-09-08), where deep-ITM contracts
+        cost -$4,350 in round-trip spread against a +$187 edge. The trade path
+        got uw_contract_filter; the ALERT path never did.
+
+        Returns None when it cannot be computed — the caller must not treat
+        None as a failure, because a missing underlying price is not evidence
+        of anything.
+        """
+        spot = self.underlying_at_detection
+        if not spot or not self.strike or not self.block_size:
+            return None
+        per_share = self.block_premium / self.block_size / 100.0
+        if per_share <= 0:
+            return None
+        is_call = str(self.option_type).upper().startswith("C")
+        intrinsic = max(0.0, (spot - self.strike) if is_call else (self.strike - spot))
+        return (per_share - intrinsic) / per_share * 100.0
+
+    @property
     def pct_off_peak(self) -> float:
         if self.peak_oi <= 0:
             return 0.0

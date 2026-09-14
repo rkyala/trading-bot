@@ -610,9 +610,28 @@ class UnusualWhalesBot:
         if self.watchlist.active():
             logger.info(f"👁️  Watchlist: {len(self.watchlist.active())} positions tracked")
 
+    # A block whose premium is almost all intrinsic is a financing or synthetic
+    # structure, not a directional bet. See WatchedPosition.extrinsic_pct for
+    # the worked QQQ example. 10% is deliberately loose — it removes
+    # conversions and boxes without touching a genuinely ITM directional buy.
+    MIN_EXTRINSIC_PCT = 10.0
+
     def _alert_watchlist_event(self, event: str, pos) -> None:
         """Notify on a tracked whale position changing state."""
         import os
+
+        # SUPPRESS SYNTHETICS. Filter the ALERT, not the tracking: the position
+        # stays on the watchlist and in the table, it simply does not page
+        # anyone. Deep-ITM prints are the largest by premium, so they dominate
+        # the channel while being the least informative thing in it.
+        _ex = getattr(pos, "extrinsic_pct", None)
+        if _ex is not None and _ex < self.MIN_EXTRINSIC_PCT:
+            logger.info(
+                f"🔇 {pos.symbol} ${pos.strike:.0f}{str(pos.option_type)[0]} "
+                f"{event}: alert suppressed — only {_ex:.1f}% extrinsic "
+                f"(deep ITM, reads as financing/synthetic, not a directional bet)"
+            )
+            return
         headline = {
             "CONFIRMED": "🐋 WHALE POSITION CONFIRMED",
             "UNWINDING": "⚠️ WHALE POSITION UNWINDING",
@@ -635,12 +654,8 @@ class UnusualWhalesBot:
         # These describe what the TAPE did — a block printing, confirming or
         # unwinding — and are read on a different clock from the bot's own
         # fills, which is why they no longer share a webhook with them.
-        #
-        # Falls back to DISCORD_WEBHOOK_URL: a missing variable must degrade to
-        # the old channel, never to None. A None webhook makes this return
-        # silently, which is indistinguishable from "no blocks today" — the
-        # failure mode that hid two days of dead fundamental alerts.
-        wh = os.getenv("DISCORD_WHALE_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
+        from uw_discord import whale_webhook
+        wh = whale_webhook()
         if not wh:
             return
         try:
@@ -887,7 +902,7 @@ class UnusualWhalesBot:
     _FIRST_FIRE_MARKER = "first_risk_exit_seen.flag"
 
     @staticmethod
-    def _discord_post(embed: dict) -> bool:
+    def _discord_post(embed: dict, webhook: Optional[str] = None) -> bool:
         """
         Single place every Discord alert goes through.
 
@@ -900,7 +915,9 @@ class UnusualWhalesBot:
         TLS verification stays on: the webhook URL is a credential.
         """
         import os, json as _json
-        wh = os.getenv("DISCORD_WEBHOOK_URL")
+        # Caller may target a specific channel (whale blocks have their own).
+        # Default stays the UW channel, so bot fills and exits are unaffected.
+        wh = webhook or os.getenv("DISCORD_WEBHOOK_URL")
         if not wh:
             return False
 
@@ -1000,6 +1017,7 @@ class UnusualWhalesBot:
             if cid in self._distribution_alerted:
                 continue
             self._distribution_alerted.add(cid)
+            from uw_discord import whale_webhook as _whale_wh
             total = flow["ask_premium"] + flow["bid_premium"]
             self._discord_post({
                 "title": f"⚠️ WHALE DISTRIBUTION — {pos.symbol} "
@@ -1026,7 +1044,7 @@ class UnusualWhalesBot:
                      "inline": False},
                 ],
                 "footer": {"text": "Unusual Whales bot · whale watchlist · intraday"},
-            })
+            }, webhook=_whale_wh())
 
     def _alert_skipped_bearish(self, skipped: list) -> None:
         """

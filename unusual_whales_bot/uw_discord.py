@@ -66,6 +66,22 @@ def scrub(payload: dict) -> Optional[dict]:
         return None
 
 
+def whale_webhook() -> Optional[str]:
+    """
+    Channel for whale block / unusual-OI alerts.
+
+    Single source of truth for this route. It was briefly resolved inline with
+    os.getenv in one place and missed in another, which put the WHALE
+    DISTRIBUTION alert on the UW channel while WHALE POSITION CONFIRMED went to
+    the whale one — two halves of the same story in two rooms.
+
+    Falls back to the UW channel: a missing variable must degrade to the old
+    behaviour, never to None. A None webhook makes the post a silent no-op,
+    which reads exactly like "no blocks today".
+    """
+    return os.getenv("DISCORD_WHALE_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
+
+
 def post_embed(embed: dict, webhook: Optional[str] = None) -> bool:
     """
     Send one embed. True only on a real 2xx.
