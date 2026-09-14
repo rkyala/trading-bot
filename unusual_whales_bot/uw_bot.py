@@ -1650,6 +1650,21 @@ class UnusualWhalesBot:
             except Exception as e:
                 logger.debug(f"GEX alert check failed: {e}")
 
+            # NDX intraday monitor — trend, volume, dealer flow. Separate from
+            # the GEX crossing alert: that one fires on zone changes, this one
+            # on movement, range extremes, volume surges and gamma sign flips.
+            # Posts to the NDX channel. Never raises into the trading path.
+            try:
+                import uw_ndx_monitor as _ndx
+                if not hasattr(self, "_ndx_state"):
+                    self._ndx_state = {}
+                snap = await asyncio.to_thread(_ndx.run_once, self._ndx_state)
+                if snap:
+                    logger.info(f"📈 NDX alert posted: {snap['price']:,.0f} "
+                                f"({snap['recent_pct']:+.2f}% recent)")
+            except Exception as e:
+                logger.debug(f"NDX monitor failed: {e}")
+
         except Exception as e:
             logger.error(f"Cycle error: {e}")
             logger.info("✅ Cycle complete")
