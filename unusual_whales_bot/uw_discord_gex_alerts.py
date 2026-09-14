@@ -1,6 +1,7 @@
 """
 Discord GEX Support/Resistance Alerts
-Sends alerts for major indices: SPX, SPY, NDX, IWM
+Sends GEX alerts for SPY, QQQ, IWM, DIA and NDX. NDX routes to its own
+channel (DISCORD_NDX_WEBHOOK_URL); the rest go to the UW channel.
 """
 
 import asyncio
@@ -62,6 +63,25 @@ class GEXDiscordAlerts:
                     px = self.safe_float(data.get("close") or data.get("last"))
                     if px > 0:
                         return px
+                # INDEX FALLBACK. SPX and NDX return 422 from /stock-state and
+                # /ohlc — which is why they were dropped from the ticker list
+                # with the note "no price endpoint on this plan". That note was
+                # right about those two endpoints and wrong about the plan:
+                # /stock/{t}/spot-exposures carries a `price` field for both,
+                # timestamped to the minute. It was never checked because the
+                # endpoint is filed under exposures, not prices.
+                #
+                # Rows are oldest-first, so take the LAST one, not the first —
+                # the same ordering trap that made INTC read -82.5% instead of
+                # -26.5% on the daily OHLC endpoint.
+                response = await client.get(f"{self.base_url}/stock/{ticker}/spot-exposures")
+                if response.status_code == 200:
+                    rows = response.json().get("data") or []
+                    if rows:
+                        newest = max(rows, key=lambda r: str(r.get("time") or ""))
+                        px = self.safe_float(newest.get("price"))
+                        if px > 0:
+                            return px
                 logger.warning(f"price unavailable for {ticker}: HTTP {response.status_code}")
             except Exception as e:
                 logger.error(f"Price fetch error for {ticker}: {e}")
@@ -187,9 +207,23 @@ _measured here: magnitude t+2.9, direction null across 15 tests._
 
         return embed
 
+    def _webhook_for(self, ticker: str) -> str:
+        """
+        Per-ticker channel. NDX has its own; everything else keeps the default.
+
+        Falls back to self.webhook_url rather than to None — a None webhook
+        makes send_discord_alert return False quietly, which on Discord is
+        indistinguishable from "no crossings today". That silent-no-op failure
+        is the one that hid two days of dead fundamental alerts.
+        """
+        if str(ticker).upper() == "NDX":
+            return os.getenv("DISCORD_NDX_WEBHOOK_URL") or self.webhook_url
+        return self.webhook_url
+
     async def send_discord_alert(self, ticker: str, embed: Dict) -> bool:
         """Send alert to Discord"""
-        if not self.webhook_url:
+        webhook = self._webhook_for(ticker)
+        if not webhook:
             logger.warning(f"Discord webhook not configured, skipping {ticker}")
             return False
 
@@ -200,7 +234,7 @@ _measured here: magnitude t+2.9, direction null across 15 tests._
                 "embeds": [embed]
             }
             try:
-                response = await client.post(self.webhook_url, json=payload)
+                response = await client.post(webhook, json=payload)
                 if response.status_code == 204:
                     logger.info(f"Discord alert sent for {ticker}")
                     return True
@@ -300,10 +334,11 @@ _measured here: magnitude t+2.9, direction null across 15 tests._
 
         Returns the list of tickers alerted on.
         """
-        # SPX/NDX have no price endpoint on this plan (/stock-state and /ohlc
-        # both 422), so they could only ever post "$0.00". SPY/QQQ/IWM/DIA
-        # serve both gex-levels and price, and are what the bot trades.
-        tickers = tickers or ["SPY", "QQQ", "IWM", "DIA"]
+        # NDX added 2026-09-14. It was excluded on the belief that SPX/NDX have
+        # no price source; get_current_price now falls back to spot-exposures,
+        # which serves both. NDX alerts route to their own channel — see
+        # _webhook_for().
+        tickers = tickers or ["SPY", "QQQ", "IWM", "DIA", "NDX"]
         today = datetime.utcnow().strftime("%Y-%m-%d")
         first_of_day = self._snapshot_day != today
         alerted = []

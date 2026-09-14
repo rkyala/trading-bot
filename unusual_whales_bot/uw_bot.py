@@ -942,7 +942,7 @@ class UnusualWhalesBot:
             # leaves this path unprotected.
             for var in ("UW_API_KEY", "DISCORD_WEBHOOK_URL", "ANTHROPIC_API_KEY",
                         "DISCORD_NEWS_WEBHOOK_URL", "DISCORD_LONGVIEW_WEBHOOK_URL",
-                        "DISCORD_WHALE_WEBHOOK_URL",
+                        "DISCORD_WHALE_WEBHOOK_URL", "DISCORD_NDX_WEBHOOK_URL",
                         "RH_CLIENT_ID", "RH_REFRESH_TOKEN", "RH_ACCESS_TOKEN",
                         "SCHWAB_CLIENT_ID", "SCHWAB_CLIENT_SECRET", "HF_TOKEN"):
                 val = os.getenv(var)
