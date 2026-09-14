@@ -631,7 +631,16 @@ class UnusualWhalesBot:
         )
         logger.warning(f"{headline}: {pos.symbol} {pos.strike:.0f}{pos.option_type[0]}")
 
-        wh = os.getenv("DISCORD_WEBHOOK_URL")
+        # Whale block / unusual-OI alerts get their OWN channel (2026-09-14).
+        # These describe what the TAPE did — a block printing, confirming or
+        # unwinding — and are read on a different clock from the bot's own
+        # fills, which is why they no longer share a webhook with them.
+        #
+        # Falls back to DISCORD_WEBHOOK_URL: a missing variable must degrade to
+        # the old channel, never to None. A None webhook makes this return
+        # silently, which is indistinguishable from "no blocks today" — the
+        # failure mode that hid two days of dead fundamental alerts.
+        wh = os.getenv("DISCORD_WHALE_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
         if not wh:
             return
         try:
@@ -910,9 +919,15 @@ class UnusualWhalesBot:
         try:
             blob = _json.dumps(embed)
             leaked = []
+            # Must mirror _SECRET_VARS in uw_discord.py. Both lists match by
+            # NAME, not by pattern, so a new credential is invisible to the
+            # scrub until it is added HERE TOO — adding it in only one place
+            # leaves this path unprotected.
             for var in ("UW_API_KEY", "DISCORD_WEBHOOK_URL", "ANTHROPIC_API_KEY",
+                        "DISCORD_NEWS_WEBHOOK_URL", "DISCORD_LONGVIEW_WEBHOOK_URL",
+                        "DISCORD_WHALE_WEBHOOK_URL",
                         "RH_CLIENT_ID", "RH_REFRESH_TOKEN", "RH_ACCESS_TOKEN",
-                        "SCHWAB_CLIENT_ID", "SCHWAB_CLIENT_SECRET"):
+                        "SCHWAB_CLIENT_ID", "SCHWAB_CLIENT_SECRET", "HF_TOKEN"):
                 val = os.getenv(var)
                 if val and len(val) >= 12 and val in blob:
                     blob = blob.replace(val, "<REDACTED>")
