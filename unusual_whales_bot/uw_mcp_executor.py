@@ -399,10 +399,33 @@ class MCPEquityExecutor:
         except Exception as e:
             return fail(f"unexpected error: {e}")
 
+        # Order id was coming back "unknown" on every live fill because this
+        # assumed the id sat at the top level or one deep under "data". The MCP
+        # wraps it differently, and without the id a fill cannot be reconciled
+        # against get_equity_orders — which is the only way to measure real
+        # slippage. Search the structure instead of guessing its shape.
+        def _find_id(obj, depth=0):
+            if depth > 4:
+                return None
+            if isinstance(obj, dict):
+                for k in ("id", "order_id"):
+                    v = obj.get(k)
+                    if isinstance(v, str) and len(v) >= 8:
+                        return v
+                for v in obj.values():
+                    got = _find_id(v, depth + 1)
+                    if got:
+                        return got
+            elif isinstance(obj, list):
+                for v in obj[:5]:
+                    got = _find_id(v, depth + 1)
+                    if got:
+                        return got
+            return None
+
         oid = None
         try:
-            d = json.loads(txt)
-            oid = (d.get("data") or d).get("id") or d.get("order_id")
+            oid = _find_id(json.loads(txt))
         except Exception:
             pass
         logger.warning(f"🚀 LIVE order: {side} {qty} {symbol} → {oid or 'id unknown'}")
