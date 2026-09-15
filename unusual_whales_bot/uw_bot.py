@@ -1130,6 +1130,9 @@ class UnusualWhalesBot:
             self._distribution_alerted.add(cid)
             from uw_discord import whale_webhook as _whale_wh
             total = flow["ask_premium"] + flow["bid_premium"]
+            # Bid-side premium is what actually LEFT; total includes buying.
+            _sold = flow.get("bid_premium") or 0.0
+            _frac = (_sold / pos.block_premium) if pos.block_premium else 0.0
             self._discord_post({
                 "title": f"⚠️ WHALE DISTRIBUTION — {pos.symbol} "
                          f"${pos.strike:.0f}{pos.option_type[0]}",
@@ -1140,18 +1143,39 @@ class UnusualWhalesBot:
                 "color": 16776960,
                 "timestamp": datetime.utcnow().isoformat(),
                 "fields": [
-                    {"name": "Hit the bid", "value": f"{flow['bid_share']:.0%} of "
-                     f"${total/1e3:,.0f}k", "inline": True},
+                    {"name": "Sold today (bid-side)", "value":
+                     f"${_sold/1e3:,.0f}k of ${total/1e3:,.0f}k traded "
+                     f"({flow['bid_share']:.0%} hit the bid)", "inline": True},
                     {"name": "Contract volume", "value": f"{flow['volume']:,.0f}", "inline": True},
                     {"name": "Last", "value": f"${flow['last']:,.2f}", "inline": True},
                     {"name": "Original block", "value": f"{pos.block_size:,.0f} @ "
                      f"${pos.block_premium/1e6:.2f}M", "inline": True},
                     {"name": "OI", "value": f"{pos.baseline_oi:,.0f} → {pos.current_oi:,.0f}", "inline": True},
                     {"name": "Block share of OI", "value": f"{pos.oi_concentration:.0%}", "inline": True},
+                    # THE NUMBER THAT DECIDES WHETHER THIS MATTERS.
+                    #
+                    # The card said "being sold into today" whether the seller
+                    # moved 1% of the position or 80% of it. Two real examples
+                    # from 2026-09-15: SPY $727P sold $55k against a $3.33M
+                    # block (1.7%) and DAL $88C sold $96k against $8.69M (1.1%).
+                    # Both read as distribution. Both were noise.
+                    {"name": "⚖️ Share of the original block", "value":
+                     (f"**{_frac:.1%}** — ${_sold/1e3:,.0f}k sold against a "
+                      f"${pos.block_premium/1e6:.2f}M position\n"
+                      + ("Trivial. At this size the holder has barely moved."
+                         if _frac < 0.05 else
+                         "Partial. Some of the position is leaving."
+                         if _frac < 0.25 else
+                         "Material. A real share of the block is being sold."))
+                     if pos.block_premium else "original block premium unknown",
+                     "inline": False},
                     {"name": "Caveat", "value":
                      "Bid-side pressure means SOMEBODY is selling this contract, "
                      "not provably the holder being tracked. The block's share of "
-                     "open interest above indicates how strong that inference is.",
+                     "open interest above indicates how strong that inference is.\n"
+                     "Whale blocks were tested here on 10,099 samples over 1-21 "
+                     "day horizons: every result |t| < 1.1. Treat this as "
+                     "information, not a signal.",
                      "inline": False},
                 ],
                 "footer": {"text": "Unusual Whales bot · whale watchlist · intraday"},
