@@ -461,17 +461,45 @@ class PositionManager:
         for pos_id, position in list(self.positions.items()):
             exit_price, exit_underlying = await self.mark_position(position, robinhood_mcp)
 
+            # THIS CALLED place_option_order ON EQUITY POSITIONS.
+            #
+            # The bot trades SHARES (INSTRUMENT_CONFIG instrument="equity"), so
+            # the options method was wrong for every position it has ever held.
+            # Worse, close_position ran OUTSIDE the try, so a failed order still
+            # emptied the book — at 15:45 the whole book would be marked closed
+            # while every share stayed at the broker, unmanaged overnight.
+            #
+            # EOD is 54% of all exits (55 of 102), so this was the single most
+            # consequential path in the bot.
+            #
+            # Fractional quantities cannot use limit orders on Robinhood, and
+            # EOD wants certainty of fill anyway, so: market.
+            ok = True
             if robinhood_mcp is not None:
                 try:
-                    await robinhood_mcp.place_option_order(
+                    resp = await robinhood_mcp.place_equity_order(
                         symbol=position.symbol,
-                        option_chain_id=position.option_chain_id,
                         quantity=position.quantity,
+                        side="sell",
                         order_type="market",
-                        direction="sell_to_close",
                     )
+                    ok = bool(getattr(resp, "success", False))
+                    if not ok:
+                        logger.error(
+                            f"🚨 EOD exit REJECTED for {pos_id}: "
+                            f"{getattr(resp, 'message', 'no reason')} — position "
+                            f"KEPT OPEN, the shares are still held."
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to place EOD exit order for {pos_id}: {e}")
+                    ok = False
+                    logger.error(f"🚨 EOD exit order raised for {pos_id}: {e} — "
+                                 f"position KEPT OPEN, the shares are still held.")
+
+            # Only drop it from the book if the sell actually went through.
+            # A book that says flat while the broker says long is how positions
+            # go unmanaged without anyone noticing.
+            if not ok:
+                continue
 
             self.close_position(pos_id, exit_price, "EOD_FORCE_CLOSE", exit_underlying)
             closed_ids.append(pos_id)

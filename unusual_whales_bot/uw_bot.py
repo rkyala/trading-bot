@@ -921,13 +921,23 @@ class UnusualWhalesBot:
             return False
 
         # Execute the rotation
+        # Same defect as the bearish-flow exit: a rejected order returns
+        # success=False rather than raising, so the except alone let the book
+        # close on an order that never filled.
         try:
-            await self.robinhood_mcp.place_equity_order(
+            _resp = await self.robinhood_mcp.place_equity_order(
                 symbol=pos.symbol, quantity=pos.quantity, side="sell",
                 order_type="limit", limit_price=mark,
             )
         except Exception as e:
-            logger.error(f"❌ rotation exit failed for {pos.symbol}: {e}; keeping it")
+            logger.error(f"❌ rotation exit raised for {pos.symbol}: {e}; keeping it")
+            return False
+        if not getattr(_resp, "success", False):
+            logger.error(
+                f"🚨 rotation exit REJECTED for {pos.symbol} "
+                f"({getattr(_resp, 'message', 'no reason')}) — keeping it. "
+                f"The shares are still held."
+            )
             return False
 
         closed = self.position_manager.close_position(
@@ -958,13 +968,27 @@ class UnusualWhalesBot:
             exit_price, exit_spot = await self.position_manager.mark_position(
                 pos, self.robinhood_mcp
             )
+            # A REJECTED ORDER DOES NOT RAISE — it returns success=False.
+            # This try/except looked like it protected the book and did not:
+            # on 2026-09-15 a 401 refused the DELL and SPCX sells, the except
+            # never fired, close_position ran anyway, and ~$1,000 of shares
+            # were left at the broker with no stop, no target and no EOD
+            # flatten while the bot recorded a -$11 loss that never executed.
+            # Check the RESPONSE, not just for an exception.
             try:
-                await self.robinhood_mcp.place_equity_order(
+                _resp = await self.robinhood_mcp.place_equity_order(
                     symbol=symbol, quantity=pos.quantity, side="sell",
                     order_type="limit", limit_price=exit_price,
                 )
             except Exception as e:
-                logger.error(f"❌ {symbol}: exit order failed ({e}); keeping position open")
+                logger.error(f"❌ {symbol}: exit order raised ({e}); keeping position open")
+                continue
+            if not getattr(_resp, "success", False):
+                logger.error(
+                    f"🚨 {symbol}: exit order REJECTED "
+                    f"({getattr(_resp, 'message', 'no reason')}) — keeping the "
+                    f"position open. The shares are still held."
+                )
                 continue
 
             closed = self.position_manager.close_position(
@@ -1413,6 +1437,18 @@ class UnusualWhalesBot:
                         exit_price, exit_spot = await self.position_manager.mark_position(
                             pos, self.robinhood_mcp
                         )
+                        # Same defect as the ATR path: no order was placed,
+                        # the book simply closed. Tier 2 is in shadow mode today
+                        # so it never reached here live, but it would have.
+                        _r2 = await self.robinhood_mcp.place_equity_order(
+                            symbol=pos.symbol, quantity=pos.quantity,
+                            side="sell", order_type="market",
+                        )
+                        if not getattr(_r2, "success", False):
+                            logger.error(
+                                f"🚨 {pos.symbol}: tier2 exit REJECTED "
+                                f"({getattr(_r2,'message','')}) — position KEPT OPEN")
+                            continue
                         logger.info(f"✅ TIER 2 EXIT: {pos_id} via {exit_reason} (conf={confidence:.0%})")
                         closed = self.position_manager.close_position(
                             pos_id,
@@ -1447,6 +1483,28 @@ class UnusualWhalesBot:
                                         exit_price, exit_spot = await self.position_manager.mark_position(
                                             pos, self.robinhood_mcp
                                         )
+                                        # THIS PATH NEVER SOLD ANYTHING.
+                                        #
+                                        # It marked the book closed and booked
+                                        # P&L with no order placed at all. Live,
+                                        # a STOP_HIT would leave the losing
+                                        # position running at the broker while
+                                        # the bot believed it was flat — the
+                                        # worst possible version of this bug,
+                                        # because the whole point of a stop is
+                                        # that the exposure ends.
+                                        _r = await self.robinhood_mcp.place_equity_order(
+                                            symbol=pos.symbol,
+                                            quantity=pos.quantity,
+                                            side="sell",
+                                            order_type="market",
+                                        )
+                                        if not getattr(_r, "success", False):
+                                            logger.error(
+                                                f"🚨 {pos.symbol}: {reason} exit "
+                                                f"REJECTED ({getattr(_r,'message','')}) "
+                                                f"— position KEPT OPEN, shares still held")
+                                            continue
                                         logger.info(f"✅ ATR EXIT: {pos_id} via {reason}")
                                         closed = self.position_manager.close_position(
                                             pos_id,

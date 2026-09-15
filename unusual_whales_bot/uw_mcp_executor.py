@@ -174,7 +174,7 @@ class RobinhoodMCP:
         return h
 
     def _rpc(self, method: str, params: Optional[Dict] = None,
-             notify: bool = False) -> Optional[Dict]:
+             notify: bool = False, _retried: bool = False) -> Optional[Dict]:
         h = self._headers()
         if not h:
             raise MCPError("not authenticated")
@@ -189,7 +189,26 @@ class RobinhoodMCP:
         if sid:
             self._session = sid
         if r.status_code == 401:
-            raise MCPError("401 from MCP — token invalid or expired")
+            # RE-AUTHENTICATE AND RETRY ONCE. A 401 used to raise here with the
+            # dead token still cached, so the process stayed poisoned for its
+            # whole life — every subsequent order, INCLUDING EVERY EXIT,
+            # failed. On 2026-09-15 the bot held five live positions and could
+            # not have stopped out of any of them.
+            #
+            # Refresh tokens are single use, so ANY other OAuth exchange —
+            # another process, a diagnostic script — rotates the credential and
+            # invalidates this session's access token. That is not an
+            # exceptional case to fail on; it is a normal thing that happens,
+            # and the only correct response is to get a new token.
+            if not _retried:
+                logger.warning("401 from MCP — re-authenticating and retrying")
+                self._access = None
+                self._expires = 0.0
+                self._session = None
+                self._ready = False
+                return self._rpc(method, params, notify, _retried=True)
+            raise MCPError("401 from MCP after re-authentication — credentials "
+                           "are invalid, not merely stale")
         if r.status_code >= 400:
             raise MCPError(f"HTTP {r.status_code}: {r.text[:200]}")
         if notify:
