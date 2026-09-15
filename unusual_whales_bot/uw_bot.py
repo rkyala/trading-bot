@@ -1443,7 +1443,53 @@ class UnusualWhalesBot:
                                         self._record_pnl(closed)
 
                     except Exception as e:
-                        logger.warning(f"Price fetch error: {e}")
+                        # A PRICE FAILURE HERE SKIPS EVERY STOP AND TARGET.
+                        #
+                        # The asymmetry is the danger: no price BLOCKS an entry
+                        # (safe, reason "no_price"), but in this loop it just
+                        # skips the exit check and moves on. The risk loop runs
+                        # every 60s, so an hour of degraded data is ~60 missed
+                        # stop checks on live positions — at WARNING level,
+                        # invisible in a busy log.
+                        #
+                        # That is not hypothetical. The Schwab feed — also paid
+                        # and authenticated — returned 14,270 consecutive 401s
+                        # over two days while the scan reported "Sent 0 STRONG
+                        # BUY alerts", which reads exactly like a quiet market.
+                        # A paid feed fails by answering, not by going away.
+                        #
+                        # So: count consecutive failures and escalate. One is
+                        # noise; a sustained run means positions are unmanaged
+                        # and somebody has to know.
+                        self._price_fail_streak = getattr(
+                            self, "_price_fail_streak", 0) + 1
+                        n = self._price_fail_streak
+                        if n >= 5:
+                            held = len(self.position_manager.positions)
+                            logger.error(
+                                f"🚨 PRICE FEED DOWN: {n} consecutive failures "
+                                f"(~{n} min). {held} position(s) are NOT being "
+                                f"checked for stops or targets. Last error: {e}"
+                            )
+                            if n == 5 or n % 15 == 0:
+                                try:
+                                    self._discord_post({
+                                        "title": "🚨 PRICE FEED DOWN — positions unmanaged",
+                                        "description":
+                                            f"{n} consecutive price-fetch failures.\n"
+                                            f"**{held} open position(s)** are not being "
+                                            f"checked for stops or targets.\n"
+                                            f"Last error: `{str(e)[:180]}`",
+                                        "color": 15158332,
+                                    })
+                                except Exception:
+                                    pass
+                        else:
+                            logger.warning(f"Price fetch error ({n}): {e}")
+                    else:
+                        # Reset only on a clean pass, so the streak measures a
+                        # genuine outage rather than scattered single failures.
+                        self._price_fail_streak = 0
 
                 # Check EOD force close
                 if self.execution_safeguards.check_eod_force_close():
