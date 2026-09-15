@@ -1,191 +1,283 @@
 #!/usr/bin/env python3
 """
-Executor bridge: uw_bot -> local MCP server -> Robinhood. No Claude anywhere.
+Executor bridge: uw_bot -> Robinhood Trading MCP. Local process, no Claude.
 
-ARCHITECTURE — reuses what was already built rather than inventing one.
     uw_bot.py
       -> UnusualWhalesMCP (uw_robinhood_mcp.py), mode LIVE
         -> MCPEquityExecutor (here)
-          -> robinhood_mcp_server.py as a SUBPROCESS, JSON-RPC over stdio
-            -> https://api.robinhood.com/orders/
+          -> JSON-RPC over HTTPS to agent.robinhood.com/mcp/trading
 
-The stdio client pattern is lifted from bot_mcp_client.py::MCPClient, which
-already did exactly this and contains no Anthropic dependency.
+MCP is an open protocol. This module is an MCP CLIENT written in plain Python —
+Claude is one client of that protocol, not a required one. No Anthropic SDK, no
+API key, no model in the order path, and it runs unattended under launchd.
 
-WHAT WAS DELIBERATELY NOT USED, and why
-  · local_mcp_executor.py and bot.py drive the MCP through the Anthropic API.
-    Their docstrings claim "no Claude intermediary, $0", but both construct
-    Anthropic() and let a model decide whether each order is placed. Wrong
-    foundation for an unattended loop, and it is also BUY-ONLY: it filters
-    action == "BUY" and only processes results when side == "buy", so exits
-    would fail silently.
-  · robinhood_live.py is a stub. Its MCP import is commented out and
-    get_positions() logs "Fetching LIVE positions from Robinhood" before
-    returning a hardcoded list from a past session.
+WHY NOT THE LOCAL REST SERVER (robinhood_mcp_server.py)
+Because these credentials cannot use it. Decoding the access token's claims:
 
-TWO DEFECTS FIXED IN robinhood_mcp_server.py TO MAKE THIS WORK
-  1. It read access_token from a JSON file once at IMPORT and never refreshed,
-     so it ran on a stale token and would lose auth mid-session with no retry.
-     Now exchanges the refresh token on demand, caches to just before expiry,
-     and keeps the rotated refresh token.
-  2. Its order payload omitted the `account` and `instrument` URLs, both of
-     which Robinhood's /orders/ endpoint requires. It would have 400'd on every
-     order — consistent with there being no record of it ever placing one.
+    meta:  {"oid": "...", "on": "Robinhood Trading MCP"}
+    scope: "internal"   level2_access: true   options: true
+
+It is an AGENT token minted for the MCP surface. Measured 2026-09-14:
+
+    api.robinhood.com/portfolios/     401  "rejected client id"
+    agent.robinhood.com/mcp/trading   200  full initialize, 73 tools
+
+So the legacy REST wrapper returns 401 on every call no matter how correct its
+payloads are. That also explains why there is no record of that server ever
+placing an order — it never could with these credentials.
+
+WHY NOT bot.py / local_mcp_executor.py
+Both reach the same MCP through the Anthropic API, so a model decides whether
+each order is placed and every order costs tokens. local_mcp_executor is also
+BUY-ONLY (filters action == "BUY", processes results only when side == "buy"),
+so every stop, target and EOD flatten would fail silently.
+
+REFRESH TOKENS ARE SINGLE USE
+Verified: exchanging one returns a replacement and invalidates the original
+immediately. A token was destroyed during development by exchanging twice and
+discarding the rotation. Every rotation is now persisted to .env.local
+atomically, and the file — not os.environ — is the source of truth, because the
+environment is a snapshot taken before any rotation.
 
 SAFETY
-dry_run defaults True; real orders need dry_run=False passed explicitly.
-preflight() starts the server, lists tools and resolves the account WITHOUT
-ordering. The live path in this project has never executed, and the Sep 8 audit
-found ten defects in it while monitoring reported green — so being able to
-exercise everything except the order matters.
+dry_run defaults True. preflight() performs OAuth, initialize, tools/list and
+get_accounts WITHOUT ordering — everything a real order does except the order.
 """
 
 import asyncio
 import json
 import logging
 import os
-import subprocess
-import sys
+import tempfile
+import time
+import uuid
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parent.parent
-SERVER = REPO / "robinhood_mcp_server.py"
+ENV_FILE = REPO / ".env.local"
+TOKEN_URL = "https://api.robinhood.com/oauth2/token/"
+MCP_URL = os.getenv("RH_MCP_URL", "https://agent.robinhood.com/mcp/trading")
+PROTOCOL_VERSION = "2025-03-26"
+TOKEN_MARGIN_S = 300
 
 
-class StdioMCPClient:
-    """JSON-RPC over a subprocess's stdin/stdout. Pattern from bot_mcp_client.py."""
+def _from_env_file(key: str) -> Optional[str]:
+    try:
+        with open(ENV_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
 
-    def __init__(self, server: Path = SERVER, timeout: int = 30):
-        self.server = server
-        self.timeout = timeout
-        self.proc: Optional[subprocess.Popen] = None
+
+def _cred(*names: str) -> Optional[str]:
+    """File first — it holds the live value after any rotation."""
+    for n in names:
+        v = _from_env_file(n)
+        if v:
+            return v
+    for n in names:
+        if os.getenv(n):
+            return os.getenv(n)
+    return None
+
+
+def _persist_refresh_token(token: str) -> None:
+    """Atomically write a rotated refresh token back to .env.local."""
+    try:
+        lines, seen = [], False
+        if ENV_FILE.exists():
+            with open(ENV_FILE) as fh:
+                for line in fh:
+                    if line.startswith("RH_REFRESH_TOKEN="):
+                        lines.append(f"RH_REFRESH_TOKEN={token}\n")
+                        seen = True
+                    else:
+                        lines.append(line)
+        if not seen:
+            lines.append(f"RH_REFRESH_TOKEN={token}\n")
+        fd, tmp = tempfile.mkstemp(dir=str(ENV_FILE.parent))
+        with os.fdopen(fd, "w") as fh:
+            fh.writelines(lines)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, ENV_FILE)
+        logger.info("✓ rotated refresh token persisted")
+    except Exception as e:
+        # LOUD: losing this means no login after the next restart.
+        logger.error(f"🚨 CRITICAL: could not persist rotated refresh token: {e}")
+
+
+class MCPError(RuntimeError):
+    pass
+
+
+class RobinhoodMCP:
+    """Minimal MCP client over Streamable HTTP: initialize, tools/list, tools/call."""
+
+    def __init__(self, url: str = MCP_URL, timeout: int = 30):
+        self.url, self.timeout = url, timeout
+        self._access: Optional[str] = None
+        self._expires = 0.0
+        self._session: Optional[str] = None
+        self._ready = False
         self._id = 0
 
-    def start(self) -> bool:
-        if self.proc and self.proc.poll() is None:
-            return True
-        if not self.server.exists():
-            logger.error(f"🚨 MCP server not found at {self.server}")
-            return False
+    def access_token(self) -> Optional[str]:
+        if self._access and time.time() < self._expires:
+            return self._access
+        cid = _cred("RH_CLIENT_ID", "ROBINHOOD_CLIENT_ID")
+        rt = _cred("RH_REFRESH_TOKEN", "ROBINHOOD_REFRESH_TOKEN")
+        if not (cid and rt):
+            logger.error("🚨 No Robinhood credentials in .env.local or environment")
+            return None
         try:
-            self.proc = subprocess.Popen(
-                [sys.executable, str(self.server)],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, cwd=str(REPO),
-                env={**os.environ},
-            )
-            # CONSUME THE STARTUP BANNER.
-            #
-            # robinhood_mcp_server.py prints its initialize response to stdout
-            # BEFORE reading any request. Not consuming it puts every reply off
-            # by one: tools/list returns the banner, get_portfolio returns the
-            # tool list, and an order would read someone else's answer. The
-            # original bot_mcp_client.py did this and I dropped it.
-            banner = self.proc.stdout.readline()
-            logger.info(f"✓ local MCP server started (stdio); banner: "
-                        f"{banner.strip()[:80]}")
-            return True
+            r = requests.post(TOKEN_URL, timeout=self.timeout, data={
+                "grant_type": "refresh_token", "refresh_token": rt, "client_id": cid})
         except Exception as e:
-            logger.error(f"🚨 could not start MCP server: {e}")
-            return False
-
-    def call(self, method: str, params: Optional[Dict] = None) -> Optional[Dict]:
-        if not self.start():
+            logger.error(f"🚨 OAuth request failed: {e}")
             return None
-        self._id += 1
-        msg = {"jsonrpc": "2.0", "id": self._id, "method": method,
-               "params": params or {}}
+        if r.status_code != 200:
+            logger.error(f"🚨 OAuth rejected: HTTP {r.status_code} {r.text[:160]}")
+            return None
+        d = r.json()
+        self._access = d.get("access_token")
+        if d.get("refresh_token"):
+            _persist_refresh_token(d["refresh_token"])
+        self._expires = time.time() + max(60, int(d.get("expires_in", 3600)) - TOKEN_MARGIN_S)
+        return self._access
+
+    def _headers(self) -> Optional[Dict[str, str]]:
+        t = self.access_token()
+        if not t:
+            return None
+        h = {"Authorization": f"Bearer {t}", "Content-Type": "application/json",
+             "Accept": "application/json, text/event-stream",
+             "MCP-Protocol-Version": PROTOCOL_VERSION}
+        if self._session:
+            h["Mcp-Session-Id"] = self._session
+        return h
+
+    def _rpc(self, method: str, params: Optional[Dict] = None,
+             notify: bool = False) -> Optional[Dict]:
+        h = self._headers()
+        if not h:
+            raise MCPError("not authenticated")
+        body: Dict = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            body["params"] = params
+        if not notify:
+            self._id += 1
+            body["id"] = self._id
+        r = requests.post(self.url, headers=h, json=body, timeout=self.timeout)
+        sid = r.headers.get("Mcp-Session-Id") or r.headers.get("mcp-session-id")
+        if sid:
+            self._session = sid
+        if r.status_code == 401:
+            raise MCPError("401 from MCP — token invalid or expired")
+        if r.status_code >= 400:
+            raise MCPError(f"HTTP {r.status_code}: {r.text[:200]}")
+        if notify:
+            return None
+        # Streamable HTTP answers as SSE; plain JSON is also accepted.
+        for line in r.text.splitlines():
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if payload and payload != "[DONE]":
+                    try:
+                        d = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if "error" in d:
+                        raise MCPError(str(d["error"])[:200])
+                    return d.get("result")
         try:
-            self.proc.stdin.write(json.dumps(msg) + "\n")
-            self.proc.stdin.flush()
-            line = self.proc.stdout.readline()
-        except Exception as e:
-            logger.error(f"🚨 MCP transport error: {e}")
-            self.stop()
-            return None
-        if not line:
-            # A dead server must be loud. Silence here would look like "no
-            # orders today" rather than "execution is broken".
-            err = ""
-            try:
-                if self.proc and self.proc.stderr:
-                    err = self.proc.stderr.read()[:300]
-            except Exception:
-                pass
-            logger.error(f"🚨 MCP server returned nothing (exited?). stderr: {err}")
-            self.stop()
-            return None
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            logger.error(f"🚨 unparseable MCP reply: {line[:200]}")
-            return None
+            d = r.json()
+        except ValueError:
+            raise MCPError(f"unparseable reply: {r.text[:160]}")
+        if "error" in d:
+            raise MCPError(str(d["error"])[:200])
+        return d.get("result")
 
-    def call_tool(self, name: str, args: Dict) -> Optional[Dict]:
-        return self.call("tools/call", {"name": name, "arguments": args})
+    def connect(self) -> Dict:
+        if self._ready:
+            return {}
+        res = self._rpc("initialize", {
+            "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+            "clientInfo": {"name": "uw-bot", "version": "1.0"}}) or {}
+        self._rpc("notifications/initialized", {}, notify=True)
+        self._ready = True
+        logger.info(f"✓ MCP connected: {(res.get('serverInfo') or {}).get('name')} "
+                    f"v{(res.get('serverInfo') or {}).get('version')}")
+        return res
 
-    def stop(self):
-        if self.proc:
-            try:
-                self.proc.terminate()
-            except Exception:
-                pass
-            self.proc = None
+    def tools(self) -> List[Dict]:
+        self.connect()
+        return (self._rpc("tools/list") or {}).get("tools") or []
+
+    def call(self, name: str, args: Dict) -> Dict:
+        self.connect()
+        res = self._rpc("tools/call", {"name": name, "arguments": args}) or {}
+        if res.get("isError"):
+            raise MCPError(f"{name}: {str(res.get('content'))[:300]}")
+        return res
+
+    @staticmethod
+    def text(res: Dict) -> str:
+        return "\n".join(c.get("text", "") for c in (res.get("content") or [])
+                         if isinstance(c, dict) and c.get("type") == "text")
 
 
 class MCPEquityExecutor:
     """
-    Satisfies the contract uw_robinhood_mcp.py expects of `mcp_executor`:
+    Satisfies the `mcp_executor` contract in uw_robinhood_mcp.py:
 
         await place_equity_order(symbol=, quantity=, side=,
                                  order_type=, limit_price=)
         -> {"success", "order_id", "message", "fill_price"}
 
-    Handles BUY and SELL. That is not incidental — a bot that can enter and
-    not exit fails every stop, target and EOD flatten, which is worse than one
-    that never trades.
+    BUY and SELL both. A bot that enters and cannot exit fails every stop,
+    target and EOD flatten, which is worse than one that never trades.
     """
 
     def __init__(self, account_number: Optional[str] = None, dry_run: bool = True):
-        self.client = StdioMCPClient()
-        self.account_number = account_number or os.getenv("RH_ACCOUNT_NUMBER")
+        self.mcp = RobinhoodMCP()
+        self.account_number = (account_number or _cred("RH_ACCOUNT_NUMBER"))
         self.dry_run = dry_run
-        if dry_run:
-            logger.warning("🧪 MCPEquityExecutor DRY RUN — no orders sent")
-        else:
-            logger.warning("🚨 MCPEquityExecutor LIVE — real orders, real money")
+        logger.warning("🧪 MCPEquityExecutor DRY RUN — no orders sent" if dry_run
+                       else "🚨 MCPEquityExecutor LIVE — real orders, real money")
 
     def preflight(self) -> Dict:
         out = {"dry_run": self.dry_run, "account_number": self.account_number,
-               "server_started": False, "tools": None, "account": False}
-        if not self.client.start():
-            out["error"] = f"could not start {SERVER.name}"
-            return out
-        out["server_started"] = True
-        if not self.account_number:
-            out["error"] = "RH_ACCOUNT_NUMBER not set — refusing to guess an account"
-            return out
-        t = self.client.call("tools/list")
-        if t:
-            names = [x.get("name") for x in (t.get("result", {}).get("tools")
-                                             or t.get("tools") or [])]
-            out["tools"] = names
+               "auth": False, "connected": False, "tools": 0, "account": False}
+        try:
+            if not self.mcp.access_token():
+                out["error"] = "OAuth failed — reissue the refresh token"
+                return out
+            out["auth"] = True
+            info = self.mcp.connect()
+            out["connected"] = True
+            out["server"] = (info.get("serverInfo") or {}).get("name")
+            names = [t.get("name") for t in self.mcp.tools()]
+            out["tools"] = len(names)
             out["has_place_equity_order"] = "place_equity_order" in names
-        r = self.client.call_tool("get_portfolio", {})
-        txt = ""
-        if r:
-            for c in ((r.get("result") or r).get("content") or []):
-                if isinstance(c, dict):
-                    txt += c.get("text", "")
-        if txt and "error" not in txt.lower():
-            out["account"] = True
-            out["portfolio_probe"] = txt[:160]
-        else:
-            out["error"] = f"account/auth probe failed: {txt[:200] or 'no reply'}"
-        out["ready"] = bool(out.get("account") and out.get("has_place_equity_order"))
+            if not self.account_number:
+                out["error"] = "RH_ACCOUNT_NUMBER not set — refusing to guess an account"
+                return out
+            txt = self.mcp.text(self.mcp.call("get_accounts", {}))
+            out["account"] = self.account_number in txt
+            if not out["account"]:
+                out["error"] = f"account {self.account_number} not visible to this token"
+            out["ready"] = bool(out["account"] and out.get("has_place_equity_order"))
+        except Exception as e:
+            out["error"] = str(e)
         return out
 
     async def place_equity_order(self, symbol: str, quantity: float, side: str,
@@ -213,40 +305,44 @@ class MCPEquityExecutor:
         if not self.account_number:
             return fail("no RH_ACCOUNT_NUMBER configured")
 
+        args = {"account_number": self.account_number, "symbol": symbol.upper(),
+                "side": side, "quantity": str(qty), "type": str(order_type).lower(),
+                "time_in_force": "gfd", "ref_id": str(uuid.uuid4())}
+        if str(order_type).lower() == "limit":
+            if not limit_price:
+                return fail("limit order without a limit_price")
+            args["price"] = f"{float(limit_price):.2f}"
+
         if self.dry_run:
-            logger.warning(f"🧪 DRY RUN — would place {side} {qty} {symbol}")
-            return {"success": True, "order_id": "dryrun",
+            logger.warning(f"🧪 DRY RUN — would place {side} {qty} {symbol} {order_type}")
+            return {"success": True, "order_id": f"dryrun-{args['ref_id'][:8]}",
                     "message": "dry run — no order sent", "fill_price": None,
                     "dry_run": True}
 
-        r = self.client.call_tool("place_equity_order", {
-            "symbol": symbol.upper(), "quantity": qty, "side": side})
-        if not r:
-            return fail("no reply from the MCP server")
+        try:
+            txt = self.mcp.text(self.mcp.call("place_equity_order", args))
+        except MCPError as e:
+            return fail(f"place_equity_order failed: {e}")
+        except Exception as e:
+            return fail(f"unexpected error: {e}")
 
-        txt = ""
-        for c in ((r.get("result") or r).get("content") or []):
-            if isinstance(c, dict):
-                txt += c.get("text", "")
+        oid = None
         try:
             d = json.loads(txt)
+            oid = (d.get("data") or d).get("id") or d.get("order_id")
         except Exception:
-            d = {}
-        if d.get("status") == "success":
-            logger.warning(f"🚀 LIVE order: {side} {qty} {symbol} → {d.get('order_id')}")
-            return {"success": True, "order_id": d.get("order_id"),
-                    "message": f"{side} {qty} {symbol} ({d.get('state')})",
-                    "fill_price": None}
-        return fail(f"order not accepted: {txt[:250] or 'empty reply'}")
+            pass
+        logger.warning(f"🚀 LIVE order: {side} {qty} {symbol} → {oid or 'id unknown'}")
+        return {"success": True, "order_id": oid,
+                "message": txt[:400] or f"{side} {qty} {symbol}", "fill_price": None}
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     ex = MCPEquityExecutor(dry_run=True)
     r = ex.preflight()
-    print("\nPREFLIGHT — local MCP, no Claude")
-    for k in ("account_number", "server_started", "tools",
+    print("\nPREFLIGHT — local MCP client, no Claude")
+    for k in ("account_number", "auth", "connected", "server", "tools",
               "has_place_equity_order", "account", "ready", "error"):
         if k in r:
             print(f"  {k:<24}{r[k]}")
-    ex.client.stop()
