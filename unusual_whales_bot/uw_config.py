@@ -42,7 +42,7 @@ EXECUTION_MODE = {
     "paper_trading": False,
 
     # Log what would happen without actually executing
-    "log_orders_only": True,   # DRY RUN — validated against Robinhood, not sent
+    "log_orders_only": False,  # 🚨 LIVE — orders are SENT to Robinhood
 
     # Account equity the daily-loss circuit breaker is evaluated against.
     #
@@ -542,10 +542,10 @@ FEATURES = {
 # DEFAULTS & CONSTANTS
 # ===========================================================================
 DEFAULT_POSITION_SIZE = 1  # contracts
-# 10 by request (2026-09-14). At $500/entry that is $5,000 deployed — 50% of
-# the $10,065.80 account, and the full book sits inside the -$500 daily breaker
-# only while the average drawdown across it stays under 10%.
-MAX_OPEN_POSITIONS = 10
+# 5 for the first LIVE session (2026-09-14). At $500/entry that caps deployed
+# capital at $2,500 — 25% of the $10,065.80 account — which is the limit set
+# for the first day of real orders.
+MAX_OPEN_POSITIONS = 5
 MAX_DAILY_LOSS_PCT = -5.0  # Circuit breaker: stop if down 5%
 MAX_POSITION_LOSS_PCT = -2.0  # Exit position if down 2%
 
