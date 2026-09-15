@@ -1,0 +1,75 @@
+{
+  "timestamp": "2026-08-19T16:29:20.143914",
+  "test_symbols": [
+    "INTC",
+    "AMD",
+    "NVDA",
+    "AAPL",
+    "MSFT"
+  ],
+  "combinations": {
+    "fib_ma": {
+      "scores": [
+        -18,
+        -18,
+        23,
+        25,
+        23
+      ],
+      "avg_score": 7.0,
+      "samples": 5
+    },
+    "fib_rsi": {
+      "scores": [
+        5,
+        5,
+        21,
+        23,
+        21
+      ],
+      "avg_score": 15.0,
+      "samples": 5
+    },
+    "fib_atr": {
+      "scores": [
+        0,
+        0,
+        8,
+        10,
+        8
+      ],
+      "avg_score": 5.2,
+      "samples": 5
+    },
+    "fib_pivot": {
+      "scores": [
+        0,
+        0,
+        8,
+        10,
+        8
+      ],
+      "avg_score": 5.2,
+      "samples": 5
+    }
+  },
+  "ranked": [
+    [
+      "fib_rsi",
+      15.0
+    ],
+    [
+      "fib_ma",
+      7.0
+    ],
+    [
+      "fib_atr",
+      5.2
+    ],
+    [
+      "fib_pivot",
+      5.2
+    ]
+  ],
+  "recommendation": "fib_rsi"
+}

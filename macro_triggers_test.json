@@ -1,0 +1,82 @@
+[
+  {
+    "symbol": "NVDA",
+    "type": "13F_FILING",
+    "timestamp": "2026-08-24T00:22:03.104803",
+    "actionable_trigger": true,
+    "bias": "BULLISH",
+    "confidence_score": 74,
+    "reason": "Institutional 13-F increase: +22%",
+    "ttl_minutes": 4
+  },
+  {
+    "symbol": "AAPL",
+    "type": "PUT_SWEEP",
+    "timestamp": "2026-08-24T00:22:08.194036",
+    "actionable_trigger": true,
+    "bias": "BEARISH",
+    "confidence_score": 76,
+    "reason": "Institutional PUT_SWEEP detected",
+    "ttl_minutes": 1
+  },
+  {
+    "symbol": "NVDA",
+    "type": "13F_FILING",
+    "timestamp": "2026-08-24T00:22:11.114615",
+    "actionable_trigger": true,
+    "bias": "BULLISH",
+    "confidence_score": 81,
+    "reason": "Institutional 13-F increase: +28%",
+    "ttl_minutes": 4
+  },
+  {
+    "symbol": "INTC",
+    "type": "CALL_SWEEP",
+    "timestamp": "2026-08-24T00:22:13.199158",
+    "actionable_trigger": true,
+    "bias": "BULLISH",
+    "confidence_score": 93,
+    "reason": "Institutional CALL_SWEEP detected",
+    "ttl_minutes": 1
+  },
+  {
+    "symbol": "NVDA",
+    "type": "PUT_SWEEP",
+    "timestamp": "2026-08-24T00:22:23.214695",
+    "actionable_trigger": true,
+    "bias": "BEARISH",
+    "confidence_score": 92,
+    "reason": "Institutional PUT_SWEEP detected",
+    "ttl_minutes": 1
+  },
+  {
+    "symbol": "INTC",
+    "type": "CALL_SWEEP",
+    "timestamp": "2026-08-24T00:22:43.262348",
+    "actionable_trigger": true,
+    "bias": "BULLISH",
+    "confidence_score": 77,
+    "reason": "Institutional CALL_SWEEP detected",
+    "ttl_minutes": 1
+  },
+  {
+    "symbol": "AAPL",
+    "type": "CALL_SWEEP",
+    "timestamp": "2026-08-24T00:22:48.270482",
+    "actionable_trigger": true,
+    "bias": "BULLISH",
+    "confidence_score": 79,
+    "reason": "Institutional CALL_SWEEP detected",
+    "ttl_minutes": 1
+  },
+  {
+    "symbol": "AAPL",
+    "type": "CALL_SWEEP",
+    "timestamp": "2026-08-24T00:22:58.283028",
+    "actionable_trigger": true,
+    "bias": "BULLISH",
+    "confidence_score": 94,
+    "reason": "Institutional CALL_SWEEP detected",
+    "ttl_minutes": 1
+  }
+]

@@ -1,0 +1,46 @@
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.0.2 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/gymnasium_trainer.py", line 16, in <module>
+    from stable_baselines3 import PPO, SAC
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/stable_baselines3/__init__.py", line 3, in <module>
+    from stable_baselines3.a2c import A2C
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/stable_baselines3/a2c/__init__.py", line 1, in <module>
+    from stable_baselines3.a2c.a2c import A2C
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/stable_baselines3/a2c/a2c.py", line 3, in <module>
+    import torch as th
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/torch/__init__.py", line 1477, in <module>
+    from .functional import *  # noqa: F403
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/torch/functional.py", line 9, in <module>
+    import torch.nn.functional as F
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/torch/nn/__init__.py", line 1, in <module>
+    from .modules import *  # noqa: F403
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/torch/nn/modules/__init__.py", line 35, in <module>
+    from .transformer import TransformerEncoder, TransformerDecoder, \
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/torch/nn/modules/transformer.py", line 20, in <module>
+    device: torch.device = torch.device(torch._C._get_default_device()),  # torch.device('cpu'),
+/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/site-packages/torch/nn/modules/transformer.py:20: UserWarning: Failed to initialize NumPy: _ARRAY_API not found (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/utils/tensor_numpy.cpp:84.)
+  device: torch.device = torch.device(torch._C._get_default_device()),  # torch.device('cpu'),
+2026-08-31 15:47:42,778 [INFO] 
+================================================================================
+2026-08-31 15:47:42,778 [INFO] DATA PREPARATION
+2026-08-31 15:47:42,778 [INFO] ================================================================================
+2026-08-31 15:47:42,778 [INFO] 📥 Downloading AAPL...
+2026-08-31 15:47:43,658 [ERROR] ❌ Failed to download AAPL: Insufficient data: 499 rows
+Traceback (most recent call last):
+  File "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/gymnasium_trainer.py", line 408, in <module>
+    main()
+  File "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/gymnasium_trainer.py", line 374, in main
+    trainer.prepare_data()
+  File "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/gymnasium_trainer.py", line 121, in prepare_data
+    self.train_data[symbol] = self.download_data(symbol)
+  File "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/gymnasium_trainer.py", line 104, in download_data
+    raise ValueError(f"Insufficient data: {len(df)} rows")
+ValueError: Insufficient data: 499 rows

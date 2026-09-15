@@ -1,0 +1,9 @@
+{
+    "initial_balance": 75000,
+    "current_equity": 75000,
+    "peak_equity": 75000,
+    "consecutive_losses": 0,
+    "total_trades": 0,
+    "is_halted": false,
+    "halt_reason": ""
+}

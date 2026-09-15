@@ -1,0 +1,14 @@
+{
+  "initial": 10000,
+  "final_value": 11907.91177935798,
+  "total_return_pct": 19.079117793579808,
+  "annual_return_pct": 39.08892426001717,
+  "sharpe_ratio": 1.4352972915849056,
+  "max_drawdown_pct": -12.842537557201142,
+  "total_trades": 250,
+  "win_rate_pct": 64.0,
+  "dates": {
+    "start": "2026-02-05",
+    "end": "2026-08-04"
+  }
+}

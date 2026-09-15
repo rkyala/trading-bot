@@ -56,3 +56,19 @@ archive/*/logs/
 venv_sentiment/
 .news_digest_state.json
 unusual_whales_bot/ndx_technicals.jsonl
+
+# ---------------------------------------------------------------------------
+# Virtualenvs and bulk runtime output (added 2026-09-14).
+#
+# venv_paper/ is 950MB and venv/ 170MB — 1.1GB that would have gone in on a
+# `git add -A`. venv_sentiment/ was already listed; the other two were not,
+# which is the kind of gap that only shows up when someone commits everything.
+# ---------------------------------------------------------------------------
+venv/
+venv_paper/
+logs/
+dry_run_logs/
+*.pkl
+training*.log
+trade_memory.json
+trade_performance.json

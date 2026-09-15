@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-08-19T16:31:52.959499",
+  "combination": "Fibonacci 50% + EMA + Volume Profile",
+  "symbols": [
+    "INTC",
+    "AMD",
+    "NVDA",
+    "AAPL",
+    "MSFT"
+  ],
+  "results": [
+    {
+      "symbol": "INTC",
+      "current_price": 92.80000305175781,
+      "fib_50_level": 112.07000350952148,
+      "distance_to_fib50_pct": 17.194610381293053,
+      "fib_score": 0,
+      "ema_12": 98.57816131664634,
+      "ema_26": 100.36321999158525,
+      "ema_score": -5,
+      "volume_profile": "at_support",
+      "vol_score": 12,
+      "synergy_bonus": 0,
+      "combined_score": 7
+    },
+    {
+      "symbol": "AMD",
+      "current_price": 466.4200134277344,
+      "fib_50_level": 504.37998962402344,
+      "distance_to_fib50_pct": 7.526067048097072,
+      "fib_score": 0,
+      "ema_12": 487.42282528357964,
+      "ema_26": 494.8340978505051,
+      "ema_score": -5,
+      "volume_profile": "at_support",
+      "vol_score": 12,
+      "synergy_bonus": 0,
+      "combined_score": 7
+    },
+    {
+      "symbol": "NVDA",
+      "current_price": 217.55999755859375,
+      "fib_50_level": 208.86000061035156,
+      "distance_to_fib50_pct": 4.165468219294353,
+      "fib_score": 0,
+      "ema_12": 218.48267424113055,
+      "ema_26": 213.77424214977765,
+      "ema_score": 5,
+      "volume_profile": "at_resistance",
+      "vol_score": -8,
+      "synergy_bonus": 0,
+      "combined_score": -3
+    },
+    {
+      "symbol": "AAPL",
+      "current_price": 316.8299865722656,
+      "fib_50_level": 308.8936063572553,
+      "distance_to_fib50_pct": 2.5692924850737757,
+      "fib_score": 0,
+      "ema_12": 310.8402097831474,
+      "ema_26": 312.73371902347776,
+      "ema_score": 10,
+      "volume_profile": "at_resistance",
+      "vol_score": -8,
+      "synergy_bonus": 0,
+      "combined_score": 2
+    },
+    {
+      "symbol": "MSFT",
+      "current_price": 484.30999755859375,
+      "fib_50_level": 431.4649963378906,
+      "distance_to_fib50_pct": 12.247807277353024,
+      "fib_score": 0,
+      "ema_12": 481.22488053159384,
+      "ema_26": 458.61607058924443,
+      "ema_score": 15,
+      "volume_profile": "at_resistance",
+      "vol_score": -8,
+      "synergy_bonus": 0,
+      "combined_score": 7
+    }
+  ],
+  "avg_score": 4.0,
+  "component_averages": {
+    "fib_50": 0.0,
+    "ema": 4.0,
+    "volume": 0.0,
+    "synergy": 0.0
+  }
+}

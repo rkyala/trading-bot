@@ -1,0 +1,96 @@
+{
+  "timestamp": "2026-08-19T21:37:55.926836",
+  "combination": "Fibonacci + Stochastic + OBV + SMA",
+  "symbols": [
+    "INTC",
+    "AMD",
+    "NVDA",
+    "AAPL",
+    "MSFT"
+  ],
+  "results": [
+    {
+      "symbol": "INTC",
+      "price": 92.80000305175781,
+      "fib_score": 0,
+      "stoch_k": 32.71071208850794,
+      "stoch_score": 0,
+      "obv_trend": -237566982.0,
+      "obv_score": -8,
+      "sma_20": 96.21649932861328,
+      "sma_50": 108.83659973144532,
+      "sma_200": NaN,
+      "sma_score": -10,
+      "synergy": 0,
+      "combined_score": -18
+    },
+    {
+      "symbol": "AMD",
+      "price": 466.4200134277344,
+      "fib_score": 0,
+      "stoch_k": 14.860380990444652,
+      "stoch_score": -10,
+      "obv_trend": -36620667.0,
+      "obv_score": -8,
+      "sma_20": 487.06200408935547,
+      "sma_50": 509.9382012939453,
+      "sma_200": NaN,
+      "sma_score": -10,
+      "synergy": 0,
+      "combined_score": -28
+    },
+    {
+      "symbol": "NVDA",
+      "price": 217.55999755859375,
+      "fib_score": 8,
+      "stoch_k": 68.57749400431892,
+      "stoch_score": 5,
+      "obv_trend": -369342069.0,
+      "obv_score": -8,
+      "sma_20": 212.37899932861328,
+      "sma_50": 207.11779907226563,
+      "sma_200": NaN,
+      "sma_score": 10,
+      "synergy": 0,
+      "combined_score": 15
+    },
+    {
+      "symbol": "AAPL",
+      "price": 316.8299865722656,
+      "fib_score": 10,
+      "stoch_k": 87.46099921114022,
+      "stoch_score": 15,
+      "obv_trend": 93493721.0,
+      "obv_score": 12,
+      "sma_20": 315.87361907958984,
+      "sma_50": 309.21333740234377,
+      "sma_200": NaN,
+      "sma_score": 10,
+      "synergy": 45,
+      "combined_score": 92
+    },
+    {
+      "symbol": "MSFT",
+      "price": 484.30999755859375,
+      "fib_score": 8,
+      "stoch_k": 54.31679239372988,
+      "stoch_score": 5,
+      "obv_trend": -1912609.0,
+      "obv_score": -8,
+      "sma_20": 463.0364990234375,
+      "sma_50": 416.57219787597654,
+      "sma_200": NaN,
+      "sma_score": 10,
+      "synergy": 0,
+      "combined_score": 15
+    }
+  ],
+  "avg_score": 15.2,
+  "component_averages": {
+    "fibonacci": 5.2,
+    "stochastic": 3.0,
+    "obv": -4.0,
+    "sma": 2.0,
+    "synergy": 9.0
+  }
+}

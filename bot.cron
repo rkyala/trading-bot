@@ -1,0 +1,6 @@
+#!/bin/bash
+# Cron wrapper with proper path handling
+
+BOT_DIR="/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot"
+cd "$BOT_DIR" || exit 1
+bash run_bot_cron.sh

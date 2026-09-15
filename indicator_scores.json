@@ -1,0 +1,94 @@
+{
+  "timestamp": "2026-08-19T14:55:54.333569",
+  "test_symbols": [
+    "INTC",
+    "AMD",
+    "NVDA",
+    "AAPL",
+    "MSFT"
+  ],
+  "indicators": {
+    "moving_average": {
+      "scores": [
+        -15,
+        -15,
+        10,
+        10,
+        10
+      ],
+      "avg_score": 0.0,
+      "impact": "\u26a0\ufe0f MIXED",
+      "samples": 5
+    },
+    "pivot_points": {
+      "scores": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "avg_score": 0.0,
+      "impact": "\u26a0\ufe0f MIXED",
+      "samples": 5
+    },
+    "volume_profile": {
+      "scores": [
+        12,
+        12,
+        -10,
+        -10,
+        -10
+      ],
+      "avg_score": -1.2,
+      "impact": "\u26a0\ufe0f MIXED",
+      "samples": 5
+    },
+    "atr_breakout": {
+      "scores": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "avg_score": 0.0,
+      "impact": "\u26a0\ufe0f MIXED",
+      "samples": 5
+    },
+    "fibonacci": {
+      "scores": [
+        0,
+        0,
+        8,
+        10,
+        8
+      ],
+      "avg_score": 5.2,
+      "impact": "\u2705 POSITIVE",
+      "samples": 5
+    }
+  },
+  "ranked": [
+    [
+      "fibonacci",
+      5.2
+    ],
+    [
+      "moving_average",
+      0.0
+    ],
+    [
+      "pivot_points",
+      0.0
+    ],
+    [
+      "atr_breakout",
+      0.0
+    ],
+    [
+      "volume_profile",
+      -1.2
+    ]
+  ]
+}

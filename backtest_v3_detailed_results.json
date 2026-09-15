@@ -1,0 +1,569 @@
+{
+  "timestamp": "2026-08-19T20:39:33.813618",
+  "cycles": [
+    {
+      "cycle": 1,
+      "trades": 1,
+      "profit": 6.0,
+      "avg_confidence": 52,
+      "trades_detail": [
+        [
+          "TSLA",
+          "351.12",
+          "51",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 2,
+      "trades": 2,
+      "profit": 12.0,
+      "avg_confidence": 59,
+      "trades_detail": [
+        [
+          "AMD",
+          "466.42",
+          "56",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 3,
+      "trades": 1,
+      "profit": 6.0,
+      "avg_confidence": 58,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "58",
+          "+0"
+        ]
+      ]
+    },
+    {
+      "cycle": 4,
+      "trades": 2,
+      "profit": 12.0,
+      "avg_confidence": 62,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "58",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "64",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 5,
+      "trades": 2,
+      "profit": 12.0,
+      "avg_confidence": 58,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "53",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "62",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 6,
+      "trades": 3,
+      "profit": 18.0,
+      "avg_confidence": 58,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "55",
+          "+0"
+        ],
+        [
+          "AMD",
+          "466.42",
+          "56",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 7,
+      "trades": 1,
+      "profit": 6.0,
+      "avg_confidence": 60,
+      "trades_detail": [
+        [
+          "TSLA",
+          "351.12",
+          "60",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 8,
+      "trades": 2,
+      "profit": 12.0,
+      "avg_confidence": 58,
+      "trades_detail": [
+        [
+          "AMD",
+          "466.42",
+          "54",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 9,
+      "trades": 2,
+      "profit": 12.0,
+      "avg_confidence": 60,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "58",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 10,
+      "trades": 3,
+      "profit": 18.0,
+      "avg_confidence": 55,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "51",
+          "+0"
+        ],
+        [
+          "AMD",
+          "466.42",
+          "54",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "59",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 11,
+      "trades": 2,
+      "profit": 12.0,
+      "avg_confidence": 60,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "58",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 12,
+      "trades": 3,
+      "profit": 18.0,
+      "avg_confidence": 56,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "51",
+          "+0"
+        ],
+        [
+          "AMD",
+          "466.42",
+          "56",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 13,
+      "trades": 1,
+      "profit": 6.0,
+      "avg_confidence": 53,
+      "trades_detail": [
+        [
+          "TSLA",
+          "351.12",
+          "52",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 14,
+      "trades": 3,
+      "profit": 18.0,
+      "avg_confidence": 57,
+      "trades_detail": [
+        [
+          "INTC",
+          "92.80",
+          "55",
+          "+0"
+        ],
+        [
+          "AMD",
+          "466.42",
+          "54",
+          "+0"
+        ],
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    },
+    {
+      "cycle": 15,
+      "trades": 1,
+      "profit": 6.0,
+      "avg_confidence": 62,
+      "trades_detail": [
+        [
+          "TSLA",
+          "351.12",
+          "61",
+          "+5"
+        ]
+      ]
+    }
+  ],
+  "trade_analysis": [
+    {
+      "cycle": 1,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 51,
+      "fib_boost": 5,
+      "final_confidence": 56,
+      "profit": 6.0
+    },
+    {
+      "cycle": 2,
+      "symbol": "AMD",
+      "price": 466.42,
+      "llama_confidence": 56,
+      "fib_boost": 0,
+      "final_confidence": 56,
+      "profit": 6.0
+    },
+    {
+      "cycle": 2,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 3,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 58,
+      "fib_boost": 0,
+      "final_confidence": 58,
+      "profit": 6.0
+    },
+    {
+      "cycle": 4,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 58,
+      "fib_boost": 0,
+      "final_confidence": 58,
+      "profit": 6.0
+    },
+    {
+      "cycle": 4,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 64,
+      "fib_boost": 5,
+      "final_confidence": 69,
+      "profit": 6.0
+    },
+    {
+      "cycle": 5,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 53,
+      "fib_boost": 0,
+      "final_confidence": 53,
+      "profit": 6.0
+    },
+    {
+      "cycle": 5,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 62,
+      "fib_boost": 5,
+      "final_confidence": 67,
+      "profit": 6.0
+    },
+    {
+      "cycle": 6,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 55,
+      "fib_boost": 0,
+      "final_confidence": 55,
+      "profit": 6.0
+    },
+    {
+      "cycle": 6,
+      "symbol": "AMD",
+      "price": 466.42,
+      "llama_confidence": 56,
+      "fib_boost": 0,
+      "final_confidence": 56,
+      "profit": 6.0
+    },
+    {
+      "cycle": 6,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 7,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 60,
+      "fib_boost": 5,
+      "final_confidence": 65,
+      "profit": 6.0
+    },
+    {
+      "cycle": 8,
+      "symbol": "AMD",
+      "price": 466.42,
+      "llama_confidence": 54,
+      "fib_boost": 0,
+      "final_confidence": 54,
+      "profit": 6.0
+    },
+    {
+      "cycle": 8,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 9,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 58,
+      "fib_boost": 0,
+      "final_confidence": 58,
+      "profit": 6.0
+    },
+    {
+      "cycle": 9,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 10,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 51,
+      "fib_boost": 0,
+      "final_confidence": 51,
+      "profit": 6.0
+    },
+    {
+      "cycle": 10,
+      "symbol": "AMD",
+      "price": 466.42,
+      "llama_confidence": 54,
+      "fib_boost": 0,
+      "final_confidence": 54,
+      "profit": 6.0
+    },
+    {
+      "cycle": 10,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 59,
+      "fib_boost": 5,
+      "final_confidence": 64,
+      "profit": 6.0
+    },
+    {
+      "cycle": 11,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 58,
+      "fib_boost": 0,
+      "final_confidence": 58,
+      "profit": 6.0
+    },
+    {
+      "cycle": 11,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 12,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 51,
+      "fib_boost": 0,
+      "final_confidence": 51,
+      "profit": 6.0
+    },
+    {
+      "cycle": 12,
+      "symbol": "AMD",
+      "price": 466.42,
+      "llama_confidence": 56,
+      "fib_boost": 0,
+      "final_confidence": 56,
+      "profit": 6.0
+    },
+    {
+      "cycle": 12,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 13,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 52,
+      "fib_boost": 5,
+      "final_confidence": 57,
+      "profit": 6.0
+    },
+    {
+      "cycle": 14,
+      "symbol": "INTC",
+      "price": 92.8,
+      "llama_confidence": 55,
+      "fib_boost": 0,
+      "final_confidence": 55,
+      "profit": 6.0
+    },
+    {
+      "cycle": 14,
+      "symbol": "AMD",
+      "price": 466.42,
+      "llama_confidence": 54,
+      "fib_boost": 0,
+      "final_confidence": 54,
+      "profit": 6.0
+    },
+    {
+      "cycle": 14,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    },
+    {
+      "cycle": 15,
+      "symbol": "TSLA",
+      "price": 351.12,
+      "llama_confidence": 61,
+      "fib_boost": 5,
+      "final_confidence": 66,
+      "profit": 6.0
+    }
+  ],
+  "summary": {
+    "total_cycles": 15,
+    "total_trades": 29,
+    "total_profit": 174.0,
+    "avg_profit_per_cycle": 11.6,
+    "annualized": 2923.2
+  }
+}

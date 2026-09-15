@@ -1,0 +1,112 @@
+{
+  "timestamp": "2026-08-19T14:48:47.205870",
+  "v1": {
+    "bot_file": "bot_dry_run.py",
+    "cycles": 3,
+    "total_trades": 8,
+    "avg_confidence": 56.25,
+    "total_profit": 48.0,
+    "trades": [
+      {
+        "symbol": "AMD",
+        "price": 467.19,
+        "confidence": 56,
+        "profit": 6.0
+      },
+      {
+        "symbol": "TSLA",
+        "price": 349.43,
+        "confidence": 56,
+        "profit": 6.0
+      },
+      {
+        "symbol": "INTC",
+        "price": 93.35,
+        "confidence": 55,
+        "profit": 6.000000000000001
+      },
+      {
+        "symbol": "AMD",
+        "price": 467.16,
+        "confidence": 56,
+        "profit": 6.000000000000001
+      },
+      {
+        "symbol": "TSLA",
+        "price": 348.99,
+        "confidence": 56,
+        "profit": 6.0
+      },
+      {
+        "symbol": "INTC",
+        "price": 93.15,
+        "confidence": 59,
+        "profit": 6.0
+      },
+      {
+        "symbol": "AMD",
+        "price": 466.62,
+        "confidence": 56,
+        "profit": 6.0
+      },
+      {
+        "symbol": "TSLA",
+        "price": 348.92,
+        "confidence": 56,
+        "profit": 6.000000000000001
+      }
+    ],
+    "estimated_win_rate": 100.0
+  },
+  "v2": {
+    "bot_file": "bot_dry_run_v2.py",
+    "cycles": 3,
+    "total_trades": 6,
+    "avg_confidence": 58.333333333333336,
+    "total_profit": 36.0,
+    "trades": [
+      {
+        "symbol": "INTC",
+        "price": 93.15,
+        "confidence": 55,
+        "profit": 6.0
+      },
+      {
+        "symbol": "AMD",
+        "price": 466.72,
+        "confidence": 56,
+        "profit": 6.0
+      },
+      {
+        "symbol": "TSLA",
+        "price": 348.31,
+        "confidence": 62,
+        "profit": 6.000000000000001
+      },
+      {
+        "symbol": "TSLA",
+        "price": 347.89,
+        "confidence": 62,
+        "profit": 6.0
+      },
+      {
+        "symbol": "INTC",
+        "price": 93.22,
+        "confidence": 53,
+        "profit": 6.0
+      },
+      {
+        "symbol": "TSLA",
+        "price": 347.85,
+        "confidence": 62,
+        "profit": 6.000000000000001
+      }
+    ],
+    "estimated_win_rate": 100.0
+  },
+  "improvement": {
+    "profit_increase": -12.0,
+    "confidence_increase": 2.0833333333333357,
+    "trade_increase": -2
+  }
+}

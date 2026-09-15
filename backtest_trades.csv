@@ -1,0 +1,3 @@
+date,ticker,direction,premium,confidence,position_scale,allocated_capital,underlying_return_pct,option_return_pct,final_return_pct,pnl
+2026-09-07,UNKNOWN,CALL,"164,000",0.70,75%,750.00,-1.18%,-4.73%,-4.73%,-35.45
+2026-09-07,UNKNOWN,CALL,"140,950",0.75,75%,750.00,+3.84%,+15.35%,+15.35%,+115.11

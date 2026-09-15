@@ -1,0 +1,139 @@
+================================================================================
+  MANUAL CRON SETUP FOR DRY-RUN
+================================================================================
+
+Run this on your Mac terminal (NOT in Claude Code):
+
+STEP 1: Open crontab editor
+========================================
+crontab -e
+
+
+STEP 2: Copy and paste this line
+========================================
+*/30 14-21 * * 1-5 cd "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot" && python3 bot_dry_run.py >> dry_run_logs/cron.log 2>&1
+
+
+STEP 3: Save and exit
+========================================
+Press: Ctrl+X (or Cmd+X)
+Then:  Y (yes, save)
+Then:  Enter (confirm)
+
+
+STEP 4: Verify it installed
+========================================
+crontab -l | grep bot_dry_run
+
+Expected output:
+*/30 14-21 * * 1-5 cd "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot" && python3 bot_dry_run.py >> dry_run_logs/cron.log 2>&1
+
+
+================================================================================
+  WHAT THIS DOES
+================================================================================
+
+Schedule: */30 14-21 * * 1-5
+├─ */30      = Every 30 minutes
+├─ 14-21     = 2:00 PM - 9:30 PM UTC
+├─          = 9:30 AM - 4:30 PM ET (market hours)
+├─ * * *     = Every day of month/year
+└─ 1-5       = Monday-Friday only
+
+Command: cd ... && python3 bot_dry_run.py >> dry_run_logs/cron.log 2>&1
+├─ cd        = Change to bot directory
+├─ python3   = Run Python
+├─ bot_dry_run.py = The dry-run script
+└─ >> cron.log = Log output to file
+
+
+================================================================================
+  TESTING
+================================================================================
+
+Check if cron is running:
+log stream --predicate 'process == "cron"' --level debug
+
+
+View logs:
+tail -f dry_run_logs/cron.log
+
+
+View dashboard:
+python3 dry_run_dashboard.py
+
+
+Manual test (right now):
+python3 bot_dry_run.py
+
+
+================================================================================
+  TIMEZONE NOTE
+================================================================================
+
+Current system: CDT (Central Daylight Time)
+Cron is UTC-based:
+
+14-21 UTC = 9:30 AM - 4:30 PM ET
+
+If you're in different timezone, adjust:
+├─ Eastern (ET):   14-21 UTC
+├─ Central (CT):   15-22 UTC
+├─ Mountain (MT):  16-23 UTC
+└─ Pacific (PT):   17-00 UTC (wraps to next day)
+
+
+================================================================================
+  SCHEDULE
+================================================================================
+
+Tomorrow (Day 1):
+  First run: 9:30 AM ET
+  Cycles: Every 30 min until 4:30 PM ET
+  Total: ~10 runs
+  Logs: dry_run_logs/performance_YYYYMMDD.json
+
+After 5 days:
+  Review performance
+  Decide: Go live or keep testing?
+  Switch cron to: python3 bot.py (live orders)
+
+
+================================================================================
+  TROUBLESHOOTING
+================================================================================
+
+Issue: "crontab: no crontab for user"
+Solution: Ignore - first time setup, cron will create it
+
+Issue: Permission denied
+Solution: Grant Full Disk Access to Terminal
+  System Preferences → Security & Privacy → Full Disk Access → Add Terminal
+
+Issue: Cron not running
+Solution: Check Full Disk Access, restart Terminal
+
+Issue: Logs not appearing
+Solution: Check that directory exists:
+  mkdir -p dry_run_logs
+  ls -la dry_run_logs/
+
+
+================================================================================
+  READY?
+================================================================================
+
+When set up correctly:
+
+Tomorrow morning:
+✅ Bot auto-runs at 9:30 AM ET
+✅ Every 30 minutes through 4:30 PM ET
+✅ Logs to dry_run_logs/
+✅ No orders placed (dry-run mode)
+
+After 5 days:
+✅ Review logs
+✅ Decide to go live or continue testing
+✅ Switch to live mode when ready
+
+Good luck! 🚀

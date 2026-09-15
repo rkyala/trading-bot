@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/Users/ramayalala/Documents/Documents - Rama's MacBook Pro/trading_bot/backtest_stability_6months.py", line 7, in <module>
+    import yfinance as yf
+ModuleNotFoundError: No module named 'yfinance'
