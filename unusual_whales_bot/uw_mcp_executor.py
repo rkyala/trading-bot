@@ -323,10 +323,34 @@ class MCPEquityExecutor:
         # ref_id, and passing it there returns
         #   -32602 unexpected additional properties ["ref_id"]
         # which is what broke dry-run pricing.
+        # FRACTIONAL QUANTITIES CANNOT USE LIMIT ORDERS.
+        #
+        # Robinhood rejects them outright:
+        #   API error 400: "Limit order quantity cannot include fractional
+        #   shares."
+        # This bot sizes by DOLLARS (allow_fractional_shares, $500/entry), so
+        # almost every quantity is fractional — 0.7544 META, 0.35 SHOP. On the
+        # first live session every single order was refused by this, after the
+        # ATR bug had already been fixed.
+        #
+        # Downgrading to market is the correct resolution rather than rounding:
+        # rounding to whole shares breaks dollar-based sizing (one SNDK share
+        # is $1,795 against a $500 target), which is the defect fractional
+        # sizing was introduced to fix. It also matches the friction already
+        # measured — ~$0.42 per round trip assumed crossing the spread, which
+        # is what a market order does.
+        order_type = str(order_type).lower()
+        if order_type == "limit" and abs(qty - round(qty)) > 1e-9:
+            logger.info(
+                f"↩️  {symbol}: {qty} is fractional — limit orders cannot be "
+                f"fractional on Robinhood, sending market instead")
+            order_type = "market"
+            limit_price = None
+
         args = {"account_number": self.account_number, "symbol": symbol.upper(),
-                "side": side, "quantity": str(qty), "type": str(order_type).lower(),
+                "side": side, "quantity": str(qty), "type": order_type,
                 "time_in_force": "gfd"}
-        if str(order_type).lower() == "limit":
+        if order_type == "limit":
             if not limit_price:
                 return fail("limit order without a limit_price")
             args["limit_price"] = f"{float(limit_price):.2f}"
