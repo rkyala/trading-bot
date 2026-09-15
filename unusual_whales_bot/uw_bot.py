@@ -20,6 +20,7 @@ Ready for live: Tue 9/8 with UW API key
 
 import asyncio
 import logging
+import os
 from typing import Optional, Dict
 from datetime import datetime
 
@@ -84,9 +85,49 @@ class UnusualWhalesBot:
         # this flag was read nowhere, so `mock_mode: False` fell through to a
         # stub LIVE path where every order returned success=False.
         # ---------------------------------------------------------------
+        # ---------------------------------------------------------------
+        # LIVE EXECUTOR — constructed ONLY when paper_trading is False.
+        #
+        # In paper mode this stays None and nothing can reach Robinhood: the
+        # executor is never built, so the MCP server subprocess is never even
+        # started. Flipping paper_trading is the single switch.
+        #
+        # Without an executor injected, LIVE mode REFUSES every order rather
+        # than dropping them quietly ("no Robinhood MCP executor connected").
+        # That is the correct failure, but it means a live flip without this
+        # wiring trades nothing at all — which is what it did until now.
+        #
+        # dry_run mirrors log_orders_only, so there is a third state between
+        # paper and live: real MCP path, real auth, no order sent. Given the
+        # live path has NEVER executed in this project and the Sep 8 audit
+        # found ten defects in it while monitoring reported green, exercising
+        # everything except the order is worth having.
+        # ---------------------------------------------------------------
+        _paper = EXECUTION_MODE.get("paper_trading", True)
+        _executor = None
+        if not _paper:
+            try:
+                from uw_mcp_executor import MCPEquityExecutor
+                _executor = MCPEquityExecutor(
+                    account_number=os.getenv("RH_ACCOUNT_NUMBER"),
+                    dry_run=EXECUTION_MODE.get("log_orders_only", False),
+                )
+                pre = _executor.preflight()
+                if pre.get("ready"):
+                    logger.warning("🚀 LIVE executor preflight PASSED — "
+                                   f"account {pre.get('account_number')}")
+                else:
+                    logger.error(
+                        "🚨 LIVE executor preflight FAILED: "
+                        f"{pre.get('error')}. Orders will be refused. "
+                        "Fix this before trusting the session.")
+            except Exception as e:
+                logger.error(f"🚨 Could not build the live executor: {e}")
+
         self.robinhood_mcp = RobinhoodMCPClient(
             use_mock=EXECUTION_MODE.get("mock_mode", False),
-            paper_trading=EXECUTION_MODE.get("paper_trading", True),
+            paper_trading=_paper,
+            mcp_executor=_executor,
         )
 
         # Build the UW client early: the watchlist needs it at construction.
