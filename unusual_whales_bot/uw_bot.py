@@ -129,6 +129,7 @@ class UnusualWhalesBot:
             paper_trading=_paper,
             mcp_executor=_executor,
         )
+        self._live_executor = _executor
 
         # Build the UW client early: the watchlist needs it at construction.
         if api_client is None:
@@ -141,6 +142,19 @@ class UnusualWhalesBot:
 
         # Position tracking
         self.position_manager = PositionManager()
+
+        # RECONCILE AGAINST THE BROKER BEFORE TRADING.
+        # open_positions.json is this bot's view; the ACCOUNT is the truth.
+        # They drift for ordinary reasons — hand-placed trades, another bot on
+        # the same account, a fill that landed after the last save. Account
+        # ...1949 held five names (~$249) this bot had never heard of.
+        # Broker-only symbols are BLOCKED from new entries rather than adopted:
+        # adopting means managing a position with no thesis, no stop and no
+        # target, then selling shares the bot never bought.
+        try:
+            self.position_manager.reconcile_with_broker(self._live_executor)
+        except Exception as _e:
+            logger.error(f'🚨 Reconciliation raised: {_e} — book unverified')
 
         # Whale watchlist — follows large blocks via open interest from open
         # to close. Detection happens BEFORE the contract filter, because the
@@ -344,6 +358,24 @@ class UnusualWhalesBot:
             logger.info(
                 f"🧊 {symbol}: re-entry suppressed, {_cool:.0f} min of cooldown "
                 f"left after the last exit"
+            )
+            return False
+
+        # ---------------------------------------------------------------
+        # BROKER-ONLY GUARD. The account already holds this name from outside
+        # this bot — a hand-placed trade, another bot, a stale fill.
+        #
+        # Entering anyway is wrong twice: max_dollars_per_symbol would size as
+        # though the existing exposure were zero, and any later exit would sell
+        # into shares the bot never bought. Reconciliation runs at startup and
+        # this is where its result is CONSUMED — a check that only logs is the
+        # defect this project keeps finding.
+        # ---------------------------------------------------------------
+        if self.position_manager.is_broker_only(symbol):
+            self._last_reject_reason = "broker_only_position"
+            logger.warning(
+                f"🚫 {symbol}: account already holds this from outside the bot "
+                f"— rejecting entry to avoid untracked exposure"
             )
             return False
 

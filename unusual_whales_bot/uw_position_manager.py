@@ -100,6 +100,111 @@ class PositionManager:
         elapsed = (_t.time() - closed_at) / 60.0
         return max(0.0, mins - elapsed)
 
+    # Symbols the BROKER holds that this bot did not open. Populated by
+    # reconcile_with_broker(); consulted before any new entry.
+    broker_only_symbols: set = set()
+
+    def reconcile_with_broker(self, executor) -> dict:
+        """
+        Compare this bot's book against the broker's at startup.
+
+        WHY THIS EXISTS
+        open_positions.json is the bot's view. The ACCOUNT is the truth, and
+        the two drift for reasons that have nothing to do with bugs: trades
+        placed by hand, a different bot on the same account, a fill that landed
+        after the last save. Account ...1949 held AMGN, JD, SHOP, DIS and CVX
+        (~$249 cost basis) while this file was empty — none of them opened by
+        this bot.
+
+        Three cases, and only one of them is cosmetic:
+
+        BROKER-ONLY  the account holds it, the bot does not know.
+            The symbol is BLOCKED from new entries. Not adopted: adopting
+            means managing a position with no entry thesis, no stop and no
+            target, and then selling shares the bot never bought. Not ignored
+            either, because max_dollars_per_symbol would size as though the
+            exposure were zero.
+
+        BOT-ONLY     the bot thinks it holds it, the account does not.
+            The serious one. Every exit for that position — stop, target, EOD
+            flatten — would try to sell something that is not there, fail, and
+            leave the bot believing it is still exposed. Reported as CRITICAL.
+
+        QUANTITY MISMATCH  both hold it, in different size.
+            Partial fill, partial manual sale, or a missed write. Flagged.
+
+        Returns a summary; never raises. A reconciliation failure must not stop
+        the bot from running, but it must be loud — an unreconciled book that
+        looks reconciled is worse than no check at all.
+        """
+        out = {"broker_only": [], "bot_only": [], "mismatched": [],
+               "checked": False, "error": None}
+        if executor is None:
+            out["error"] = "no executor — cannot reach the broker (paper mode?)"
+            logger.info("↔️  Reconciliation skipped: %s", out["error"])
+            return out
+        try:
+            import json as _json
+            raw = executor.mcp.text(executor.mcp.call(
+                "get_equity_positions", {"account_number": executor.account_number}))
+            data = _json.loads(raw)
+            rows = (data.get("data") or {}).get("positions") or data.get("positions") or []
+        except Exception as e:
+            out["error"] = f"broker query failed: {e}"
+            logger.error("🚨 Reconciliation FAILED: %s — the book is unverified", e)
+            return out
+
+        broker = {}
+        for r in rows:
+            try:
+                q = float(r.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+            if q == 0:
+                continue
+            sym = str(r.get("symbol") or r.get("chain_symbol") or "").upper()
+            if sym:
+                broker[sym] = broker.get(sym, 0.0) + q
+
+        mine = {}
+        for pos in self.positions.values():
+            sym = str(getattr(pos, "symbol", "")).upper()
+            if sym:
+                mine[sym] = mine.get(sym, 0.0) + float(getattr(pos, "quantity", 0) or 0)
+
+        out["checked"] = True
+        for sym, q in sorted(broker.items()):
+            if sym not in mine:
+                out["broker_only"].append((sym, q))
+            elif abs(q - mine[sym]) > 1e-4:
+                out["mismatched"].append((sym, mine[sym], q))
+        for sym, q in sorted(mine.items()):
+            if sym not in broker:
+                out["bot_only"].append((sym, q))
+
+        self.broker_only_symbols = {s for s, _ in out["broker_only"]}
+
+        if out["broker_only"]:
+            logger.warning(
+                "↔️  %d symbol(s) held at the broker but NOT by this bot — "
+                "blocked from new entries: %s",
+                len(out["broker_only"]),
+                ", ".join(f"{s} x{q:g}" for s, q in out["broker_only"]))
+        for sym, q in out["bot_only"]:
+            logger.error(
+                "🚨 CRITICAL desync: bot believes it holds %s x%g, the broker "
+                "does not. Every exit for it will fail against nothing.", sym, q)
+        for sym, mq, bq in out["mismatched"]:
+            logger.warning("↔️  %s quantity mismatch: bot %g vs broker %g", sym, mq, bq)
+        if not (out["broker_only"] or out["bot_only"] or out["mismatched"]):
+            logger.info("↔️  Reconciled with broker: books agree (%d position(s))",
+                        len(broker))
+        return out
+
+    def is_broker_only(self, symbol: str) -> bool:
+        """True when the account holds this name from outside the bot."""
+        return str(symbol).upper() in self.broker_only_symbols
+
     def _load_positions(self):
         """Load positions from file"""
         try:
