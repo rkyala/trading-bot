@@ -182,8 +182,32 @@ class MarketDataProvider:
         {"SPX": 18.0, "NDX": 40.0, "RUT": 25.0} lookup that returned 18.0
         for every equity symbol).
         """
-        candles = self.get_historical_candles(symbol, interval="day", limit=period + 15)
-        if len(candles) < period + 1:
+        # OVER-REQUEST 3x. THIS IS THE WHOLE BUG.
+        #
+        # UW returns THREE rows per calendar date — pre, regular and post —
+        # and get_historical_candles keeps only the regular ones. `period + 15`
+        # asked for 34 rows, which came back as pr 12 / r 11 / po 11: ELEVEN
+        # usable sessions for a 14-period ATR that needs 15. get_atr returned
+        # None for EVERY symbol, and generate_execution_plan refuses to size a
+        # position without an ATR, so on 2026-09-15 the bot ran four live
+        # cycles and placed zero orders while logging
+        #     "❌ QQQ: no ATR available, cannot size stops safely"
+        # for all ten candidates.
+        #
+        # It was intermittent before (1 error on 09-14, 0 on 09-11) because the
+        # pre/post mix varies with extended-hours activity — on quiet days
+        # enough regular rows fitted inside 34 and the shortfall stayed hidden.
+        #
+        # Measured: limit=34 -> 11 regular, limit=60 -> 20, limit=90 -> 30.
+        # 3x the periods plus a margin puts this comfortably clear even when
+        # extended-hours rows dominate.
+        need = period + 1
+        candles = self.get_historical_candles(
+            symbol, interval="day", limit=max(60, need * 3 + 15))
+        if len(candles) < need:
+            logger.warning(
+                f"ATR unavailable for {symbol}: {len(candles)} regular sessions "
+                f"returned, need {need}")
             return None
 
         df = pd.DataFrame(candles)

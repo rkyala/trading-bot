@@ -198,9 +198,36 @@ class UWPriceData:
     def get_intraday_ticks(self, symbol: str, interval: str = "5m") -> List[Dict]:
         return self.get_bars(symbol, interval, limit=200)
 
+    # Roughly one row in three is regular-hours (pre/regular/post), so a
+    # request for N raw rows yields only ~N/3 usable bars. Over-request by 4x
+    # plus a buffer. Defined here rather than below because get_atr needs it.
+    _SESSION_OVERSAMPLE = 4
+
     def get_atr(self, symbol: str, period: int = 14) -> Optional[float]:
-        bars = self.get_bars(symbol, "1d", limit=period + 20)  # 1d ignores limit anyway
+        # THE COMMENT HERE USED TO SAY "1d ignores limit anyway". IT DOES NOT.
+        #
+        # limit=period+20 asked for 34 raw rows. UW returns pre/regular/post for
+        # each date, so 34 rows is pr 12 / r 11 / po 11 — ELEVEN usable sessions
+        # for an ATR that needs 15. get_atr returned None for every symbol, and
+        # generate_execution_plan refuses to size a position without an ATR, so
+        # on 2026-09-15 the bot ran live for 25 minutes, evaluated ten
+        # candidates and placed ZERO orders, logging
+        #     "❌ QQQ: no ATR available, cannot size stops safely"
+        # for every one.
+        #
+        # It was intermittent before (1 error on 09-14, 0 on 09-11) because the
+        # pre/post share varies with extended-hours activity — on quiet days
+        # enough regular rows fitted inside 34 and the shortfall stayed hidden.
+        #
+        # _SESSION_OVERSAMPLE below already existed for exactly this reason,
+        # with a comment spelling it out, and get_ema/get_sma use it. get_atr
+        # did not. Measured: limit=34 -> 11 regular, 60 -> 20, 90 -> 30.
+        bars = self.get_bars(symbol, "1d",
+                             limit=period * self._SESSION_OVERSAMPLE + 50)
         if len(bars) < period + 1:
+            logger.warning(
+                f"ATR unavailable for {symbol}: {len(bars)} regular sessions, "
+                f"need {period + 1}")
             return None
         df = pd.DataFrame(bars)
         prev = df["close"].shift(1)
