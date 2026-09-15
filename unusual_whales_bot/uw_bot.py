@@ -447,11 +447,25 @@ class UnusualWhalesBot:
                     _spot = float(alert.get("underlying_price") or 0) or None
                 except (TypeError, ValueError):
                     _spot = None
+                # The REAL quoted NBBO, not a derived midpoint. The ask is what
+                # the trade would actually cost, and the spread beside it is
+                # what says whether that ask is payable: the LEAP era booked a
+                # 60% win rate while losing $3,500 to spread, so a price with
+                # no spread next to it is half the story.
+                def _q(k):
+                    try:
+                        v = float(alert.get(k) or 0)
+                        return v if v > 0 else None
+                    except (TypeError, ValueError):
+                        return None
+                _ask, _bid = _q("nbbo_ask"), _q("nbbo_bid")
                 self._skipped_bearish.append({
                     "symbol": symbol,
                     "direction": str(alert.get("option_type", "PUT")).upper(),
                     "premium": float(alert.get("premium") or 0.0),
                     "spot": _spot,
+                    "ask": _ask,
+                    "bid": _bid,
                     "strike": _strike,
                     "expiry": str(alert.get("expiry") or "")[:10],
                     "dte": alert.get("dte"),
@@ -1290,7 +1304,16 @@ class UnusualWhalesBot:
                 off = (strike / spot - 1) * 100
                 state = "ITM" if off > 0 else "OTM"
                 money = f" · spot ${spot:,.2f} ({off:+.1f}% {state})"
-            lines.append(f"**{s['symbol']}** {contract}{when}{tag}{greek}{money}")
+            # Ask is what it would cost; the spread says whether that is a
+            # real price or a quote nobody can trade against.
+            quote = ""
+            ask, bid = s.get("ask"), s.get("bid")
+            if ask:
+                quote = f" · ask ${ask:,.2f}"
+                if bid and ask > bid:
+                    sp = ask - bid
+                    quote += f" (bid ${bid:,.2f}, spread ${sp:,.2f} / {sp/ask*100:.0f}%)"
+            lines.append(f"**{s['symbol']}** {contract}{when}{tag}{greek}{money}{quote}")
         self._discord_post({
             "title": f"📉 {len(skipped)} bearish signal(s) skipped — shorting disabled",
             "description": "\n".join(lines),
