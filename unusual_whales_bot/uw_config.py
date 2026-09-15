@@ -581,6 +581,34 @@ DEFAULT_POSITION_SIZE = 1  # contracts
 # Cut losers daily, let winners run — the disciplined direction. Still carries
 # full overnight gap risk: no stop can act while the market is shut, and no
 # overnight continuation edge has ever been measured on this project.
+# ---------------------------------------------------------------------------
+# WHALE ALERT NOISE GATE.
+#
+# Measured 2026-09-15: the channel carried 37 whale alerts against 9 actual
+# trades — 4:1 noise to action — on top of 79 already suppressed as synthetic
+# structures. An alert stream at that ratio trains the reader to ignore it,
+# which is worse than no stream: the bot opened five positions unnoticed on
+# 2026-09-08 for exactly that reason.
+#
+# Premium is the only real discriminator. Across 308 tracked blocks:
+#     p25 $1.27M   median $1.81M   p75 $3.06M   max $32.58M
+#     >=$1M keeps 100%   >=$2M keeps 44%   >=$5M keeps 12%
+# OI concentration is NOT a discriminator — its median is 91%, so almost every
+# tracked block already looks "concentrated".
+#
+# READ THIS BEFORE RAISING EXPECTATIONS: filtering a zero-edge feed leaves
+# FEWER alerts, not better ones. Whale blocks were tested on 10,099 samples
+# over 1-21 day horizons and every result came back |t| < 1.1. A block is NOT
+# an entry. This gate exists so the channel stays readable, not because the
+# survivors predict anything.
+# ---------------------------------------------------------------------------
+WHALE_MIN_PREMIUM = float(os.getenv("UW_WHALE_MIN_PREMIUM", "5000000"))
+
+# Distribution alerts fire on any bid-side selling. Two real examples: SPY
+# $727P sold $55k against a $3.33M block (1.7%), DAL $88C $96k against $8.69M
+# (1.1%). Both read as "being sold into today" and both were noise.
+WHALE_MIN_DISTRIBUTION_FRAC = float(os.getenv("UW_WHALE_MIN_DIST_FRAC", "0.25"))
+
 HOLD_WINNERS_OVERNIGHT = os.getenv("UW_HOLD_WINNERS", "0") not in ("0", "", "false", "False")
 
 HOLD_OVERNIGHT = [

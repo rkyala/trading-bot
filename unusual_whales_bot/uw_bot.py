@@ -697,6 +697,21 @@ class UnusualWhalesBot:
         # stays on the watchlist and in the table, it simply does not page
         # anyone. Deep-ITM prints are the largest by premium, so they dominate
         # the channel while being the least informative thing in it.
+        # PREMIUM GATE. See WHALE_MIN_PREMIUM for the distribution this was
+        # sized from. Small blocks are not smaller versions of large ones for
+        # alerting purposes — they are the 88% of the feed that makes the
+        # channel unreadable.
+        try:
+            from uw_config import WHALE_MIN_PREMIUM as _MINP
+        except Exception:
+            _MINP = 5_000_000.0
+        if (pos.block_premium or 0) < _MINP:
+            logger.info(
+                f"🔇 {pos.symbol} ${pos.strike:.0f}{str(pos.option_type)[0]} "
+                f"{event}: below the ${_MINP/1e6:.0f}M alert floor "
+                f"(${(pos.block_premium or 0)/1e6:.2f}M) — tracked, not posted")
+            return
+
         _ex = getattr(pos, "extrinsic_pct", None)
         if _ex is not None and _ex < self.MIN_EXTRINSIC_PCT:
             logger.info(
@@ -1133,6 +1148,19 @@ class UnusualWhalesBot:
             # Bid-side premium is what actually LEFT; total includes buying.
             _sold = flow.get("bid_premium") or 0.0
             _frac = (_sold / pos.block_premium) if pos.block_premium else 0.0
+            # MATERIALITY GATE. "Being sold into today" for 1% of a position is
+            # not distribution. Below the threshold the position stays tracked
+            # and the state still updates — it simply does not page anyone.
+            try:
+                from uw_config import WHALE_MIN_DISTRIBUTION_FRAC as _MINFRAC
+            except Exception:
+                _MINFRAC = 0.25
+            if _frac < _MINFRAC:
+                logger.info(
+                    f"🔇 {pos.symbol} distribution not posted: ${_sold/1e3:,.0f}k "
+                    f"is {_frac:.1%} of the ${pos.block_premium/1e6:.2f}M block "
+                    f"(floor {_MINFRAC:.0%})")
+                return
             self._discord_post({
                 "title": f"⚠️ WHALE DISTRIBUTION — {pos.symbol} "
                          f"${pos.strike:.0f}{pos.option_type[0]}",
