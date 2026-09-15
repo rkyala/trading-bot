@@ -646,6 +646,80 @@ def longview_universe(n: int) -> List[str]:
     return [t for _, t in out[:n]]
 
 
+
+# ---------------------------------------------------------------------------
+# SHORT PRESSURE — a TIEBREAKER, and deliberately nothing more.
+#
+# Measured 2026-09-14 on 150 screener names over 248 trading days: the
+# short-volume ratio's z-score against its own 60-day mean predicts NEXT-DAY
+# market-adjusted returns with a cross-sectional IC of -0.026 (t=-4.23), and
+# that survived partialling out the same-day return — the first hypothesis on
+# this project to survive its primary control.
+#
+# TWO REASONS IT IS ONLY A TIEBREAKER:
+#   1. HORIZON. The effect is a ONE-DAY effect. It was already null by day 5
+#      (t=-0.78) and h=3 died on the control at t=-2.00. This watchlist is a
+#      multi-year screen, so there is NO evidence the signal persists over the
+#      holding period it is being shown against.
+#   2. CONCENTRATION. Three names (AZN, MRVL, MO) were 49% of the total effect
+#      and only 58% of names contributed positively. That is the shape that
+#      killed the GEX barrier test, where AMD alone was 70% of a t=+1.98.
+#
+# It also does not survive friction as a trade: +0.107%/day per leg is $0.54 on
+# a $500 position against $0.42 measured round-trip cost. The only setting where
+# it is not obviously worthless is one where friction is amortised over weeks —
+# which is what this list is.
+#
+# So: it never overrides drawdown depth. It orders names whose drawdown is
+# within SHORT_TIEBREAK_BUCKET of each other, and it is labelled on the card.
+# ---------------------------------------------------------------------------
+SHORT_TIEBREAK_BUCKET = 2.0   # percentage points of drawdown treated as a tie
+
+
+def short_pressure_z(ticker: str) -> Optional[float]:
+    """
+    Short-volume ratio today vs its own 60-day mean, in standard deviations.
+
+    Positive = more short volume than this name usually sees. Returns None when
+    there is too little history to compute a z-score, and the caller must treat
+    None as "no opinion" rather than as zero.
+    """
+    import statistics
+    import requests
+    key = os.getenv("UW_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.get(f"{BASE}/shorts/{ticker}/volumes-by-exchange",
+                         params={"limit": 120},
+                         headers={"Authorization": f"Bearer {key}",
+                                  "Accept": "application/json"},
+                         timeout=20)
+        rows = r.json().get("data") or [] if r.status_code == 200 else []
+    except Exception:
+        return None
+    series = []
+    for x in rows:
+        try:
+            tv = float(x["total_volume"]); sv = float(x["short_volume"])
+            if tv > 0:
+                series.append((str(x["date"])[:10], sv / tv))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(series) < 31:
+        return None
+    series.sort()
+    latest = series[-1][1]
+    hist = [v for _, v in series[:-1]][-60:]
+    if len(hist) < 30:
+        return None
+    mu = statistics.mean(hist)
+    sd = statistics.pstdev(hist)
+    if sd <= 0:
+        return None
+    return (latest - mu) / sd
+
+
 def longview_rank() -> List[Dict]:
     """Rank the universe; gate-passers first."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -669,21 +743,39 @@ def longview_rank() -> List[Dict]:
                          "fails": ", ".join(fails) or "none"})
         except Exception:
             continue
-    # Deepest discount first.
+    # Deepest discount first, short pressure only inside a bucket of similar
+    # drawdown. Drawdown is a continuous float, so an exact tie never occurs —
+    # without bucketing a "tiebreaker" would never once fire.
     rows.sort(key=lambda r: r["dd_val"] if r["dd_val"] is not None else 0)
-    return rows[:LONGVIEW_SHOW]
+    shortlist = rows[:LONGVIEW_SHOW * 2]
+    for r in shortlist:
+        r["short_z"] = short_pressure_z(r["t"])
+    shortlist.sort(key=lambda r: (
+        round((r["dd_val"] if r["dd_val"] is not None else 0) / SHORT_TIEBREAK_BUCKET),
+        # Within a bucket, LESS short pressure first. None sorts neutral so a
+        # name with no data is neither rewarded nor punished.
+        r["short_z"] if r.get("short_z") is not None else 0.0,
+    ))
+    return shortlist[:LONGVIEW_SHOW]
 
 
 def build_longview_embed(rows: List[Dict]) -> Dict:
     lines = []
     for i, r in enumerate(rows, 1):
+        sz = r.get("short_z")
+        # Only shown when it is notable. A z near zero is no information, and
+        # printing it on every row would give a -0.026 IC signal more visual
+        # weight than a multi-year screen should give a one-day effect.
+        short_tag = ""
+        if sz is not None and abs(sz) >= 1.0:
+            short_tag = f" · short {sz:+.1f}σ"
         lvl = ""
         if r.get("entry") and r.get("stop") and r.get("target"):
             lvl = (f" · ${r['entry']:,.0f} → stop ${r['stop']:,.0f} / "
                    f"tgt ${r['target']:,.0f}"
                    + (f" (1:{r['rr']:.1f})" if r.get("rr") else ""))
         lines.append(f"`{i:>2}` **{r['t']}** {r['dd']} off high · "
-                     f"{r['met']}/{r['total']}{lvl}")
+                     f"{r['met']}/{r['total']}{lvl}{short_tag}")
     return {
         "title": f"🏛️ Long-Horizon Watchlist — {len(rows)} deepest discounts "
                  f"(>= {LONGVIEW_MIN_CONDITIONS}/10 quality)",
