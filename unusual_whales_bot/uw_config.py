@@ -561,6 +561,28 @@ DEFAULT_POSITION_SIZE = 1  # contracts
 # 5 for the first LIVE session (2026-09-14). At $500/entry that caps deployed
 # capital at $2,500 — 25% of the $10,065.80 account — which is the limit set
 # for the first day of real orders.
+# ---------------------------------------------------------------------------
+# OVERNIGHT HOLDS — symbols exempt from the 15:45 EOD flatten.
+#
+# A DISCRETIONARY OVERRIDE, not a measured improvement. Everything about this
+# bot is sized for an intraday hold: the stop is 0.75 ATR, which is a
+# same-session width. An overnight gap routinely exceeds it, and with the
+# market shut a gap-down opens straight THROUGH the stop — there is no exit at
+# that level, only at whatever the open prints. A held name is therefore a
+# position you are carrying on conviction, not one the bot is protecting.
+#
+# Set via config or, without editing code, the environment:
+#     UW_HOLD_OVERNIGHT=NVDA,META
+#
+# The bot resumes managing them at the next session's start, stops and all.
+# Reconciliation still sees them as its own, so they are not orphaned.
+# ---------------------------------------------------------------------------
+HOLD_OVERNIGHT = [
+    s.strip().upper()
+    for s in os.getenv("UW_HOLD_OVERNIGHT", "").split(",")
+    if s.strip()
+]
+
 MAX_OPEN_POSITIONS = 5
 MAX_DAILY_LOSS_PCT = -5.0  # Circuit breaker: stop if down 5%
 MAX_POSITION_LOSS_PCT = -2.0  # Exit position if down 2%

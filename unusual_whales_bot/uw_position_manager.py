@@ -457,8 +457,24 @@ class PositionManager:
 
         logger.warning(f"🚨 EOD FORCE CLOSE: {len(self.positions)} positions")
 
+        # Honour the overnight-hold list before anything else. These are
+        # positions the operator has chosen to carry on conviction; the bot
+        # keeps them in its book so they are managed again tomorrow rather than
+        # becoming orphans, but it does not flatten them tonight.
+        try:
+            from uw_config import HOLD_OVERNIGHT as _HOLD
+        except Exception:
+            _HOLD = []
+
         closed_ids = []
         for pos_id, position in list(self.positions.items()):
+            if str(position.symbol).upper() in _HOLD:
+                logger.warning(
+                    f"🌙 {position.symbol}: HELD OVERNIGHT by configuration — "
+                    f"not flattened. No stop can act until the next open; an "
+                    f"overnight gap can pass straight through it."
+                )
+                continue
             exit_price, exit_underlying = await self.mark_position(position, robinhood_mcp)
 
             # THIS CALLED place_option_order ON EQUITY POSITIONS.
