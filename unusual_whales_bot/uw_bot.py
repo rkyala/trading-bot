@@ -438,10 +438,20 @@ class UnusualWhalesBot:
                     _strike = int(_cid[-8:]) / 1000.0 if len(_cid) >= 15 else None
                 except ValueError:
                     _strike = None
+                # Spot at the moment of the signal. Without it a strike is not
+                # interpretable: QQQ $713P is a very different statement with
+                # spot at 707 (ITM, someone paying for delta) than at 725
+                # (2% OTM, a cheaper hedge). The alert already carries it.
+                _spot = None
+                try:
+                    _spot = float(alert.get("underlying_price") or 0) or None
+                except (TypeError, ValueError):
+                    _spot = None
                 self._skipped_bearish.append({
                     "symbol": symbol,
                     "direction": str(alert.get("option_type", "PUT")).upper(),
                     "premium": float(alert.get("premium") or 0.0),
+                    "spot": _spot,
                     "strike": _strike,
                     "expiry": str(alert.get("expiry") or "")[:10],
                     "dte": alert.get("dte"),
@@ -1268,11 +1278,19 @@ class UnusualWhalesBot:
             exp = s.get("expiry") or ""
             dte = s.get("dte")
             dlt = s.get("delta")
+            spot = s.get("spot")
             contract = f"${strike:,.0f}{s.get('direction','P')[0]}" if strike else s.get("direction", "PUT")
             when = f" exp {exp}" + (f" ({dte}d)" if dte is not None else "") if exp else ""
             greek = f" · Δ{float(dlt):.2f}" if dlt is not None else ""
             tag = f" · ${prem/1e6:.2f}M" if prem else ""
-            lines.append(f"**{s['symbol']}** {contract}{when}{tag}{greek}")
+            # Moneyness, signed from the PUT buyer's perspective: negative means
+            # the strike is below spot (out of the money).
+            money = ""
+            if spot and strike:
+                off = (strike / spot - 1) * 100
+                state = "ITM" if off > 0 else "OTM"
+                money = f" · spot ${spot:,.2f} ({off:+.1f}% {state})"
+            lines.append(f"**{s['symbol']}** {contract}{when}{tag}{greek}{money}")
         self._discord_post({
             "title": f"📉 {len(skipped)} bearish signal(s) skipped — shorting disabled",
             "description": "\n".join(lines),
