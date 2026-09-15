@@ -339,8 +339,13 @@ INSTRUMENT_CONFIG = {
     #
     # RAISE THEM once the path is proven: a real fill, a real stop, and a real
     # EOD flatten observed end to end.
-    "position_dollars": 100.0,
-    "max_dollars_per_symbol": 300.0,
+    # Raised back to 500 on 2026-09-14 by request. max_dollars_per_symbol
+    # MUST move with it — at the smoke-test 300 cap every 500 entry would have
+    # been rejected for exceeding the per-symbol limit, so the bot would have
+    # looked like it found no trades rather than like it was misconfigured.
+    # Kept at 3x the entry size, the same ratio the original 500/1500 used.
+    "position_dollars": 500.0,
+    "max_dollars_per_symbol": 1500.0,
 
     # ---------------------------------------------------------------------
     # FRACTIONAL SHARES.
