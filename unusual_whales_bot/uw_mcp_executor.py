@@ -78,6 +78,14 @@ def _from_env_file(key: str) -> Optional[str]:
     return None
 
 
+def _f(x):
+    try:
+        v = float(x)
+        return v if v == v else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _cred(*names: str) -> Optional[str]:
     """File first — it holds the live value after any rotation."""
     for n in names:
@@ -305,22 +313,63 @@ class MCPEquityExecutor:
         if not self.account_number:
             return fail("no RH_ACCOUNT_NUMBER configured")
 
+        # ARGUMENT NAMES COME FROM THE SERVER'S OWN SCHEMA, not assumption.
+        # tools/list reports for place_equity_order:
+        #   required: account_number, symbol, side, type
+        #   accepts : quantity, dollar_amount, limit_price, stop_price,
+        #             time_in_force, market_hours, ref_id
+        # It had been sending "price", which this server rejects — every limit
+        # order would have failed. review_equity_order takes the same set MINUS
+        # ref_id, and passing it there returns
+        #   -32602 unexpected additional properties ["ref_id"]
+        # which is what broke dry-run pricing.
         args = {"account_number": self.account_number, "symbol": symbol.upper(),
                 "side": side, "quantity": str(qty), "type": str(order_type).lower(),
-                "time_in_force": "gfd", "ref_id": str(uuid.uuid4())}
+                "time_in_force": "gfd"}
         if str(order_type).lower() == "limit":
             if not limit_price:
                 return fail("limit order without a limit_price")
-            args["price"] = f"{float(limit_price):.2f}"
+            args["limit_price"] = f"{float(limit_price):.2f}"
 
         if self.dry_run:
-            logger.warning(f"🧪 DRY RUN — would place {side} {qty} {symbol} {order_type}")
-            return {"success": True, "order_id": f"dryrun-{args['ref_id'][:8]}",
-                    "message": "dry run — no order sent", "fill_price": None,
-                    "dry_run": True}
+            # Return a REAL quote as the fill price. Returning None left the
+            # position manager without an entry price, so a dry-run session
+            # would produce positions it could not value, stop or report — the
+            # run would "succeed" and the P&L would be meaningless.
+            #
+            # review_equity_order is the MCP's own validation: it prices the
+            # order and returns order_checks WITHOUT placing anything, so a dry
+            # run exercises Robinhood's real argument validation too.
+            fill, checks = None, None
+            try:
+                rv = self.mcp.call("review_equity_order",
+                                   {k: v for k, v in args.items() if k != "ref_id"})
+                d = json.loads(self.mcp.text(rv)).get("data") or {}
+                q = d.get("quote_data") or {}
+                checks = d.get("order_checks")
+                bid, ask = _f(q.get("bid_price")), _f(q.get("ask_price"))
+                last = _f(q.get("last_trade_price"))
+                # Cross the spread the way a market order does, but only when
+                # the book is sane — the after-hours book showed bid 13.71 /
+                # ask 17.45 on a $13.85 stock (27%), which would model a fill
+                # that could never happen in the session the bot trades.
+                if bid and ask and last and (ask - bid) / last <= 0.02:
+                    fill = ask if side == "buy" else bid
+                else:
+                    fill = last
+            except Exception as e:
+                logger.warning(f"dry-run review failed for {symbol}: {str(e)[:120]}")
+            logger.warning(f"🧪 DRY RUN — would place {side} {qty} {symbol} "
+                           f"{order_type}" + (f" ~${fill:.2f}" if fill else "")
+                           + (f" checks={checks}" if checks else ""))
+            return {"success": True, "order_id": f"dryrun-{uuid.uuid4().hex[:8]}",
+                    "message": "dry run — validated, not sent"
+                               + (f" (~${fill:.2f})" if fill else ""),
+                    "fill_price": fill, "dry_run": True}
 
         try:
-            txt = self.mcp.text(self.mcp.call("place_equity_order", args))
+            txt = self.mcp.text(self.mcp.call(
+                "place_equity_order", {**args, "ref_id": str(uuid.uuid4())}))
         except MCPError as e:
             return fail(f"place_equity_order failed: {e}")
         except Exception as e:

@@ -22,10 +22,27 @@ EXECUTION_MODE = {
     # Use Robinhood paper trading (real account, simulated capital)
     # ⏳ PAPER TRADING MODE: 2-day validation cycle
     # After review → switch to False for live trading
-    "paper_trading": True,  # ✅ PAPER TRADING ENABLED (validation phase)
+    # DRY RUN THROUGH THE LIVE PATH (2026-09-14).
+    #
+    # paper_trading False + log_orders_only True means: build the real MCP
+    # executor, authenticate against Robinhood, price every order with the
+    # server's own review_equity_order — and send NOTHING.
+    #
+    # This is deliberately not paper mode. Paper never touches the execution
+    # path, and that path has never run once in this project; the Sep 8 audit
+    # found ten defects in it while monitoring reported green. A dry-run
+    # session exercises auth, argument validation, order shaping, buy AND sell,
+    # and the rotated-token handling — everything except the order itself.
+    #
+    # Fills come from real quotes rather than a model, so the P&L is at least
+    # as meaningful as paper's.
+    #
+    # TO TRADE FOR REAL: set log_orders_only False. paper_trading alone is no
+    # longer the switch.
+    "paper_trading": False,
 
     # Log what would happen without actually executing
-    "log_orders_only": False,  # Orders actually placed (in paper account)
+    "log_orders_only": True,   # DRY RUN — validated against Robinhood, not sent
 
     # Account equity the daily-loss circuit breaker is evaluated against.
     #
