@@ -402,7 +402,34 @@ class PositionManager:
                 stop_hit = current_underlying_price <= position.underlying_stop
                 target_hit = current_underlying_price >= position.underlying_target
 
-            if stop_hit:
+            # HARD PERCENTAGE BACKSTOP.
+            #
+            # MAX_POSITION_LOSS_PCT was defined in config as "Exit position if
+            # down 2%" and READ NOWHERE — a safety limit that existed only in
+            # its own definition, like the Tier 2 banner and the rule toggles
+            # before it. The ATR stop was the only real protection, and on
+            # 2026-09-15 it sat WIDER than the advertised 2% on six of seven
+            # live positions (AFRM -4.18%, DELL -4.59%, ORCL -4.16%).
+            #
+            # This is a floor under the ATR stop, never a replacement: whichever
+            # binds first wins. Measured against the UNDERLYING, which is what
+            # the bot actually holds in equity mode.
+            pct_move = ((current_underlying_price / position.entry_price - 1) * 100
+                        if position.entry_price else 0.0)
+            if is_put:
+                pct_move = -pct_move
+            try:
+                from uw_config import MAX_POSITION_LOSS_PCT as _MAXLOSS
+            except Exception:
+                _MAXLOSS = -2.0
+            pct_stop_hit = pct_move <= _MAXLOSS
+
+            if stop_hit or pct_stop_hit:
+                if pct_stop_hit and not stop_hit:
+                    logger.warning(
+                        f"🛑 {position.symbol}: {pct_move:+.2f}% breaches the "
+                        f"{_MAXLOSS}% hard limit before the ATR stop "
+                        f"({position.underlying_stop:.2f}) — exiting")
                 exits.append((pos_id, "STOP_HIT"))
             elif target_hit:
                 exits.append((pos_id, "TARGET_HIT"))
@@ -465,9 +492,41 @@ class PositionManager:
             from uw_config import HOLD_OVERNIGHT as _HOLD
         except Exception:
             _HOLD = []
+        try:
+            from uw_config import HOLD_WINNERS_OVERNIGHT as _HOLD_WINNERS
+        except Exception:
+            _HOLD_WINNERS = False
 
         closed_ids = []
         for pos_id, position in list(self.positions.items()):
+            # HOLD WINNERS THROUGH THE FLATTEN, when enabled.
+            #
+            # The disciplined direction: cut losers daily, let winners run. The
+            # opposite — holding losers because they are down — is the
+            # disposition effect and is how one bad day becomes a bad week.
+            #
+            # Still a discretionary choice with a real cost: no stop can act
+            # overnight, so a gap-down opens straight through it. And nothing
+            # on this project has measured an overnight continuation edge.
+            _hold_winner = False
+            if _HOLD_WINNERS:
+                try:
+                    _mark, _ = await self.mark_position(position, robinhood_mcp)
+                    _pnl = (_mark - position.entry_price) * position.quantity
+                    if str(position.direction).upper().startswith("P"):
+                        _pnl = -_pnl
+                    if _pnl > 0:
+                        _hold_winner = True
+                        logger.warning(
+                            f"🌙 {position.symbol}: UP ${_pnl:+.2f} on the day — "
+                            f"held overnight per HOLD_WINNERS_OVERNIGHT. No stop "
+                            f"can act until the next open.")
+                except Exception as _e:
+                    logger.error(f"could not mark {position.symbol} for the "
+                                 f"winner check ({_e}) — flattening to be safe")
+            if _hold_winner:
+                continue
+
             if str(position.symbol).upper() in _HOLD:
                 logger.warning(
                     f"🌙 {position.symbol}: HELD OVERNIGHT by configuration — "

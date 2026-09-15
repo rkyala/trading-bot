@@ -577,6 +577,12 @@ DEFAULT_POSITION_SIZE = 1  # contracts
 # The bot resumes managing them at the next session's start, stops and all.
 # Reconciliation still sees them as its own, so they are not orphaned.
 # ---------------------------------------------------------------------------
+# Hold any position that is UP on the day through the 15:45 flatten.
+# Cut losers daily, let winners run — the disciplined direction. Still carries
+# full overnight gap risk: no stop can act while the market is shut, and no
+# overnight continuation edge has ever been measured on this project.
+HOLD_WINNERS_OVERNIGHT = os.getenv("UW_HOLD_WINNERS", "0") not in ("0", "", "false", "False")
+
 HOLD_OVERNIGHT = [
     s.strip().upper()
     for s in os.getenv("UW_HOLD_OVERNIGHT", "").split(",")
