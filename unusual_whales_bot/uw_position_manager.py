@@ -496,6 +496,10 @@ class PositionManager:
             from uw_config import HOLD_WINNERS_OVERNIGHT as _HOLD_WINNERS
         except Exception:
             _HOLD_WINNERS = False
+        try:
+            from uw_config import HOLD_WINNERS_MIN_PCT as _MIN_PCT
+        except Exception:
+            _MIN_PCT = 0.25
 
         closed_ids = []
         for pos_id, position in list(self.positions.items()):
@@ -515,12 +519,21 @@ class PositionManager:
                     _pnl = (_mark - position.entry_price) * position.quantity
                     if str(position.direction).upper().startswith("P"):
                         _pnl = -_pnl
-                    if _pnl > 0:
+                    _pct = ((_mark / position.entry_price - 1) * 100
+                            if position.entry_price else 0.0)
+                    if str(position.direction).upper().startswith("P"):
+                        _pct = -_pct
+                    if _pnl > 0 and _pct >= _MIN_PCT:
                         _hold_winner = True
                         logger.warning(
-                            f"🌙 {position.symbol}: UP ${_pnl:+.2f} on the day — "
-                            f"held overnight per HOLD_WINNERS_OVERNIGHT. No stop "
-                            f"can act until the next open.")
+                            f"🌙 {position.symbol}: UP ${_pnl:+.2f} ({_pct:+.2f}%) "
+                            f"— held overnight. No stop can act until the next open.")
+                    elif _pnl > 0:
+                        logger.info(
+                            f"   {position.symbol}: up only {_pct:+.2f}% "
+                            f"(${_pnl:+.2f}) — below the {_MIN_PCT}% hold "
+                            f"threshold, flattening rather than carrying gap risk "
+                            f"to defend it")
                 except Exception as _e:
                     logger.error(f"could not mark {position.symbol} for the "
                                  f"winner check ({_e}) — flattening to be safe")

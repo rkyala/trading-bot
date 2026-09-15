@@ -611,6 +611,19 @@ WHALE_MIN_DISTRIBUTION_FRAC = float(os.getenv("UW_WHALE_MIN_DIST_FRAC", "0.25"))
 
 HOLD_WINNERS_OVERNIGHT = os.getenv("UW_HOLD_WINNERS", "0") not in ("0", "", "false", "False")
 
+# A gain has to be worth the gap risk to justify carrying it.
+#
+# On 2026-09-15 "positive" alone would have held BP (+$0.43), TLT (+$0.15) and
+# OXY (+$0.24) overnight — gains of fifteen to forty-three CENTS on $500
+# positions. A 1% overnight gap on any of them is ±$5, an order of magnitude
+# larger than the gain being protected, and no stop can act while the market is
+# shut. Holding those is not letting a winner run; it is taking uncompensated
+# risk to defend rounding error.
+#
+# 0.25% on a $500 position is ~$1.25 — small, but a real move rather than
+# noise. Today it would hold AVGO (+0.26%) alone.
+HOLD_WINNERS_MIN_PCT = float(os.getenv("UW_HOLD_WINNERS_MIN_PCT", "0.25"))
+
 HOLD_OVERNIGHT = [
     s.strip().upper()
     for s in os.getenv("UW_HOLD_OVERNIGHT", "").split(",")
