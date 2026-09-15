@@ -428,10 +428,24 @@ class UnusualWhalesBot:
             try:
                 if not hasattr(self, "_skipped_bearish"):
                     self._skipped_bearish = []
+                # Capture the CONTRACT, not just the name. "USO PUT — $0.36M"
+                # does not say which put: a 5-delta weekly and a 60-delta
+                # three-month read completely differently, and the strike and
+                # expiry were already on the alert.
+                _cid = str(alert.get("option_chain_id") or "")
+                _strike = None
+                try:
+                    _strike = int(_cid[-8:]) / 1000.0 if len(_cid) >= 15 else None
+                except ValueError:
+                    _strike = None
                 self._skipped_bearish.append({
                     "symbol": symbol,
                     "direction": str(alert.get("option_type", "PUT")).upper(),
                     "premium": float(alert.get("premium") or 0.0),
+                    "strike": _strike,
+                    "expiry": str(alert.get("expiry") or "")[:10],
+                    "dte": alert.get("dte"),
+                    "delta": alert.get("abs_delta"),
                 })
             except Exception:
                 pass
@@ -1223,11 +1237,42 @@ class UnusualWhalesBot:
         """
         if not skipped:
             return
+        # DE-DUPLICATE ACROSS CYCLES. The same names repeat while the flow
+        # persists, so USO and MU appeared in both the 12:13 and 12:20 cards
+        # today. A digest that re-posts the same contract every five minutes
+        # trains the reader to skip it — the failure this digest exists to
+        # avoid. Keyed on the CONTRACT, so a genuinely new strike still posts.
+        if not hasattr(self, "_bearish_seen"):
+            self._bearish_seen = {}
+        _today = datetime.now().strftime("%Y-%m-%d")
+        if self._bearish_seen.get("_day") != _today:
+            self._bearish_seen = {"_day": _today}
+
+        fresh = []
+        for s in skipped:
+            key = f"{s['symbol']}|{s.get('strike')}|{s.get('expiry')}"
+            if key in self._bearish_seen:
+                continue
+            self._bearish_seen[key] = True
+            fresh.append(s)
+        if not fresh:
+            logger.info(f"📉 {len(skipped)} bearish skip(s) already posted today "
+                        f"— not repeating")
+            return
+        skipped = fresh
+
         lines = []
         for s in sorted(skipped, key=lambda x: -x.get("premium", 0))[:12]:
             prem = s.get("premium") or 0.0
-            tag = f" — ${prem/1e6:.2f}M premium" if prem else ""
-            lines.append(f"**{s['symbol']}** {s.get('direction','PUT')}{tag}")
+            strike = s.get("strike")
+            exp = s.get("expiry") or ""
+            dte = s.get("dte")
+            dlt = s.get("delta")
+            contract = f"${strike:,.0f}{s.get('direction','P')[0]}" if strike else s.get("direction", "PUT")
+            when = f" exp {exp}" + (f" ({dte}d)" if dte is not None else "") if exp else ""
+            greek = f" · Δ{float(dlt):.2f}" if dlt is not None else ""
+            tag = f" · ${prem/1e6:.2f}M" if prem else ""
+            lines.append(f"**{s['symbol']}** {contract}{when}{tag}{greek}")
         self._discord_post({
             "title": f"📉 {len(skipped)} bearish signal(s) skipped — shorting disabled",
             "description": "\n".join(lines),
