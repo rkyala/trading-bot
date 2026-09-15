@@ -58,10 +58,56 @@ def _access_token():
         _TOKEN["access"] = d.get("access_token")
         if d.get("refresh_token"):
             _TOKEN["refresh"] = d["refresh_token"]
+            # PERSIST IT. Robinhood refresh tokens are SINGLE USE — verified
+            # 2026-09-14: exchanging a token returns a replacement AND
+            # invalidates the original immediately (the second use of the same
+            # token returns invalid_grant).
+            #
+            # Caching the replacement in memory only is therefore a one-shot
+            # bomb: the process works until it restarts, then reads the spent
+            # token from the environment and can never authenticate again. A
+            # token was destroyed this way before this was written.
+            _persist_refresh_token(d["refresh_token"])
         _TOKEN["expires"] = _t.time() + max(60, int(d.get("expires_in", 3600)) - 300)
         return _TOKEN["access"]
     except Exception:
         return None
+
+
+
+def _persist_refresh_token(token):
+    """
+    Write the rotated refresh token back to .env.local.
+
+    Atomic (temp file + replace) so a crash mid-write cannot leave the file
+    truncated — losing this value means losing account access until a human
+    reissues it by hand.
+    """
+    import tempfile
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local")
+    try:
+        lines, seen = [], False
+        if os.path.exists(path):
+            with open(path) as fh:
+                for line in fh:
+                    if line.startswith("RH_REFRESH_TOKEN="):
+                        lines.append(f"RH_REFRESH_TOKEN={token}\n")
+                        seen = True
+                    else:
+                        lines.append(line)
+        if not seen:
+            lines.append(f"RH_REFRESH_TOKEN={token}\n")
+        d = os.path.dirname(path)
+        fd, tmp = tempfile.mkstemp(dir=d)
+        with os.fdopen(fd, "w") as fh:
+            fh.writelines(lines)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        print("refresh token rotated and persisted", file=sys.stderr)
+    except Exception as e:
+        # LOUD. A silent failure here means the next restart cannot log in.
+        print(f"CRITICAL: could not persist rotated refresh token: {e}",
+              file=sys.stderr)
 
 
 def _headers():
