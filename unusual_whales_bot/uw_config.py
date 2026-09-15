@@ -442,7 +442,23 @@ EXECUTION_SAFEGUARDS_CONFIG = {
     # actually bind while staying above intraday noise. Widen them again if
     # the strategy ever holds overnight.
     "stop_atr_multiplier": 0.75,   # ~36% same-session touch
-    "target_atr_multiplier": 1.0,  # ~19% same-session touch
+    # 1.0 -> 0.5 on 2026-09-14, from 37 recorded excursions.
+    #
+    # TARGET_HIT had fired ZERO times in 102 trades. Only 3 of 37 trades ever
+    # reached 1.0 ATR of favourable excursion, and all three (USO 1.78,
+    # AAPL 1.54, SPCX 1.25) were closed by bearish_flow before the barrier
+    # could bind. Meanwhile 55 of 102 exits were EOD_FORCE_CLOSE for a net of
+    # +$1.53 — more than half of all trades ended by running out of clock.
+    #
+    # The MFE distribution says where a barrier can actually bind:
+    #   p50 0.36A   p75 0.68A   p90 0.82A   max 1.78A
+    # At 0.50 ATR, 13 of 37 (35%) would have touched it. Expected R is FLAT
+    # from 0.35 to 1.5 (0.19-0.24), so this is NOT an optimisation — picking
+    # the argmax of a flat curve on n=37 would be fitting noise. It is chosen
+    # to let trades RESOLVE on their own terms instead of on the clock.
+    #
+    # It does not create edge. The strategy is t=+1.16 with or without it.
+    "target_atr_multiplier": 0.5,  # ~35% same-session touch (was 1.0, 0% hits)
 
     # Time-based controls
     "max_hold_minutes": 240,  # 4 hours max per position

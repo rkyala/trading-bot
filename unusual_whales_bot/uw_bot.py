@@ -810,9 +810,23 @@ class UnusualWhalesBot:
             st["atr"] = atr
             st["symbol"] = pos.symbol
             st["stop_distance_atr"] = 1.5
-            st["target_distance_atr"] = 2.5
+            # READ THE CONFIG, DO NOT HARDCODE IT.
+            #
+            # This recorded 2.5 while the live barrier was 1.0 — the value the
+            # execution path actually reads from EXECUTION_SAFEGUARDS_CONFIG.
+            # Every excursion row written after the 2026-09-09 calibration
+            # (commit 942802c) therefore claimed a target the bot was not
+            # using, and pct_to_target divided by the wrong number, making the
+            # whole metric wrong by 2.5x. Telemetry that describes a different
+            # system than the one running is worse than no telemetry.
+            try:
+                from uw_config import EXECUTION_SAFEGUARDS_CONFIG as _ESC
+                _tgt_k = float(_ESC["target_atr_multiplier"])
+            except Exception:
+                _tgt_k = 0.5
+            st["target_distance_atr"] = _tgt_k
             # How much of the way to each barrier the position actually got
-            st["pct_to_target"] = round(max(st["mfe_atr"], 0) / 2.5 * 100, 1)
+            st["pct_to_target"] = round(max(st["mfe_atr"], 0) / _tgt_k * 100, 1)
             st["pct_to_stop"] = round(abs(min(st["mae_atr"], 0)) / 1.5 * 100, 1)
 
     def _flush_excursion(self, pos_id: str, pos) -> None:
